@@ -1,3 +1,5 @@
+import { codeLabel } from './localization/codeLabels.ts'
+import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { Dropdown } from './Dropdown'
@@ -33,12 +35,12 @@ type Layer = 'device' | 'repo'
 
 /** Field id to the sentence a person reads, for the summary below. */
 const AUTHORITY_SUMMARY: { field: string; label: string; levels: Record<string, string> }[] = [
-  { field: 'session_control_grant', label: 'Interrupt and end sessions', levels: { draft: 'a human approves each', granted: 'acts directly' } },
-  { field: 'spawn_grant', label: 'Start new sessions here', levels: { draft: 'a human approves each', granted: 'creates them directly' } },
-  { field: 'land_grant', label: 'Land a branch onto the trunk', levels: { draft: 'a human approves each', granted: 'starts the pipeline' } },
-  { field: 'land_verify_grant', label: 'Change the verification command', levels: { draft: 'you approve the bytes each time', granted: 'edits made here just run' } },
-  { field: 'interject_grant', label: 'Write into a running turn', levels: { off: 'never', granted: 'may interject' } },
-  { field: 'message_envelope', label: 'Metadata on agent messages', levels: { full: 'full trust statement', compact: 'sender and reply route', bare: 'none' } },
+  { field: 'session_control_grant', get label() { return t("ProjectsManager.dea242baeb") }, levels: { get draft() { return t("ProjectsManager.785cda37bb") }, get granted() { return t("ProjectsManager.b87ad6cb87") } } },
+  { field: 'spawn_grant', get label() { return t("ProjectsManager.f4db61e77e") }, levels: { get draft() { return t("ProjectsManager.785cda37bb") }, get granted() { return t("ProjectsManager.45cfbcf74d") } } },
+  { field: 'land_grant', get label() { return t("ProjectsManager.3675b3e222") }, levels: { get draft() { return t("ProjectsManager.785cda37bb") }, get granted() { return t("ProjectsManager.da8fe1373d") } } },
+  { field: 'land_verify_grant', get label() { return t("ProjectsManager.291b4ebfaa") }, levels: { get draft() { return t("ProjectsManager.58a8b05591") }, get granted() { return t("ProjectsManager.741e2c9982") } } },
+  { field: 'interject_grant', get label() { return t("ProjectsManager.312048bb88") }, levels: { off: 'never', get granted() { return t("ProjectsManager.9e39165a1f") } } },
+  { field: 'message_envelope', get label() { return t("ProjectsManager.17bf57b622") }, levels: { get full() { return t("ProjectsManager.04c9d73c04") }, get compact() { return t("ProjectsManager.cc01313112") }, bare: 'none' } },
 ]
 
 /**
@@ -70,26 +72,21 @@ function AgentAuthoritySummary({ projectId, store }: {
 }) {
   const config = store.config
   return <section class="project-setting project-authority">
-    <h4 data-setting="agent_authority">Agent authority<em class="project-setting-chip">repo</em></h4>
-    <p>Whether an agent still needs a human once the automation above is on. Edited on the
-    policy matrix, where the install-wide default and the per-Project override sit side by
-    side. A field this repository has not set follows the install default.</p>
-    {!config && <p>Loading…</p>}
-    {config?.status === 'malformed' && <p class="project-folder-missing">
-      This Project’s <code>.swe-mux/config.toml</code> cannot be parsed, so every field below
-      resolves to its most restrictive value and inherits nothing. Fix the file to restore them.
-    </p>}
+    <h4 data-setting="agent_authority">{rich("ProjectsManager.a1efb9992d", { value1: <em class="project-setting-chip">{t("ProjectsManager.071ca22277")}</em> })}</h4>
+    <p>{t("ProjectsManager.318cb50def")}</p>
+    {!config && <p>{t("ProjectsManager.ba3bbbe10d")}</p>}
+    {config?.status === 'malformed' && <p class="project-folder-missing">{rich("ProjectsManager.161cfa3fc6", { value1: <code>{t("ProjectsManager.9f98c8f7e7")}</code> })}</p>}
     {config && <dl class="project-authority-summary">
       {AUTHORITY_SUMMARY.map(row => {
         const own = config.values[row.field]
         const level = typeof own === 'string' ? own : ''
         return <div key={row.field} data-setting={row.field}>
           <dt>{row.label}</dt>
-          <dd>{level ? (row.levels[level] || level) : 'follows global'}</dd>
+          <dd>{level ? (row.levels[level] || level) : t("ProjectsManager.5818a98790")}</dd>
         </div>
       })}
     </dl>}
-    <SettingLink target="project.authority" projectId={projectId}>Edit agent authority</SettingLink>
+    <SettingLink target="project.authority" projectId={projectId}>{t("ProjectsManager.884df11c33")}</SettingLink>
   </section>
 }
 
@@ -125,14 +122,14 @@ type Props = {
   onRemove:(project:Project,closeLive:boolean)=>Promise<void>
 }
 
-const SCOPE_LABELS:Record<PromptLibraryScope,string>={off:'Off',global:'Global only',project:'Project only',both:'Global + Project'}
+const SCOPE_LABELS:Record<PromptLibraryScope,string>={get off() { return t("ProjectsManager.ca7981b46e") },get global() { return t("ProjectsManager.72cf0bd4a2") },get project() { return t("ProjectsManager.41bcf3115d") },get both() { return t("ProjectsManager.cf1ddbb925") }}
 
 export function ProjectsManager({projects,groups,sessions,profiles,initialProjectId,initialSetting,revealToken,onClose,onAdd,onAddGroup,onOpen,onPatch,onRemove}:Props){
   const isVisible=(project:Project)=>project.sidebar_visible!==false
   // By name, not by sidebar position. Position is the operator's own sidebar arrangement,
   // which says nothing here: this list is searched for a Project by name, and the picker
   // above it is read the same way.
-  const ordered=useMemo(()=>byProjectName(projects,project=>project.name),[projects])
+  const ordered=useMemo(()=>byProjectName(projects,project=>project.name), [projects, uiLocale.value, catalogRevision.value])
   const [selectedId,setSelectedId]=useState(initialProjectId||ordered[0]?.id||'')
   const panel=useRef<HTMLElement>(null)
   // List and detail sit side by side rather than drilling in, so the registry is one
@@ -232,7 +229,7 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
       grouped.set(profile.backend,[...(grouped.get(profile.backend)||[]),profile])
     }
     return [...grouped.entries()]
-  },[profiles])
+  }, [profiles, uiLocale.value, catalogRevision.value])
   const setAgentProfile=(backend:string,value:string,layer:Layer)=>{
     const without=(map:Record<string,string>)=>{const next={...map};delete next[backend];return next}
     setOverrides(current=>({...current,default_agent_profiles:layer==='device'&&value
@@ -295,8 +292,8 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
   const pickerOptions=useMemo(()=>projectDropdownOptions(ordered,project=>({
     value:project.id,
     label:project.name,
-    detail:`${project.root}${isVisible(project)?'':' · hidden'}`,
-  })),[ordered])
+    get detail() { return t("ProjectsManager.3b07babd51", { root: project.root, value2: (isVisible(project)) ? 'yes' : 'no' }) },
+  })), [ordered, uiLocale.value, catalogRevision.value])
 
   const save=async()=>{
     if(!selected||!name.trim())return
@@ -338,88 +335,88 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
   const liveCount=selected?sessions.filter(session=>session.project_id===selected.id&&!['exited','crashed'].includes(session.state)).length:0
 
   const layerRow=(active:Layer,set:(layer:Layer)=>void,shownWhen:boolean)=>shownWhen&&<div class="project-setting-layer">
-    <button class={active==='device'?'active':''} disabled={busy} onClick={()=>set('device')}>this device</button>
-    <button class={active==='repo'?'active':''} disabled={busy||!config} title={config?undefined:'The Project’s .swe-mux/config.toml is not readable.'} onClick={()=>set('repo')}>repo</button>
-    <span class="project-setting-note">{active==='repo'?'stored in .swe-mux/config.toml, travels with the checkout':'stored in this machine’s database'}</span>
+    <button class={active==='device'?'active':''} disabled={busy} onClick={()=>set('device')}>{t("ProjectsManager.cf3cc23e5a")}</button>
+    <button class={active==='repo'?'active':''} disabled={busy||!config} title={config ? undefined : t("ProjectsManager.72b964f024")} onClick={()=>set('repo')}>{t("ProjectsManager.071ca22277")}</button>
+    <span class="project-setting-note">{active==='repo' ? t("ProjectsManager.bc60fc9699") : t("ProjectsManager.ac1b22cb83")}</span>
   </div>
 
   return <div class="modal-layer projects-manager-layer" onMouseDown={event=>event.target===event.currentTarget&&onClose()}>
-    <section class="projects-manager" role="dialog" aria-modal="true" aria-label="Manage projects" ref={panel}>
-      <header><div><span>PROJECTS::REGISTRY</span><h2>Projects</h2><small>Configured Projects keep their notes, files, settings, and history even when hidden from the sidebar.</small></div><div class="projects-manager-header-actions"><button onClick={onAddGroup}>New group</button><button data-tutorial="add-project" class="primary" onClick={onAdd}>+ Add project</button><button class="icon" aria-label="Close Projects" onClick={onClose}>×</button></div></header>
+    <section class="projects-manager" role="dialog" aria-modal="true" aria-label={t("ProjectsManager.7e01880f87")} ref={panel}>
+      <header><div><span>{t("ProjectsManager.9f309c4aa2")}</span><h2 data-heading-message="ProjectsManager.04e2a9728a">{t("ProjectsManager.04e2a9728a")}</h2><small>{t("ProjectsManager.f9b1e7e32b")}</small></div><div class="projects-manager-header-actions"><button onClick={onAddGroup}>{t("ProjectsManager.df796c655f")}</button><button data-tutorial="add-project" class="primary" onClick={onAdd}>{t("ProjectsManager.cf77ef5338")}</button><button class="icon" aria-label={t("ProjectsManager.d9523c9f8b")} onClick={onClose}>×</button></div></header>
       <div class="projects-manager-body">
-        <aside><div class="projects-manager-filter"><input aria-label="Search projects" placeholder="Search projects…" value={query} onInput={event=>setQuery(event.currentTarget.value)}/><Dropdown ariaLabel="Filter projects" value={filter} onChange={value=>setFilter(value as typeof filter)} options={[{value:'all',label:'All'},{value:'visible',label:'In sidebar'},{value:'hidden',label:'Hidden'}]}/></div>
-          <div data-tutorial="project-list" class="projects-manager-list">{shown.map(project=><button class={project.id===selected?.id?'active':''} onClick={()=>selectProject(project.id)}><span class={`project-visibility-dot ${isVisible(project)?'visible':'hidden'}`} aria-hidden="true"/><strong>{project.name}</strong><small>{project.root}</small><em>{isVisible(project)?'sidebar':'hidden'}</em></button>)}{!shown.length&&<p>No Projects match this view.</p>}</div>
+        <aside><div class="projects-manager-filter"><input aria-label={t("ProjectsManager.9e079c7df9")} placeholder={t("ProjectsManager.b0c5facf52")} value={query} onInput={event=>setQuery(event.currentTarget.value)}/><Dropdown ariaLabel={t("ProjectsManager.8fd82c567a")} value={filter} onChange={value=>setFilter(value as typeof filter)} options={[{value:'all',get label() { return t("ProjectsManager.a52ace420f") }},{value:'visible',get label() { return t("ProjectsManager.479c830779") }},{value:'hidden',get label() { return t("ProjectsManager.7e6fefff0f") }}]}/></div>
+          <div data-tutorial="project-list" class="projects-manager-list">{shown.map(project=><button class={project.id===selected?.id?'active':''} onClick={()=>selectProject(project.id)}><span class={`project-visibility-dot ${isVisible(project)?'visible':'hidden'}`} aria-hidden="true"/><strong>{project.name}</strong><small>{project.root}</small><em>{isVisible(project) ? t("ProjectsManager.2aca0c68ff") : t("ProjectsManager.e564b4081d")}</em></button>)}{!shown.length && <p>{t("ProjectsManager.ee4db6ac7b")}</p>}</div>
         </aside>
-        <main>{selected?<>
-          <div class="projects-manager-picker"><Dropdown id="projects-manager-picker" class="projects-manager-picker-trigger" ariaLabel="Selected project" listLabel="Configured projects" value={selected.id} options={pickerOptions} placeholder="Select a project…" filter filterPlaceholder="Filter Projects…" onChange={selectProject}/></div>
-          {pendingSwitch&&<div class="projects-manager-switch-confirm" role="alertdialog" aria-label="Unsaved changes"><span>Discard unsaved changes to <strong>{selected.name}</strong>?</span><div><button onClick={()=>setPendingSwitch(null)}>Keep editing</button><button class="danger" onClick={()=>{const target=pendingSwitch;setPendingSwitch(null);setSelectedId(target)}}>Discard and switch</button></div></div>}
-          <div class="projects-manager-title"><span>PROJECT</span><h3>{selected.name}</h3><div class="projects-manager-title-meta"><small>{liveCount} live session{liveCount===1?'':'s'} · {selected.history_count||0} conversation{selected.history_count===1?'':'s'}{selected.root_available===false?' · folder missing':''}</small><div class="projects-manager-title-actions"><button data-tutorial="open-project" class="primary" disabled={selected.root_available===false} onClick={()=>onOpen(selected)}>Open workspace</button><button class={`sidebar-visibility-toggle ${isVisible(selected)?'active':''}`} disabled={busy} onClick={()=>void toggleVisible()}><span aria-hidden="true">{isVisible(selected)?'◉':'○'}</span>{isVisible(selected)?'Shown in sidebar':'Show in sidebar'}</button></div></div></div>
+        <main>{selected ? <>
+          <div class="projects-manager-picker"><Dropdown id="projects-manager-picker" class="projects-manager-picker-trigger" ariaLabel={t("ProjectsManager.dcdc012563")} listLabel={t("ProjectsManager.9656e68cbb")} value={selected.id} options={pickerOptions} placeholder={t("ProjectsManager.45e376ca22")} filter filterPlaceholder={t("ProjectsManager.2e0060c45e")} onChange={selectProject}/></div>
+          {pendingSwitch && <div class="projects-manager-switch-confirm" role="alertdialog" aria-label={t("ProjectsManager.a710c2b909")}><span>{rich("ProjectsManager.5c6d72ff1b", { value1: <strong>{selected.name}</strong> })}</span><div><button onClick={()=>setPendingSwitch(null)}>{t("ProjectsManager.e76fd2add0")}</button><button class="danger" onClick={()=>{const target=pendingSwitch;setPendingSwitch(null);setSelectedId(target)}}>{t("ProjectsManager.2c900860e8")}</button></div></div>}
+          <div class="projects-manager-title"><span>{t("ProjectsManager.d1fb402f12")}</span><h3>{selected.name}</h3><div class="projects-manager-title-meta"><small>{rich("ProjectsManager.3b246675ac", { liveCount: liveCount, value2: (liveCount===1) ? 'yes' : 'no', value3: selected.history_count || 0, value4: (selected.history_count===1) ? 'yes' : 'no', value5: (selected.root_available===false) ? 'yes' : 'no' })}</small><div class="projects-manager-title-actions"><button data-tutorial="open-project" class="primary" disabled={selected.root_available===false} onClick={()=>onOpen(selected)}>{t("ProjectsManager.b3e34b185d")}</button><button class={`sidebar-visibility-toggle ${isVisible(selected)?'active':''}`} disabled={busy} onClick={()=>void toggleVisible()}><span aria-hidden="true">{isVisible(selected) ? '◉' : '○'}</span>{isVisible(selected) ? t("ProjectsManager.83fa7a6b4a") : t("ProjectsManager.333bbfedde")}</button></div></div></div>
           <div class="projects-manager-panel">
             <div class="projects-manager-form">
-              <h4 class="projects-manager-section">Identity</h4>
-              <label>Name<input value={name} onInput={event=>setName(event.currentTarget.value)}/></label>
-              <label>Folder<input class={selected.root_available===false?'missing':''} value={selected.root} readOnly/>{selected.root_available===false&&<span class="project-folder-missing">Folder missing. swe-mux will not recreate it.</span>}</label>
-              <label>Group<div><Dropdown value={groupId} onChange={setGroupId} options={[{value:'',label:'Ungrouped'},...groups.map(group=>({value:group.id,label:group.name}))]}/><button onClick={onAddGroup}>+</button></div></label>
-              <h4 class="projects-manager-section">Defaults</h4>
-              <p>Blank inherits the global default. Each value is stored either on this device or in the Project's <code>.swe-mux/config.toml</code>; device wins where both are set.{config?` · .swe-mux/config.toml: ${config.status}${config.error?` · ${config.error}`:''}`:' · reading .swe-mux/config.toml…'}</p>
+              <h4 class="projects-manager-section" data-heading-message="ProjectsManager.999f23fcd7">{t("ProjectsManager.999f23fcd7")}</h4>
+              <label>{rich("ProjectsManager.5b326d4444", { value1: <input value={name} onInput={event=>setName(event.currentTarget.value)}/> })}</label>
+              <label>{rich("ProjectsManager.926081f8f4", { value1: <input class={selected.root_available===false?'missing':''} value={selected.root} readOnly/>, value2: selected.root_available===false && <span class="project-folder-missing">{t("ProjectsManager.b1d68a1b10")}</span> })}</label>
+              <label>{rich("ProjectsManager.bd64d0e1c9", { value1: <div><Dropdown value={groupId} onChange={setGroupId} options={[{value:'',get label() { return t("ProjectsManager.674b38cae7") }},...groups.map(group=>({value:group.id,label:group.name}))]}/><button onClick={onAddGroup}>+</button></div> })}</label>
+              <h4 class="projects-manager-section" data-heading-message="ProjectsManager.610b7468ce">{t("ProjectsManager.610b7468ce")}</h4>
+              <p>{rich("ProjectsManager.e5a1623a8b", { value1: <code>{t("ProjectsManager.9f98c8f7e7")}</code>, value2: config ? t("ProjectsManager.ac625c1545", { status: codeLabel(config.status), value2: config.error?` · ${config.error}`:'' }) : t("ProjectsManager.0da8662f96") })}</p>
               <div class="project-setting">
-                <label><span class="project-setting-name">Default backend{backendValue&&<em class="project-setting-chip">{backendLayer==='repo'?'repo':'device'}</em>}</span>
-                  <Dropdown value={backendValue} disabled={busy} onChange={value=>setBackend(value,backendLayer)} options={[{value:'',label:`Inherit (${effective?.backend||'shell'})`},...allBackendNames().map(backend=>({value:backend,label:backend}))]}/>
+                <label><span class="project-setting-name">{rich("ProjectsManager.52c56b5713", { value1: backendValue && <em class="project-setting-chip">{backendLayer==='repo' ? t("ProjectsManager.071ca22277") : t("ProjectsManager.263a4dbe41")}</em> })}</span>
+                  <Dropdown value={backendValue} disabled={busy} onChange={value=>setBackend(value,backendLayer)} options={[{value:'',get label() { return t("ProjectsManager.853d3c0d46", { value1: effective?.backend||'shell' }) }},...allBackendNames().map(backend=>({value:backend,label:backend}))]}/>
                 </label>
                 {layerRow(backendLayer,layer=>setBackend(backendValue,layer),!!backendValue)}
               </div>
               <div class="project-setting">
-                <label><span class="project-setting-name">Shell profile{profileValue&&<em class="project-setting-chip">{profileLayer==='repo'?'repo':'device'}</em>}</span>
-                  <Dropdown value={profileValue} disabled={busy} onChange={value=>setProfile(value,profileLayer)} options={[{value:'',label:`Inherit (${effective?.profile_id||'default'})`},...profiles.filter(profile=>profile.backend==='shell').map(profile=>({value:profile.id,label:profile.label}))]}/>
+                <label><span class="project-setting-name">{rich("ProjectsManager.4c5867d9ef", { value1: profileValue && <em class="project-setting-chip">{profileLayer==='repo' ? t("ProjectsManager.071ca22277") : t("ProjectsManager.263a4dbe41")}</em> })}</span>
+                  <Dropdown value={profileValue} disabled={busy} onChange={value=>setProfile(value,profileLayer)} options={[{value:'',get label() { return t("ProjectsManager.853d3c0d46", { value1: effective?.profile_id||'default' }) }},...profiles.filter(profile=>profile.backend==='shell').map(profile=>({value:profile.id,label:profile.label}))]}/>
                 </label>
                 {layerRow(profileLayer,layer=>setProfile(profileValue,layer),!!profileValue)}
               </div>
               {harnessesWithProfiles.map(([backend,harnessProfiles])=><div class="project-setting" key={backend}>
-                <label><span class="project-setting-name">{harnessDisplayName(backend)} launch profile{agentProfileValue(backend)&&<em class="project-setting-chip">{agentProfileLayer(backend)==='repo'?'repo':'device'}</em>}</span>
-                  <Dropdown value={agentProfileValue(backend)} disabled={busy} onChange={value=>setAgentProfile(backend,value,agentProfileLayer(backend))} options={[{value:'',label:'None (plain launch)'},...harnessProfiles.map(profile=>({value:profile.id,label:profile.label}))]}/>
+                <label><span class="project-setting-name">{rich("ProjectsManager.4544ea28ff", { value1: harnessDisplayName(backend), value2: agentProfileValue(backend) && <em class="project-setting-chip">{agentProfileLayer(backend)==='repo' ? t("ProjectsManager.071ca22277") : t("ProjectsManager.263a4dbe41")}</em> })}</span>
+                  <Dropdown value={agentProfileValue(backend)} disabled={busy} onChange={value=>setAgentProfile(backend,value,agentProfileLayer(backend))} options={[{value:'',get label() { return t("ProjectsManager.78b2c2f3cd") }},...harnessProfiles.map(profile=>({value:profile.id,label:profile.label}))]}/>
                 </label>
                 {layerRow(agentProfileLayer(backend),layer=>setAgentProfile(backend,agentProfileValue(backend),layer),!!agentProfileValue(backend))}
               </div>)}
-              <h4 class="projects-manager-section">Repository options</h4>
-              <label><span class="project-setting-name">Prompt library scope<em class="project-setting-chip">repo</em></span>
-                <Dropdown value={values.prompt_library_scope||''} disabled={busy||!config} onChange={value=>editValues({prompt_library_scope:(value||undefined) as PromptLibraryScope|undefined})} options={[{value:'',label:`Inherit (${SCOPE_LABELS[effective?.prompt_library_scope||'both']})`},...(Object.keys(SCOPE_LABELS) as PromptLibraryScope[]).map(scope=>({value:scope,label:SCOPE_LABELS[scope]}))]}/>
+              <h4 class="projects-manager-section" data-heading-message="ProjectsManager.6ae8f3a07c">{t("ProjectsManager.6ae8f3a07c")}</h4>
+              <label><span class="project-setting-name">{rich("ProjectsManager.5484db6bc4", { value1: <em class="project-setting-chip">{t("ProjectsManager.071ca22277")}</em> })}</span>
+                <Dropdown value={values.prompt_library_scope||''} disabled={busy||!config} onChange={value=>editValues({prompt_library_scope:(value||undefined) as PromptLibraryScope|undefined})} options={[{value:'',get label() { return t("ProjectsManager.853d3c0d46", { value1: SCOPE_LABELS[effective?.prompt_library_scope||'both'] }) }},...(Object.keys(SCOPE_LABELS) as PromptLibraryScope[]).map(scope=>({value:scope,label:SCOPE_LABELS[scope]}))]}/>
               </label>
-              <label class="check"><span class="project-setting-name">Allow device notification sounds<em class="project-setting-chip">repo</em></span><input type="checkbox" disabled={busy||!config} checked={values.notification_sounds_enabled!==false} onChange={event=>editValues({notification_sounds_enabled:event.currentTarget.checked})}/></label>
+              <label class="check"><span class="project-setting-name">{rich("ProjectsManager.6be1540660", { value1: <em class="project-setting-chip">{t("ProjectsManager.071ca22277")}</em> })}</span><input type="checkbox" disabled={busy||!config} checked={values.notification_sounds_enabled!==false} onChange={event=>editValues({notification_sounds_enabled:event.currentTarget.checked})}/></label>
               <section class="project-setting">
-                <h4>Default models<em class="project-setting-chip">repo</em></h4>
-                <p>Applied when a spawn into this Project names no model - including agent-requested spawns - in each CLI's own spelling (for example <code>opus</code> or <code>gpt-5.1-codex</code>). Blank leaves that CLI on its own sticky default. An explicit model on the spawn always wins, and a name the CLI has retired degrades to a logged diagnostic rather than a failed session.</p>
-                {allBackendNames().filter(isAgentBackend).map(backend=><label key={backend}><span class="project-setting-name">{harnessDisplayName(backend)} model</span>
-                  <input value={((values.default_agent_models||{})[backend])||''} disabled={busy||!config} placeholder="CLI default" onInput={event=>setAgentModel(backend,event.currentTarget.value)}/>
+                <h4>{rich("ProjectsManager.bc5eeb117d", { value1: <em class="project-setting-chip">{t("ProjectsManager.071ca22277")}</em> })}</h4>
+                <p>{rich("ProjectsManager.f60289f0d5", { value1: <code>{t("ProjectsManager.e12ce8285e")}</code>, value2: <code>{t("ProjectsManager.c5f9e7e936")}</code> })}</p>
+                {allBackendNames().filter(isAgentBackend).map(backend=><label key={backend}><span class="project-setting-name">{rich("ProjectsManager.50cefda907", { value1: harnessDisplayName(backend) })}</span>
+                  <input value={((values.default_agent_models||{})[backend])||''} disabled={busy||!config} placeholder={t("ProjectsManager.c0eba39ea3")} onInput={event=>setAgentModel(backend,event.currentTarget.value)}/>
                 </label>)}
               </section>
-              <label><span class="project-setting-name">Additional ignore patterns<em class="project-setting-chip">repo</em></span>
+              <label><span class="project-setting-name">{rich("ProjectsManager.d05ed0eb75", { value1: <em class="project-setting-chip">{t("ProjectsManager.071ca22277")}</em> })}</span>
                 <textarea value={(values.ignore_patterns||[]).join('\n')} disabled={busy||!config} onInput={event=>editValues({ignore_patterns:parseIgnorePatternDraft(event.currentTarget.value)})}/>
               </label>
-              <p>One glob per line, added to the global ignore list. A name such as <code>node_modules</code> matches that folder at any depth. These rules affect the file tree and resource watchers, not Git.</p>
+              <p>{rich("ProjectsManager.510dbbbb36", { value1: <code>{t("ProjectsManager.dba27c31aa")}</code> })}</p>
               <section class="project-setting">
-                <h4>Git and worktrees<em class="project-setting-chip">repo</em></h4>
-                <label><span class="project-setting-name">Worktree setup command</span>
-                  <input value={values.worktree?.setup_command||''} disabled={busy||!config} placeholder="Use executable .worktree-setup when blank" onInput={event=>setWorktreeSetup(event.currentTarget.value)}/>
+                <h4>{rich("ProjectsManager.47a2268708", { value1: <em class="project-setting-chip">{t("ProjectsManager.071ca22277")}</em> })}</h4>
+                <label><span class="project-setting-name">{t("ProjectsManager.1f53e75aa0")}</span>
+                  <input value={values.worktree?.setup_command||''} disabled={busy||!config} placeholder={t("ProjectsManager.bffb38bb5e")} onInput={event=>setWorktreeSetup(event.currentTarget.value)}/>
                 </label>
-                <p>Runs only after Run creates a new worktree and before its session starts. Blank uses an executable <code>.worktree-setup</code> in the new checkout. The command is committed in <code>.swe-mux/config.toml</code>, so review changes like other repository code.</p>
+                <p>{rich("ProjectsManager.c3cd816e1e", { value1: <code>{t("ProjectsManager.c8a0800a85")}</code>, value2: <code>{t("ProjectsManager.9f98c8f7e7")}</code> })}</p>
               </section>
-              <div><button disabled={busy||!config} onClick={resetRepoOptions}>Reset repo options to inherited</button></div>
-              <section class="project-setting"><h4>Automation policy<em class="project-setting-chip">repo</em></h4>
-                <p>Control-plane opt-ins are edited with the global graph and policy in the Automation workspace.</p>
-                <SettingLink target="project.automations" projectId={selected.id}>Open this Project's automation policy</SettingLink>
+              <div><button disabled={busy||!config} onClick={resetRepoOptions}>{t("ProjectsManager.6494d9a493")}</button></div>
+              <section class="project-setting"><h4>{rich("ProjectsManager.675b7ef936", { value1: <em class="project-setting-chip">{t("ProjectsManager.071ca22277")}</em> })}</h4>
+                <p>{t("ProjectsManager.eccb1b48e4")}</p>
+                <SettingLink target="project.automations" projectId={selected.id}>{t("ProjectsManager.4b743e7025")}</SettingLink>
               </section>
               <AgentAuthoritySummary projectId={selected.id} store={configStore} />
             </div>
           </div>
-          {confirmRemove&&<section class="project-removal-summary" aria-label="Remove Project confirmation">
-            <h4>Remove {selected.name} from swe-mux?</h4>
-            <dl><div><dt>Folder</dt><dd>{selected.root_available===false?'Missing':'Available'} · {selected.root}</dd></div><div><dt>Live sessions</dt><dd>{liveCount}</dd></div><div><dt>Conversation history</dt><dd>{selected.history_count||0} preserved</dd></div></dl>
-            <p>The Project leaves the sidebar and registry. Its folder and <code>.swe-mux</code> contents are not changed. Re-adding this folder restores the same Project identity, history, settings, and layout.</p>
-            <div><button onClick={()=>setConfirmRemove(false)}>Cancel</button><button class="danger" disabled={busy} onClick={()=>void remove(liveCount>0)}>{liveCount>0?`Close ${liveCount} session${liveCount===1?'':'s'} and remove`:'Remove from swe-mux'}</button></div>
+          {confirmRemove && <section class="project-removal-summary" aria-label={t("ProjectsManager.88178d6394")}>
+            <h4>{rich("ProjectsManager.c744b3f4df", { name: selected.name })}</h4>
+            <dl><div><dt>{t("ProjectsManager.74ccd43303")}</dt><dd>{selected.root_available===false ? t("ProjectsManager.6be36ca49e") : t("ProjectsManager.e674447337")} · {selected.root}</dd></div><div><dt>{t("ProjectsManager.366487a11e")}</dt><dd>{liveCount}</dd></div><div><dt>{t("ProjectsManager.80c250f3db")}</dt><dd>{rich("ProjectsManager.19b23e4ff8", { value1: selected.history_count || 0 })}</dd></div></dl>
+            <p>{rich("ProjectsManager.a6f04ccb8e", { value1: <code>{t("ProjectsManager.64f9020bac")}</code> })}</p>
+            <div><button onClick={()=>setConfirmRemove(false)}>{t("ProjectsManager.19766ed6cc")}</button><button class="danger" disabled={busy} onClick={()=>void remove(liveCount>0)}>{liveCount>0 ? t("ProjectsManager.93471ae7f8", { liveCount: liveCount, value2: (liveCount===1) ? 'yes' : 'no' }) : t("ProjectsManager.6ed5c06df7")}</button></div>
           </section>}
-          {(error||configStore.error)&&<p class="projects-manager-error" role="alert">{error||configStore.error}</p>}
-          <footer><button class="danger" disabled={busy} onClick={()=>setConfirmRemove(true)}>Remove from swe-mux…</button><span>History is preserved. The folder is never deleted.</span><button class="primary" disabled={!dirty||busy||!name.trim()} onClick={()=>void save()}>{busy?'Saving…':'Save changes'}</button></footer>
-        </>:<div class="projects-manager-empty"><strong>No Projects configured</strong><p>Add a folder-backed Project to begin.</p><button data-tutorial="add-project" class="primary" onClick={onAdd}>+ Add project</button></div>}</main>
+          {(error||configStore.error) && <p class="projects-manager-error" role="alert">{error || configStore.error}</p>}
+          <footer><button class="danger" disabled={busy} onClick={()=>setConfirmRemove(true)}>{t("ProjectsManager.1e0492316d")}</button><span>{t("ProjectsManager.4c12251254")}</span><button class="primary" disabled={!dirty||busy||!name.trim()} onClick={()=>void save()}>{busy ? t("ProjectsManager.23e39291d6") : t("ProjectsManager.dd0ae7a5cb")}</button></footer>
+        </> : <div class="projects-manager-empty"><strong>{t("ProjectsManager.33564c9af2")}</strong><p>{t("ProjectsManager.d59f0506f8")}</p><button data-tutorial="add-project" class="primary" onClick={onAdd}>{t("ProjectsManager.cf77ef5338")}</button></div>}</main>
       </div>
     </section>
   </div>

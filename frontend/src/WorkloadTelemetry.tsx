@@ -1,3 +1,6 @@
+import { locale as uiLocale } from './localization/index.ts'
+import { codeLabel } from './localization/codeLabels.ts'
+import { rich, t } from './localization/index.ts'
 import { useEffect, useState } from 'preact/hooks'
 import { api } from './api'
 import { compactNumber } from './analyticsPresentation'
@@ -22,8 +25,8 @@ type Turn={turn_id:string;status:string;started_at:number;duration_ms?:number|nu
 type Evidence={evidence_id:string;observation?:{observed_at:number;event_type:string;source_kind:string;source_locator?:string}|null}
 type RunAudit={run:ActivityRun;turns:Turn[];tool_calls:{total:number;by_status:Record<string,number>;by_layer:Record<string,number>};model_requests:{count:number;failures:number};evidence:Evidence[]}
 type TurnAudit={tool_calls:Array<{tool_call_id:string;raw_name:string;status:string;started_at:number;duration_ms?:number|null;invocation_layer:string}>}
-const when=(time:number)=>new Date(time*1000).toLocaleString()
-const duration=(seconds:number|null|undefined)=>seconds==null?'Not measured':seconds===0?'0s':formatDuration(seconds)
+const when=(time:number)=>new Date(time*1000).toLocaleString(uiLocale.value)
+const duration=(seconds:number|null|undefined)=>seconds==null?t("WorkloadTelemetry.040f7884d3"):seconds===0?'0s':formatDuration(seconds)
 const sameRun=(session:Session,run:ActivityRun)=>(session.agent_run_id||session.id)===run.run_id
 const liveState=(session:Session)=>!['exited','crashed'].includes(session.state)
 
@@ -48,30 +51,30 @@ export function RunInspector({id,query,context,onBack}:{id:string;query:string;c
   useEffect(()=>{let cancelled=false;setChecks(null);setCheckError('');api<NonNullable<typeof checks>>('GET',`/api/telemetry/v2/verifications?from=0&to=${Math.ceil(serverNow())}&origin=all&run_id=${encodeURIComponent(id)}&limit=30`).then(value=>{if(!cancelled)setChecks(value)}).catch(cause=>{if(!cancelled)setCheckError(String(cause))});return()=>{cancelled=true}},[id,query])
   const run=audit?.run,session=run?context.sessions?.find(item=>sameRun(item,run)):undefined
   return <section class="analytics-run-detail">
-    <button onClick={onBack}>← Runs</button>
-    {error&&<div class="usage-error" role="alert">{error}</div>}
-    {!audit&&!error?<p>Loading run…</p>:audit&&run&&<>
-      <h3>{session?sessionDisplayName(session):runDisplayName(run)||`${run.backend} run ${run.run_id.slice(0,8)}`}</h3>
-      <p class="analytics-caption">{context.projects?.find(project=>project.id===run.project_id)?.name||run.project_id||'Unassigned project'} · {run.backend} · <ModelName model={run.final_model||run.initial_model||'unknown'}/></p>
-      <div class="analytics-actions">{session&&liveState(session)&&context.onOpenSession&&<button onClick={()=>context.onOpenSession!(session.id)}>Open session</button>}{run.history_id&&context.onOpenHistory&&<button onClick={()=>context.onOpenHistory!(run.history_id!)}>Open transcript</button>}</div>
+    <button onClick={onBack}>{t("WorkloadTelemetry.f6be9f5d54")}</button>
+    {error && <div class="usage-error" role="alert">{error}</div>}
+    {!audit&&!error ? <p>{t("WorkloadTelemetry.ad8b302769")}</p> : audit&&run && <>
+      <h3>{session ? sessionDisplayName(session) : runDisplayName(run) || t("WorkloadTelemetry.dd8a733dab", { backend: run.backend, value2: run.run_id.slice(0,8) })}</h3>
+      <p class="analytics-caption">{context.projects?.find(project=>project.id===run.project_id)?.name||run.project_id || t("WorkloadTelemetry.4dffc2c482")} · {run.backend} · <ModelName model={run.final_model||run.initial_model||'unknown'}/></p>
+      <div class="analytics-actions">{session&&liveState(session)&&context.onOpenSession && <button onClick={()=>context.onOpenSession!(session.id)}>{t("WorkloadTelemetry.b205bb47f8")}</button>}{run.history_id&&context.onOpenHistory && <button onClick={()=>context.onOpenHistory!(run.history_id!)}>{t("WorkloadTelemetry.002f987da9")}</button>}</div>
       <dl class="analytics-facts">
-        <div><dt>State</dt><dd>{session&&liveState(session)?session.state:run.ended_at?`Ended${run.end_reason?` · ${run.end_reason}`:''}`:'No end recorded'}</dd></div>
-        <div><dt>Started</dt><dd>{when(run.started_at)}{run.started_at_source==='first_evidence'?' · earliest evidence':''}</dd></div>
-        <div><dt>Elapsed wall time</dt><dd>{duration(run.ended_at?run.ended_at-run.started_at:session&&liveState(session)?serverNow()-run.started_at:null)}</dd></div>
-        <div><dt>Model / runtime tools</dt><dd>{compactNumber(audit.tool_calls.by_layer.model||0)} / {compactNumber(audit.tool_calls.by_layer.runtime||0)}</dd></div>
-        <div><dt>Failed / denied tools</dt><dd>{compactNumber(audit.tool_calls.by_status.failed||0)} / {compactNumber(audit.tool_calls.by_status.denied||0)}</dd></div>
-        <div><dt>Model requests recorded</dt><dd>{audit.model_requests.count?compactNumber(audit.model_requests.count):'None recorded'}</dd></div>
-        <div><dt>Final / peak context</dt><dd>{run.final_context_pct==null?'Not measured':`${Math.round(run.final_context_pct*100)}%`} / {run.peak_context_pct==null?'Not measured':`${Math.round(run.peak_context_pct*100)}%`}</dd></div>
+        <div><dt>{t("WorkloadTelemetry.a3b50c4767")}</dt><dd>{session&&liveState(session) ? session.state : run.ended_at ? t("WorkloadTelemetry.053f885ef4", { value1: run.end_reason?` · ${run.end_reason}`:'' }) : t("WorkloadTelemetry.0fb810bdf0")}</dd></div>
+        <div><dt>{t("WorkloadTelemetry.ecbc89cd37")}</dt><dd>{when(run.started_at)}{run.started_at_source==='first_evidence' ? t("WorkloadTelemetry.377a51c96b") : ''}</dd></div>
+        <div><dt>{t("WorkloadTelemetry.e7847a402d")}</dt><dd>{duration(run.ended_at?run.ended_at-run.started_at:session&&liveState(session)?serverNow()-run.started_at:null)}</dd></div>
+        <div><dt>{t("WorkloadTelemetry.e0cbe2955a")}</dt><dd>{compactNumber(audit.tool_calls.by_layer.model||0)} / {compactNumber(audit.tool_calls.by_layer.runtime||0)}</dd></div>
+        <div><dt>{t("WorkloadTelemetry.b014557f5e")}</dt><dd>{compactNumber(audit.tool_calls.by_status.failed||0)} / {compactNumber(audit.tool_calls.by_status.denied||0)}</dd></div>
+        <div><dt>{t("WorkloadTelemetry.98619c70dd")}</dt><dd>{audit.model_requests.count ? compactNumber(audit.model_requests.count) : t("WorkloadTelemetry.aab6c5e605")}</dd></div>
+        <div><dt>{t("WorkloadTelemetry.44bb8ce667")}</dt><dd>{run.final_context_pct==null ? t("WorkloadTelemetry.040f7884d3") : t("WorkloadTelemetry.6a53a571fa", { value1: Math.round(run.final_context_pct*100) })} / {run.peak_context_pct==null ? t("WorkloadTelemetry.040f7884d3") : t("WorkloadTelemetry.6a53a571fa", { value1: Math.round(run.peak_context_pct*100) })}</dd></div>
       </dl>
-      <p class="analytics-caption">Wall time includes idle time. Recorded outcomes describe execution, not task completion.</p>
-      <details class="analytics-diagnostics"><summary>Recorded checks{checks?` (${compactNumber(checks.matching)})`:''}</summary>{checkError?<p role="alert">{checkError}</p>:checks?checks.items.length?<>{checks.items.map(check=><p key={check.verification_id}>{check.framework} · {check.successful==null?'Outcome unknown':check.successful?'Passed':'Failed'} · {when(check.finished_at)}</p>)}{checks.matching>checks.items.length&&<small>Showing the latest {checks.items.length} checks.</small>}</>:<p>No checks were recorded for this run.</p>:<p>Loading checks…</p>}</details>
-      <h3>Turns ({compactNumber(audit.turns.length)})</h3>
+      <p class="analytics-caption">{t("WorkloadTelemetry.fd5f0462dc")}</p>
+      <details class="analytics-diagnostics"><summary>{rich("WorkloadTelemetry.1249addf20", { value1: checks ? t("WorkloadTelemetry.65de8fe226", { value1: compactNumber(checks.matching) }) : '' })}</summary>{checkError ? <p role="alert">{checkError}</p> : checks ? checks.items.length ? <>{checks.items.map(check=><p key={check.verification_id}>{check.framework} · {check.successful==null ? t("WorkloadTelemetry.164557364f") : check.successful ? t("WorkloadTelemetry.436fe71bb9") : t("WorkloadTelemetry.031a8f0f65")} · {when(check.finished_at)}</p>)}{checks.matching>checks.items.length && <small>{rich("WorkloadTelemetry.8fec4e3c4f", { length: checks.items.length })}</small>}</> : <p>{t("WorkloadTelemetry.a3c8ee6e54")}</p> : <p>{t("WorkloadTelemetry.634e0304fd")}</p>}</details>
+      <h3>{rich("WorkloadTelemetry.191045aa66", { value1: compactNumber(audit.turns.length) })}</h3>
       <div class="analytics-run-timeline">{[...audit.turns].reverse().map(item=><div key={item.turn_id}>
-        <button class="analytics-event" aria-expanded={turn===item.turn_id} onClick={()=>setTurn(turn===item.turn_id?'':item.turn_id)}><strong>{item.status}</strong><span>{when(item.started_at)}</span><span>{duration(item.duration_ms==null?null:item.duration_ms/1000)}</span></button>
-        {turn===item.turn_id&&<div class="analytics-record-body">{turnError?<p role="alert">{turnError}</p>:calls?calls.tool_calls.length?calls.tool_calls.map(call=><div class="analytics-event" key={call.tool_call_id}><strong>{call.raw_name}</strong><span>{call.invocation_layer} · {call.status}</span><span>{duration(call.duration_ms==null?null:call.duration_ms/1000)}</span></div>):<p>No tool calls linked to this turn.</p>:<p>Loading calls…</p>}</div>}
+        <button class="analytics-event" aria-expanded={turn===item.turn_id} onClick={()=>setTurn(turn===item.turn_id?'':item.turn_id)}><strong>{codeLabel(item.status)}</strong><span>{when(item.started_at)}</span><span>{duration(item.duration_ms==null?null:item.duration_ms/1000)}</span></button>
+        {turn===item.turn_id && <div class="analytics-record-body">{turnError ? <p role="alert">{turnError}</p> : calls ? calls.tool_calls.length ? calls.tool_calls.map(call=><div class="analytics-event" key={call.tool_call_id}><strong>{call.raw_name}</strong><span>{call.invocation_layer} · {codeLabel(call.status)}</span><span>{duration(call.duration_ms==null?null:call.duration_ms/1000)}</span></div>) : <p>{t("WorkloadTelemetry.f06f68b846")}</p> : <p>{t("WorkloadTelemetry.e9461c4cee")}</p>}</div>}
       </div>)}</div>
-      {!audit.turns.length&&<p>No turn records were collected for this run.</p>}
-      <details class="analytics-diagnostics"><summary>Lifecycle evidence ({audit.evidence.length})</summary>{audit.evidence.map(item=><p key={item.evidence_id}>{item.observation?`${when(item.observation.observed_at)} · ${item.observation.event_type.replace(/_/g,' ')} · ${item.observation.source_kind}`:'Source evidence unavailable'}</p>)}</details>
+      {!audit.turns.length && <p>{t("WorkloadTelemetry.aae81a1aa9")}</p>}
+      <details class="analytics-diagnostics"><summary>{rich("WorkloadTelemetry.04ce66b7cb", { length: audit.evidence.length })}</summary>{audit.evidence.map(item=><p key={item.evidence_id}>{item.observation ? t("WorkloadTelemetry.2731d8fe72", { value1: when(item.observation.observed_at), value2: item.observation.event_type.replace(/_/g,' '), source_kind: item.observation.source_kind }) : t("WorkloadTelemetry.aada78c98c")}</p>)}</details>
     </>}
   </section>
 }
@@ -94,21 +97,21 @@ export function WorkloadTelemetry({query,filters,initialRunId='',onClearRun, ...
   if(runId)return <RunInspector id={runId} query={query} context={context} onBack={()=>{setRunId('');onClearRun?.()}}/>
   const live=(context.sessions||[]).filter(session=>liveState(session)&&session.backend!=='shell'&&(!filters.backend||session.backend===filters.backend)&&(!filters.project||session.project_id===filters.project)&&(!filters.model||session.model===filters.model)&&filters.origin!=='imported')
   return <>
-    <div class="analytics-toolbar analytics-inline-toolbar"><label>Show<select value={mode} onChange={event=>setMode(event.currentTarget.value as typeof mode)}><option value="recent">Runs started in this period</option><option value="live">Live agents now</option></select></label><span>{mode==='recent'?page?`${compactNumber(page.matching)} matching starts`:'Count unavailable':`${live.length} live agents`}</span></div>
-    {error&&<div class="usage-error" role="alert">{error}</div>}
-    {mode==='live'?<><p class="analytics-caption">Current sessions, including runs started before the selected period.</p>{live.map(session=><article class="analytics-run-card" key={session.id}><button class="analytics-run-open" onClick={()=>setRunId(session.agent_run_id||session.id)}><strong>{sessionDisplayName(session)}</strong><span>{context.projects?.find(project=>project.id===session.project_id)?.name||'Unassigned'} · {session.backend} · {session.state}</span><small>Last activity {when(session.last_activity_ts)} · {session.state_detail||'Open run details'}</small></button>{context.onOpenSession&&<button onClick={()=>context.onOpenSession!(session.id)}>Open session</button>}</article>)}{!live.length&&<p>No live agents match these filters.</p>}</>:<>
-      <p class="analytics-caption">Each row is one run started in the selected period. Open a run for its full recorded lifetime.</p>
+    <div class="analytics-toolbar analytics-inline-toolbar"><label>{rich("WorkloadTelemetry.c30ae6a164", { value1: <select value={mode} onChange={event=>setMode(event.currentTarget.value as typeof mode)}><option value="recent">{t("WorkloadTelemetry.7fc0ab7470")}</option><option value="live">{t("WorkloadTelemetry.db585beb64")}</option></select> })}</label><span>{mode==='recent' ? page ? t("WorkloadTelemetry.3693369e56", { value1: compactNumber(page.matching) }) : t("WorkloadTelemetry.c582f93f4e") : t("WorkloadTelemetry.4341334a33", { length: live.length })}</span></div>
+    {error && <div class="usage-error" role="alert">{error}</div>}
+    {mode==='live' ? <><p class="analytics-caption">{t("WorkloadTelemetry.516817bdff")}</p>{live.map(session=><article class="analytics-run-card" key={session.id}><button class="analytics-run-open" onClick={()=>setRunId(session.agent_run_id||session.id)}><strong>{sessionDisplayName(session)}</strong><span>{context.projects?.find(project=>project.id===session.project_id)?.name || t("WorkloadTelemetry.14d33bd014")} · {session.backend} · {codeLabel(session.state)}</span><small>{rich("WorkloadTelemetry.2c73b5c96b", { value1: when(session.last_activity_ts), value2: session.state_detail || t("WorkloadTelemetry.325dd8bad4") })}</small></button>{context.onOpenSession && <button onClick={()=>context.onOpenSession!(session.id)}>{t("WorkloadTelemetry.b205bb47f8")}</button>}</article>)}{!live.length && <p>{t("WorkloadTelemetry.87e72fe983")}</p>}</> : <>
+      <p class="analytics-caption">{t("WorkloadTelemetry.ea6030aa52")}</p>
       {page?.items.map(run=>{
         const session=context.sessions?.find(item=>sameRun(item,run))
         return <article class="analytics-run-card" key={run.run_id}><button class="analytics-run-open" onClick={()=>setRunId(run.run_id)}>
-          <strong>{session?sessionDisplayName(session):runDisplayName(run)||`${run.backend} run ${run.run_id.slice(0,8)}`}</strong>
-          <span>{context.projects?.find(project=>project.id===run.project_id)?.name||run.project_id||'Unassigned'} · {run.backend} · <ModelName model={run.final_model||run.initial_model||'unknown'}/></span>
-          <small>{when(run.started_at)} · {session&&liveState(session)?session.state:run.ended_at?'Ended':'No end recorded'}{run.ended_at?` · ${duration(run.ended_at-run.started_at)} elapsed`:''}</small>
-          {run.last_observed_at&&<small>Last evidence {when(run.last_observed_at)} · {run.last_event_type?.replace(/_/g,' ')}</small>}
-        </button><div class="analytics-run-meta">{run.measurement_source?<><span>Recorded input + output</span><MetricValue value={run.input_tokens+run.output_tokens}/></>:<span>Tokens not measured</span>}</div></article>
+          <strong>{session ? sessionDisplayName(session) : runDisplayName(run) || t("WorkloadTelemetry.dd8a733dab", { backend: run.backend, value2: run.run_id.slice(0,8) })}</strong>
+          <span>{context.projects?.find(project=>project.id===run.project_id)?.name||run.project_id || t("WorkloadTelemetry.14d33bd014")} · {run.backend} · <ModelName model={run.final_model||run.initial_model||'unknown'}/></span>
+          <small>{when(run.started_at)} · {session&&liveState(session) ? session.state : run.ended_at ? t("WorkloadTelemetry.7cdc804e69") : t("WorkloadTelemetry.0fb810bdf0")}{run.ended_at ? t("WorkloadTelemetry.4ba6a66919", { value1: duration(run.ended_at-run.started_at) }) : ''}</small>
+          {run.last_observed_at && <small>{rich("WorkloadTelemetry.271decdd95", { value1: when(run.last_observed_at), value2: run.last_event_type?.replace(/_/g,' ') })}</small>}
+        </button><div class="analytics-run-meta">{run.measurement_source ? <><span>{t("WorkloadTelemetry.9c94b1dcf2")}</span><MetricValue value={run.input_tokens+run.output_tokens}/></> : <span>{t("WorkloadTelemetry.bede28867e")}</span>}</div></article>
       })}
-      {!page&&!error&&<p>Loading runs…</p>}{page&&!page.items.length&&<p>No runs started in this period. Try Live agents now or a wider range.</p>}
-      {page?.next_cursor&&<button disabled={loading} onClick={()=>setCursor(page.next_cursor!)}>{loading?'Loading…':'Load more runs'}</button>}
+      {!page&&!error && <p>{t("WorkloadTelemetry.8438ea394d")}</p>}{page&&!page.items.length && <p>{t("WorkloadTelemetry.39bc683490")}</p>}
+      {page?.next_cursor && <button disabled={loading} onClick={()=>setCursor(page.next_cursor!)}>{loading ? t("WorkloadTelemetry.ba3bbbe10d") : t("WorkloadTelemetry.627fcc156a")}</button>}
     </>}
   </>
 }

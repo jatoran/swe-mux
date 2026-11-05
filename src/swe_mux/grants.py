@@ -36,6 +36,7 @@ from .automation_registry import (
     needs_llm,
     spends_money,
 )
+from .ui_messages import ui_message
 
 # Install-wide switches a gate may turn on.
 #
@@ -104,17 +105,13 @@ AUTONOMY_PROJECT_VALUES: Mapping[str, Any] = {
 # Install switches whose whole point is a feature that calls a model. Turning one on
 # does not spend by itself - a Project still has to permit the work - but a gate that
 # offered them without saying so would be hiding the one fact worth reading twice.
-SPENDING_INSTALL_KEYS: frozenset[str] = frozenset(
-    {"automation_enabled", "scan_timeline_enabled"}
-)
+SPENDING_INSTALL_KEYS: frozenset[str] = frozenset({"automation_enabled", "scan_timeline_enabled"})
 
 # Install switches whose feature is a model call and nothing else. Identical to
 # `SPENDING_INSTALL_KEYS` today and kept separate for the same reason
 # `Automation.needs_llm` is kept apart from `Automation.spends`: one is a cost
 # disclosure, the other is a dependency on a provider that may be free and local.
-LLM_INSTALL_KEYS: frozenset[str] = frozenset(
-    {"automation_enabled", "scan_timeline_enabled"}
-)
+LLM_INSTALL_KEYS: frozenset[str] = frozenset({"automation_enabled", "scan_timeline_enabled"})
 
 
 class GrantRefusal(Exception):
@@ -246,9 +243,7 @@ def plan_grant(
                 + ", ".join(disallowed)
                 + "; allow it in Automation policy first",
             )
-    inherited = (
-        dict(project_defaults) if project_defaults is not None else install_defaults(None)
-    )
+    inherited = dict(project_defaults) if project_defaults is not None else install_defaults(None)
 
     def _already_on(item: str) -> bool:
         explicit = current_automations.get(item)
@@ -340,21 +335,17 @@ def _validate_allowlists() -> None:
     for key in sorted(GRANTABLE_INSTALL_KEYS):
         field = config_fields.get(key)
         if field is None:
-            raise ValueError(f"grantable install key {key} is not a Config field")
+            raise ValueError(ui_message("grants.2b1b176806", value1=key))
         if field.type not in {"bool", bool}:
-            raise ValueError(f"grantable install key {key} must be a boolean setting")
+            raise ValueError(ui_message("grants.0df13faf88", value1=key))
     unknown_project = sorted(set(GRANTABLE_PROJECT_VALUES) - set(PROJECT_CONFIG_FIELDS))
     if unknown_project:
-        raise ValueError(
-            f"grantable Project fields are not in the project config: {', '.join(unknown_project)}"
-        )
+        raise ValueError(ui_message("grants.532112e197", value1=", ".join(unknown_project)))
     for name, table in (("LLM", LLM_PROJECT_VALUES), ("autonomy", AUTONOMY_PROJECT_VALUES)):
         for key, value in table.items():
             allowed = GRANTABLE_PROJECT_VALUES.get(key)
             if allowed is None or value not in allowed:
-                raise ValueError(
-                    f"the {name} starting set gives {key} a value no gate may grant"
-                )
+                raise ValueError(ui_message("grants.70240b566d", value1=name, value2=key))
 
 
 _validate_allowlists()

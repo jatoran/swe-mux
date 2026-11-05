@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import type { ApprovalMode, ApprovalPolicy, ApprovalStatus, Session } from './types.ts'
 
 /**
@@ -18,15 +19,15 @@ import type { ApprovalMode, ApprovalPolicy, ApprovalStatus, Session } from './ty
 export const APPROVAL_MODES: ApprovalMode[] = ['wait', 'allowlisted', 'allow_all']
 
 export const MODE_LABELS: Record<ApprovalMode, string> = {
-  wait: 'wait',
-  allowlisted: 'allowlisted',
-  allow_all: 'allow all',
+  get wait() { return t("approvals.716ecabb45") },
+  get allowlisted() { return t("approvals.fdd0fdd0d4") },
+  get allow_all() { return t("approvals.e8b2371270") },
 }
 
 export const MODE_DESCRIPTIONS: Record<ApprovalMode, string> = {
-  wait: 'Every request waits for you. The default.',
-  allowlisted: "Requests matching this Project's allowlist are approved; the rest wait for you.",
-  allow_all: 'Everything except the never-auto-approved floor is approved.',
+  get wait() { return t("approvals.a0768be902") },
+  get allowlisted() { return t("approvals.52c7890a9e") },
+  get allow_all() { return t("approvals.9d09febe87") },
 }
 
 export type ApprovalLapse = 'active' | 'expired' | 'superseded' | 'exhausted' | 'off'
@@ -82,20 +83,20 @@ function remaining(expiresAt: number | null, now: number): string {
  * that has answered forty things.
  */
 export function approvalSummary(status: ApprovalStatus | null, now: number): string {
-  if (!status) return 'loading…'
-  if (!status.enabled) return 'off for this install'
-  if (!status.supported) return 'unsupported here'
+  if (!status) return t("approvals.fbc6d752fe")
+  if (!status.enabled) return t("approvals.b57f160c0f")
+  if (!status.supported) return t("approvals.dd628455fa")
   const { policy } = status
   const lapse = approvalLapse(policy, policy.run_id, now)
-  if (policy.mode === 'wait') return status.unavailable ? `wait · ${status.unavailable}` : 'wait'
+  if (policy.mode === t("approvals.716ecabb45")) return status.unavailable ? t("approvals.697ce25c5b", { value1: status.unavailable }) : t("approvals.716ecabb45")
   const label = MODE_LABELS[policy.mode]
-  if (lapse === 'expired') return `${label} · expired`
-  if (lapse === 'superseded') return `${label} · conversation replaced`
-  if (lapse === 'exhausted') return `${label} · budget spent (${policy.auto_approved})`
+  if (lapse === 'expired') return t("approvals.c13fcdb382", { label: label })
+  if (lapse === 'superseded') return t("approvals.6d3ce90a1a", { label: label })
+  if (lapse === 'exhausted') return t("approvals.181355a6d7", { label: label, auto_approved: policy.auto_approved })
   const parts = [label, `${policy.auto_approved}/${policy.max_auto} approved`]
   const left = remaining(policy.expires_at, now)
   if (left) parts.push(left)
-  if (policy.floor_deferred > 0) parts.push(`${policy.floor_deferred} held for you`)
+  if (policy.floor_deferred > 0) parts.push(t("approvals.0c45660bbf", { value1: policy.floor_deferred }))
   return parts.join(' · ')
 }
 
@@ -110,18 +111,18 @@ export function approvalSummary(status: ApprovalStatus | null, now: number): str
  */
 export function approvalChipLabel(status: ApprovalStatus | null): string {
   if (!status) return '…'
-  if (!status.enabled) return 'off'
-  if (!status.supported) return 'n/a'
+  if (!status.enabled) return t("approvals.b4dc66dde8")
+  if (!status.supported) return t("approvals.a683c5c534")
   switch (status.effective_mode) {
     case 'allow_all':
-      return 'ALL'
+      return t("approvals.b5c7aed7cd")
     case 'allowlisted':
-      return 'list'
+      return t("approvals.a330395cc0")
     default:
       // A grant that lapsed or was made for a replaced conversation is `wait` in
       // effect, and says so: the chip must never imply authority the daemon has
       // already dropped. The drop-down is where "expired" is spelled out.
-      return 'wait'
+      return t("approvals.716ecabb45")
   }
 }
 
@@ -130,10 +131,10 @@ export function modeUnavailableReason(status: ApprovalStatus, mode: ApprovalMode
   if (mode === 'wait') return ''
   if (status.unavailable) return status.unavailable
   if (APPROVAL_MODES.indexOf(mode) > APPROVAL_MODES.indexOf(status.ceiling)) {
-    return `this Project's ceiling is ${MODE_LABELS[status.ceiling]}`
+    return t("approvals.80cf630c2e", { value1: MODE_LABELS[status.ceiling] })
   }
   if (mode === 'allowlisted' && status.rules.length === 0) {
-    return "this Project's allowlist is empty"
+    return t("approvals.c5b7cee831")
   }
   return ''
 }

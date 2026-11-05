@@ -34,6 +34,7 @@ from .harness import HARNESSES, composer_insertion_rules
 from .observation import note_interrupt_intent
 from .session import note_remote_shell_submission
 from .terminal_core import WriteCondition
+from .ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -125,12 +126,8 @@ def _announce_composer_change(events: EventBus, session: Any, change: str, sourc
     composer = session.composer
     ledger = getattr(session, "state_transitions", None)
     if ledger is not None:
-        ledger.append(
-            {"ts": time.time(), "kind": "composer", "action": change, "source": source}
-        )
-    log.debug(
-        "composer %s for session %s (source %s)", change, session.record.id, source
-    )
+        ledger.append({"ts": time.time(), "kind": "composer", "action": change, "source": source})
+    log.debug("composer %s for session %s (source %s)", change, session.record.id, source)
     events.emit_background(
         "composer_input_changed",
         session_id=session.record.id,
@@ -173,7 +170,7 @@ def record_operator_input(
     gateway is sent in order with every other one (`remote.RemoteTerminal`).
     """
     if not session_accepts_input(session):
-        raise ValueError("session has ended and cannot accept input")
+        raise ValueError(ui_message("operator_input.49de083bbc"))
     session.terminal.write_operator_input(data)
     _account_operator_input(events, session, data, source=source, input_owner=input_owner)
 
@@ -195,7 +192,7 @@ async def deliver_operator_input(
     and none of the accounting happens.
     """
     if not session_accepts_input(session):
-        raise ValueError("session has ended and cannot accept input")
+        raise ValueError(ui_message("operator_input.49de083bbc"))
     await session.terminal.write_when(data, condition=condition, accounted=True)
     _account_operator_input(events, session, data, source=source, input_owner=input_owner)
 

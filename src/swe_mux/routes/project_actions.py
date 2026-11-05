@@ -35,6 +35,7 @@ from ..project_init import init_script_step, select_init_scripts
 from ..session import (
     TERMINAL_SESSION_STATES,
 )
+from ..ui_messages import error_text, ui_message
 from . import sessions as session_routes
 
 log = logging.getLogger(__name__)
@@ -50,7 +51,7 @@ def _action_project(request: web.Request):  # type: ignore[no-untyped-def]
     project_id = request.match_info["project_id"]
     project = request.app[keys.PROJECTS].projects.get(project_id)
     if project is None:
-        raise ValueError(f"unknown project: {project_id}")
+        raise ValueError(ui_message("project_actions.5b235e325f", value1=project_id))
     return project
 
 
@@ -366,7 +367,7 @@ async def run_project_action(request: web.Request) -> web.Response:
     except PermissionError:
         pass  # Reported below, with the catalog, after the same call inside the run.
     except KeyError as exc:
-        raise ValueError(f"unknown Project Action: {action_id}") from exc
+        raise ValueError(ui_message("project_actions.b2fd9318f0", value1=action_id)) from exc
     try:
         payload, status = await _start_project_action(
             request.app, project, action_id, _action_inputs(body), origin="user"
@@ -374,7 +375,7 @@ async def run_project_action(request: web.Request) -> web.Response:
     except PermissionError as exc:
         return json_response(
             {
-                "error": str(exc),
+                "error": error_text(exc),
                 "code": "project_actions_trust_required",
                 "catalog": service.catalog(project.root).snapshot(),
             },
@@ -414,7 +415,7 @@ async def run_project_init_scripts(request: web.Request) -> web.Response:
                 ),
             )
         except Exception as exc:  # one failed launch must not strand the rest
-            errors.append({"script": script["id"], "error": str(exc)})
+            errors.append({"script": script["id"], "error": error_text(exc)})
             continue
         # Same rationale as a Project Action step: the exact argv is retained, so the
         # terminal rail can offer an in-place Relaunch.

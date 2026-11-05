@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { currentProfile, rawDomain, saveDomain, type SettingsProfile } from './deviceSettings.ts'
 import { alertPreferences, isAlertQuietTime } from './alertPrefs.ts'
 export type SoundEvent='complete'|'waiting'|'attention'|'failure'|'reset'
@@ -7,13 +8,13 @@ export type NormalizedMuxEvent={id?:string;type:string;session_id?:string;payloa
 
 export type SoundOption={id:Exclude<SoundId,'custom'>;label:string;description:string;glyph:string}
 export const satisfyingSounds:SoundOption[]=[
-  {id:'two-tone',label:'Two Tone',description:'warm, clean double note',glyph:'⌁'},
-  {id:'bong',label:'Soft Bong',description:'rounded and resonant',glyph:'◉'},
-  {id:'thump',label:'Low Thump',description:'quiet, muted low hit',glyph:'●'},
-  {id:'blip',label:'Tiny Blip',description:'minimal and unobtrusive',glyph:'·'},
-  {id:'sonar',label:'Soft Sonar',description:'airy outward ping',glyph:'◌'},
-  {id:'blop',label:'Bubble',description:'soft and playful',glyph:'○'},
-  {id:'ding',label:'Gentle Ding',description:'light glassy note',glyph:'◇'},
+  {id:'two-tone',get label() { return t("sessionSounds.aa563fced7") },get description() { return t("sessionSounds.aec13d4bfe") },glyph:'⌁'},
+  {id:'bong',get label() { return t("sessionSounds.ca9d4d6d1b") },get description() { return t("sessionSounds.46821db582") },glyph:'◉'},
+  {id:'thump',get label() { return t("sessionSounds.af870b49c1") },get description() { return t("sessionSounds.26c14e3858") },glyph:'●'},
+  {id:'blip',get label() { return t("sessionSounds.9f4067f970") },get description() { return t("sessionSounds.b655e860f6") },glyph:'·'},
+  {id:'sonar',get label() { return t("sessionSounds.1ace2b9240") },get description() { return t("sessionSounds.985932cf16") },glyph:'◌'},
+  {id:'blop',get label() { return t("sessionSounds.77d87b0061") },get description() { return t("sessionSounds.076e325388") },glyph:'○'},
+  {id:'ding',get label() { return t("sessionSounds.453f5655f8") },get description() { return t("sessionSounds.2dccb7f21d") },glyph:'◇'},
 ]
 
 const soundEvents:SoundEvent[]=['complete','waiting','attention','failure','reset']
@@ -54,8 +55,8 @@ export function soundPreferencesFor(profile:SettingsProfile):SoundPreferences{re
 export function soundPreferences():SoundPreferences{return soundPreferencesFor(currentProfile())}
 export function setSoundPreferencesFor(profile:SettingsProfile,value:SoundPreferences):void{void saveDomain(profile,'sounds',value as unknown as Record<string,unknown>).catch(()=>{/* persisted on next edit; UI already updated optimistically */})}
 export function setSoundPreferences(value:SoundPreferences):void{setSoundPreferencesFor(currentProfile(),value)}
-let lastReason='No sound fired on this device yet.'
-export function lastSoundReason():string{return lastReason}
+let lastReason = () => t("sessionSounds.3e19aa2d20")
+export function lastSoundReason():string{return lastReason()}
 
 function minutes(value:string):number|null{const match=/^(\d{2}):(\d{2})$/.exec(value);return match?Number(match[1])*60+Number(match[2]):null}
 export function isQuietTime(preferences:SoundPreferences,date=new Date()):boolean{
@@ -84,12 +85,12 @@ export function classifySoundEvent(event:NormalizedMuxEvent):{event:SoundEvent;r
   const payload=event.payload||{}
   if(payload.scope&&payload.scope!=='root')return null
   if(payload.sidechain===true||payload.subagent===true)return null
-  if(event.type==='unexpected_quota_reset')return {event:'reset',reason:'confirmed unexpected quota reset'}
-  if(event.type==='approval_needed')return {event:'attention',reason:payload.kind==='input'?'root agent asked a question':'root agent needs approval'}
+  if(event.type==='unexpected_quota_reset')return {event:'reset',get reason() { return t("sessionSounds.1fc0560327") }}
+  if(event.type==='approval_needed')return {event:'attention',reason:payload.kind==='input'?t("sessionSounds.e6bf1f7d62"):t("sessionSounds.a87b1bd6d6")}
   // An aborted turn is a cancellation, not a failure. Session shutdown and a
   // user pressing Escape both produce this event; unexpected process death has
   // its own `session_crashed` signal and still alerts.
-  if(event.type==='turn_failed'||event.type==='session_crashed'||(event.type==='state_changed'&&payload.state==='crashed'))return {event:'failure',reason:'root agent failed'}
+  if(event.type==='turn_failed'||event.type==='session_crashed'||(event.type==='state_changed'&&payload.state==='crashed'))return {event:'failure',get reason() { return t("sessionSounds.79a8737fd9") }}
   // The turn ended but the agent did not: subagents or background tasks are still
   // running and it wakes itself when they land, so this is not the moment that
   // wants the user's attention — the one after it is. Suppressing here keeps "the
@@ -97,12 +98,12 @@ export function classifySoundEvent(event:NormalizedMuxEvent):{event:SoundEvent;r
   // to ignore it. Mirrors `running_work` in push.py; the two must agree, because
   // the same idle raises a sound here and a lock-screen push there.
   if(hasRunningWork(payload))return null
-  if(event.type==='turn_ended')return {event:'complete',reason:'root agent turn completed'}
+  if(event.type==='turn_ended')return {event:'complete',get reason() { return t("sessionSounds.ef13b3573a") }}
   if(event.type==='state_changed'&&payload.state==='idle'){
     // A session that just booted has not finished anything, and its startup idle
     // is inferred from PTY quiet rather than observed — it is not even input-ready.
     if(payload.previous==='starting')return null
-    return {event:'waiting',reason:'root agent is ready for input'}
+    return {event:'waiting',get reason() { return t("sessionSounds.f4ce9ae4c6") }}
   }
   return null
 }
@@ -122,11 +123,11 @@ export function handleSessionSound(event:NormalizedMuxEvent,projectAllows=true):
   const now=Date.now();if((played.get(key)||0)>now-10_000)return
   played.set(key,now);for(const [id,at] of played)if(at<now-60_000)played.delete(id)
   void testSessionSound(preferences,preferences.eventSounds[match.event]).catch(()=>{/* automatic browser audio is best-effort */})
-  lastReason=match.reason
+  lastReason=()=>classifySoundEvent(event)?.reason || ''
   window.dispatchEvent(new CustomEvent('mux:sound-fired',{detail:{...match,sessionId:event.session_id,at:now}}))
 }
 
 export async function safeSoundFile(file:File):Promise<string>{
-  if(!file.type.startsWith('audio/')||file.size>512*1024)throw new Error('Choose an audio file no larger than 512 KiB.')
-  return await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result));reader.onerror=()=>reject(new Error('Could not read sound file.'));reader.readAsDataURL(file)})
+  if(!file.type.startsWith('audio/')||file.size>512*1024)throw new Error(t("sessionSounds.99b812730d"))
+  return await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result));reader.onerror=()=>reject(new Error(t("sessionSounds.d25a2e4b6b")));reader.readAsDataURL(file)})
 }

@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { watchDeviceMode } from './deviceMode.ts'
 /**
  * Chrome scale: one multiplier on the size of every non-terminal surface.
@@ -45,7 +46,7 @@ export const DEFAULT_UI_SCALE: UiScale = 1.0
 export const UI_SCALE_BASE_PX = 11
 
 export const uiScaleLabel = (scale: UiScale): string =>
-  `${Math.round(scale * 100)}%  (${+(UI_SCALE_BASE_PX * scale).toFixed(1)}px)`
+  t("uiScale.4e368dac5c", { value1: Math.round(scale * 100), value2: +(UI_SCALE_BASE_PX * scale).toFixed(1) })
 
 const CONFIG_KEY: Record<SettingsProfile, 'ui_scale_desktop' | 'ui_scale_mobile'> = {
   desktop: 'ui_scale_desktop',

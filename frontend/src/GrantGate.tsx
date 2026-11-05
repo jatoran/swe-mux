@@ -1,3 +1,4 @@
+import { rich, t } from './localization/index.ts'
 import { useEffect, useState } from 'preact/hooks'
 import type { ComponentChildren } from 'preact'
 import { SettingLink } from './SettingLink'
@@ -115,8 +116,8 @@ export function GrantGate({
   const primary = ids[0]
   const label = confirmLabel
     || (ids.length === 1
-      ? `Turn on ${SETTING_TARGETS[primary].label}`
-      : `Turn on ${SETTING_TARGETS[ids[ids.length - 1]].label}`)
+      ? t("GrantGate.e3798ad0df", { value1: SETTING_TARGETS[primary].label })
+      : t("GrantGate.e3798ad0df", { value1: SETTING_TARGETS[ids[ids.length - 1]].label }))
 
   const grant = async () => {
     setBusy(true); setError('')
@@ -146,14 +147,9 @@ export function GrantGate({
     {/* Named on the button, not discovered after it. Enabling the change map quietly
         enables two substrate automations, and an operator who read one label and got
         three things has been misled even though nothing went wrong. */}
-    {dragged.length > 0 && <p class="grant-gate-closure">
-      Also switches on {dragged.map(id => byId.get(id)?.label || id).join(', ')}, which
-      {dragged.length === 1 ? ' it reads from' : ' they read from'}.
-    </p>}
+    {dragged.length > 0 && <p class="grant-gate-closure">{rich("GrantGate.83d8961069", { value1: dragged.map(id => byId.get(id)?.label || id).join(', '), value2: (dragged.length === 1) ? 'yes' : 'no' })}</p>}
     <p class={spends ? 'grant-gate-cost spends' : 'grant-gate-cost'}>
-      {spends
-        ? 'This one calls a model, so it can spend against your automation budget.'
-        : 'Free to run — it reads what swe-mux already has and never calls a model.'}
+      {spends ? t("GrantGate.9224a6863d") : t("GrantGate.16de94430f")}
     </p>
     {/* The grant would land and the switch would still be inert, so this is disclosed
         before the press rather than discovered as an automation that never fires. The
@@ -162,25 +158,21 @@ export function GrantGate({
         owner instead of being granted here. */}
     {llm && !llm.ready && <p class="grant-gate-cost spends">
       {llm.reason}{' '}
-      <SettingLink variant="link" target="accounts.llmProvider">
-        Choose or verify a model provider
-      </SettingLink>
-      <button type="button" onClick={()=>window.dispatchEvent(new Event('mux:setup-provider'))}>Guided model setup</button>
+      <SettingLink variant="link" target="accounts.llmProvider">{t("GrantGate.654a9d42c9")}</SettingLink>
+      <button type="button" onClick={()=>window.dispatchEvent(new Event('mux:setup-provider'))}>{t("GrantGate.25cc86bab1")}</button>
     </p>}
     {extra}
     {error && <p class="grant-gate-error" role="alert">{error}</p>}
     <div class="grant-gate-actions">
       <button type="button" class="grant-gate-confirm" disabled={busy || missingProject || (wantsModel && !llm?.ready)}
-        onClick={() => void grant()}>{busy ? 'Turning on…' : label}</button>
+        onClick={() => void grant()}>{busy ? t("GrantGate.63fd4df43f") : label}</button>
       {/* The owning overlay stays reachable. A gate answers this question; the overlay
           is where the whole picture lives and the only place it can be undone. */}
       <SettingLink variant="link" target={primary} projectId={projectId}
-        title={`See this beside everything else in ${SETTING_TARGETS[primary].where}`}
-      >Open {SETTING_TARGETS[primary].where}</SettingLink>
+        title={t("GrantGate.32d3bec5ba", { where: SETTING_TARGETS[primary].where })}
+      >{rich("GrantGate.b6680d364c", { where: SETTING_TARGETS[primary].where })}</SettingLink>
     </div>
-    {missingProject && <p class="grant-gate-error">
-      Select a Project first — that switch belongs to one Project.
-    </p>}
+    {missingProject && <p class="grant-gate-error">{t("GrantGate.b353e1ea37")}</p>}
   </div>
 }
 
@@ -217,9 +209,9 @@ export function GrantButton({ id, projectId, children, onGranted, applyDevice, t
   return <>
     <button type="button" class="setting-link inline grant-inline"
       disabled={busy || needsProject}
-      title={title || `${SETTING_TARGETS[id].label} · writes to ${grantWrittenTo(id)}`}
+      title={title || t("GrantGate.644f13f759", { label: SETTING_TARGETS[id].label, value2: grantWrittenTo(id) })}
       onClick={event => { event.stopPropagation(); void grant() }}
-    >{busy ? 'Turning on…' : children || `Turn on ${SETTING_TARGETS[id].label}`}</button>
+    >{busy ? t("GrantGate.63fd4df43f") : children || t("GrantGate.0ecde137a9", { label: SETTING_TARGETS[id].label })}</button>
     {error && <span class="grant-gate-error" role="alert"> {error}</span>}
   </>
 }
@@ -257,11 +249,11 @@ export function CompactGrantFlag({ id, heading, consequence, projectId, confirmL
   }
   return <div class="compact-grant-flag">
     <span class="compact-grant-mark" aria-hidden="true">⚑</span>
-    <div class="compact-grant-copy"><strong>{heading}</strong>{consequence&&<small>{consequence}</small>}</div>
+    <div class="compact-grant-copy"><strong>{heading}</strong>{consequence && <small>{consequence}</small>}</div>
     <button type="button" class="compact-grant-confirm" disabled={busy||needsProject}
-      onClick={()=>void grant()}>{busy?'Turning on…':confirmLabel||`Turn on ${SETTING_TARGETS[id].label}`}</button>
-    <SettingLink variant="link" target={id} projectId={projectId}>Details</SettingLink>
-    {needsProject&&<span class="compact-grant-error">Select a Project first.</span>}
-    {error&&<span class="compact-grant-error" role="alert">{error}</span>}
+      onClick={()=>void grant()}>{busy ? t("GrantGate.63fd4df43f") : confirmLabel || t("GrantGate.0ecde137a9", { label: SETTING_TARGETS[id].label })}</button>
+    <SettingLink variant="link" target={id} projectId={projectId}>{t("GrantGate.45989de49f")}</SettingLink>
+    {needsProject && <span class="compact-grant-error">{t("GrantGate.a30602eb6f")}</span>}
+    {error && <span class="compact-grant-error" role="alert">{error}</span>}
   </div>
 }

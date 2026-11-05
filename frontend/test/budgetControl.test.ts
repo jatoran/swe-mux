@@ -1,10 +1,11 @@
+import { withCatalogText } from './support/localizedSource.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 
 const root = join(import.meta.dirname, '..')
-const source = (name: string) => readFileSync(join(root, 'src', name), 'utf8')
+const source = (name: string) => withCatalogText(readFileSync(join(root, 'src', name), 'utf8'))
 
 // Every install-wide spending cap has to reach the same control, or the promise the
 // section makes - "tokens, dollars, or first hit, everywhere" - is true of whichever
@@ -57,7 +58,7 @@ test('the control states what a dollar cap does when cost is unmeasurable', () =
   // The whole point of the warning: an operator choosing "Dollars" against a local
   // endpoint is choosing a cap that cannot bind, and has to be told at that moment
   // rather than discovering it as a runaway bill-free spend months later.
-  assert.ok(control.includes('COST_BLIND_WARNING'))
+  assert.ok(control.includes('costBlindWarning()'))
   assert.ok(control.includes('cannot bind here'))
   assert.ok(control.includes('unreported cost is unknown, never zero'))
   // And it is drawn only while the dollar axis is actually enforced.

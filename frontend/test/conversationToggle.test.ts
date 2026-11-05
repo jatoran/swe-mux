@@ -1,3 +1,4 @@
+import { withCatalogText } from './support/localizedSource.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -7,7 +8,7 @@ const dir = join(import.meta.dirname, '..', 'src')
 // Normalized to LF: the slices below cut on literal "\n" anchors, and a checkout
 // through autocrlf reads back CRLF, which turns a scoped slice into the rest of
 // the file without failing anything.
-const read = (name: string) => readFileSync(join(dir, name), 'utf8').replace(/\r\n/g, '\n')
+const read = (name: string) => withCatalogText(readFileSync(join(dir, name), 'utf8')).replace(/\r\n/g, '\n')
 const control = read('ConversationControl.tsx')
 const css = read('style.css')
 
@@ -70,7 +71,7 @@ test('the voice control is a mic glyph that carries its own state, with no label
   assert.match(toggle, /<MicIcon slashed=\{!active\}\/>/)
   assert.doesNotMatch(toggle, /<span>/, 'the button carries no text')
   assert.match(control, /function MicIcon\(\{slashed\}:\{slashed:boolean\}\)/)
-  assert.match(control, /\{slashed&&<path d="M4 3\.5l16 17"\/>\}/)
+  assert.match(control, /\{slashed\s*&&\s*<path d="M4 3\.5l16 17"\/>\}/)
 
   // Square on both surfaces: a min-width sized for a word left the icon off-centre.
   for (const rule of [
@@ -102,8 +103,8 @@ test('the control carries what is waiting behind a collapsed panel', () => {
   // It is the only way back to a dock that is still streaming, speaking, and opening
   // cards, so it has to say that something is there. A count outranks a dot because a
   // confirmation card expires and an unread reply does not.
-  assert.match(toggle, /pendingActions>0\n\s*\?<i class="voice-dock-badge">/)
-  assert.match(toggle, /unseen\?<i class="voice-dock-dot" aria-hidden="true"\/>:null/)
+  assert.match(toggle, /pendingActions>0\s*\?\s*<i class="voice-dock-badge">/)
+  assert.match(toggle, /unseen\s*\?\s*<i class="voice-dock-dot" aria-hidden="true"\/>\s*:\s*null/)
   // The badge is absolutely positioned, so the button has to be its containing block.
   const base = css.match(/\n\s*\.conversation-talk-toggle\{([^}]+)\}/)!
   assert.match(base[1], /position:relative/)

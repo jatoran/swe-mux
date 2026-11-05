@@ -73,9 +73,7 @@ def test_theme_picker_previews_are_fixed_width_and_catalog_driven() -> None:
 
 
 def test_scrollbars_use_compact_theme_aware_shared_chrome() -> None:
-    css = (
-        Path(__file__).parents[1] / "frontend" / "src" / "style.css"
-    ).read_text(encoding="utf-8")
+    css = (Path(__file__).parents[1] / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
 
     assert "scrollbar-color:color-mix(in srgb,var(--muted) 48%,transparent) transparent" in css
     assert "scrollbar-width:thin" in css

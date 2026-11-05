@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 /**
  * Deep links from a gated surface to the exact control that ungates it.
  *
@@ -40,11 +41,11 @@ export type SettingTarget = {
 export const SETTING_TARGETS = {
   'clipboard.history': {
     surface: 'settings', section: 'Input', setting: 'clipboard_history_enabled',
-    label: 'Keep clipboard history', where: 'Settings → Input',
+    get label() { return t("settingTargets.5194a6b4e2") }, get where() { return t("settingTargets.9777cfce5d") },
   },
   'queue.autoDelivery': {
     surface: 'settings', section: 'Prompt queue', setting: 'auto_delivery_enabled',
-    label: 'Allow auto-delivery for agent conversations', where: 'Settings → Prompt queue',
+    get label() { return t("settingTargets.a7ed28c4c2") }, get where() { return t("settingTargets.5deb897fba") },
   },
   // How long a conversation may sit idle before its grant lapses. A *value*
   // rather than a switch - a gate can honestly offer "turn this on", never "pick
@@ -52,27 +53,27 @@ export const SETTING_TARGETS = {
   // here rather than growing a second editor for the same bound.
   'queue.grantWindow': {
     surface: 'settings', section: 'Prompt queue', setting: 'auto_delivery_session_ttl_minutes',
-    label: 'Idle minutes before a grant lapses', where: 'Settings → Prompt queue',
+    get label() { return t("settingTargets.827f88a0d2") }, get where() { return t("settingTargets.5deb897fba") },
   },
   'queue.agentMessaging': {
     surface: 'settings', section: 'Prompt queue', setting: 'agent_messaging_enabled',
-    label: 'Allow agent-to-agent messages', where: 'Settings → Prompt queue',
+    get label() { return t("settingTargets.6671bb2f54") }, get where() { return t("settingTargets.5deb897fba") },
   },
   'approvals.autoAnswer': {
     surface: 'settings', section: 'Prompt queue', setting: 'approval_auto_enabled',
-    label: 'Allow swe-mux to answer approvals', where: 'Settings → Prompt queue',
+    get label() { return t("settingTargets.98473e42a5") }, get where() { return t("settingTargets.5deb897fba") },
   },
   'usage.ccusage': {
     surface: 'settings', section: 'Usage', setting: 'ccusage_enabled',
-    label: 'Enable ccusage refresh', where: 'Settings → Usage',
+    get label() { return t("settingTargets.d2ede78359") }, get where() { return t("settingTargets.9f4f94caba") },
   },
   'voice.tts': {
     surface: 'settings', section: 'Voice', setting: 'tts_enabled',
-    label: 'Enable read aloud', where: 'Settings → Voice',
+    get label() { return t("settingTargets.4779fa4d8d") }, get where() { return t("settingTargets.b2416e9ca6") },
   },
   'voice.stt': {
     surface: 'settings', section: 'Voice', setting: 'stt_enabled',
-    label: 'Enable microphone input', where: 'Settings → Voice',
+    get label() { return t("settingTargets.4ebea1d825") }, get where() { return t("settingTargets.b2416e9ca6") },
   },
   // The assistant's own master switch. It is the fourth section of the Voice tab rather
   // than a tab of its own, and every off-state used to say "Settings → Assistant" - a tab
@@ -82,18 +83,18 @@ export const SETTING_TARGETS = {
   // fails silently and forever.
   'assistant.enable': {
     surface: 'settings', section: 'Voice', setting: 'assistant_enabled',
-    label: 'Enable the Mux assistant', where: 'Settings → Voice → Mux assistant',
+    get label() { return t("settingTargets.dff4641557") }, get where() { return t("settingTargets.426d11e4a5") },
   },
   // Which agent CLIs appear in the launchers. A *set* rather than a switch, so it stays a
   // link: the Run menu's empty agent list routes here rather than offering to enable a
   // harness the machine may not have installed.
   'harnesses.enabled': {
     surface: 'settings', section: 'Harnesses', setting: 'harness_enabled',
-    label: 'Which agents appear in launchers', where: 'Settings → Harnesses',
+    get label() { return t("settingTargets.6fc05abdf9") }, get where() { return t("settingTargets.69f90292bb") },
   },
   'terminals.claudeWidth': {
     surface: 'settings', section: 'Terminals', setting: 'claude_max_columns',
-    label: 'Claude width limit', where: 'Settings → Terminals',
+    get label() { return t("settingTargets.5a898c22f2") }, get where() { return t("settingTargets.cc4a642917") },
   },
   // Whether typing an agent's name in a terminal launches it through mux. Linked
   // from the console-contention notice because that notice is the one moment a
@@ -101,20 +102,20 @@ export const SETTING_TARGETS = {
   // shell fighting my agent" has no other answer they could reach.
   'terminals.agentShims': {
     surface: 'settings', section: 'Terminals', setting: 'agent_shims_on_shell_path',
-    label: 'Launch agents through swe-mux when typed in a terminal',
-    where: 'Settings → Terminals',
+    get label() { return t("settingTargets.575b8e9cc8") },
+    get where() { return t("settingTargets.cc4a642917") },
   },
   'appearance.sessionRows': {
     surface: 'settings', section: 'Appearance', setting: 'session_rows',
-    label: 'Configure session row appearance', where: 'Settings → Appearance → Session rows',
+    get label() { return t("settingTargets.1b40fed8d4") }, get where() { return t("settingTargets.d83563260d") },
   },
   'appearance.sessionTopbar': {
     surface: 'settings', section: 'Appearance', setting: 'session_topbar',
-    label: 'Configure session top bar appearance', where: 'Settings → Appearance → Session top bars',
+    get label() { return t("settingTargets.a089ff7b83") }, get where() { return t("settingTargets.cb3a056df0") },
   },
   'projects.newProjectParent': {
     surface: 'settings', section: 'Projects', setting: 'new_project_parent',
-    label: 'Default parent folder for new projects', where: 'Settings → Projects',
+    get label() { return t("settingTargets.5c79a421c4") }, get where() { return t("settingTargets.74569ceed2") },
   },
   // What the file tree and the resource watchers skip. A *value* rather than a switch - a
   // gate can offer "turn this on", never "type a glob list" - so it is a link, offered from
@@ -124,15 +125,15 @@ export const SETTING_TARGETS = {
   // on names the per-Project list that composes with it.
   'projects.ignorePatterns': {
     surface: 'settings', section: 'Projects', setting: 'project_ignore_patterns',
-    label: 'Ignore patterns', where: 'Settings → Projects',
+    get label() { return t("settingTargets.6b12ef00cf") }, get where() { return t("settingTargets.74569ceed2") },
   },
   'schedules.install': {
     surface: 'automation', setting: 'scheduled_runs_enabled',
-    label: 'Let schedules start sessions', where: 'Automation → Global policy',
+    get label() { return t("settingTargets.1c966575f6") }, get where() { return t("settingTargets.ec9e4fafd5") },
   },
   'alerts.master': {
     surface: 'settings', section: 'Alerts', setting: 'alerts_enabled',
-    label: 'Alerts for this device', where: 'Settings → Alerts',
+    get label() { return t("settingTargets.03fd43a3a1") }, get where() { return t("settingTargets.783dbbd6c7") },
   },
   // Which endpoint every model-backed feature calls. A *value* rather than a switch -
   // choosing a provider and typing a URL, a key, and a model id is not something a gate
@@ -140,100 +141,100 @@ export const SETTING_TARGETS = {
   // an unverified endpoint route here rather than pretending to grant it.
   'accounts.llmProvider': {
     surface: 'settings', section: 'Accounts', setting: 'llm_provider',
-    label: 'Model provider', where: 'Settings → Accounts',
+    get label() { return t("settingTargets.ea70384c46") }, get where() { return t("settingTargets.bd741bd0dc") },
   },
   // Global automation controls and the graph they govern share one workspace.
   'automation.engine': {
     surface: 'automation', setting: 'automation_enabled',
-    label: 'Automation engine', where: 'Automation → Global policy',
+    get label() { return t("settingTargets.efc95288ba") }, get where() { return t("settingTargets.ec9e4fafd5") },
   },
   'automation.scanTimeline': {
     surface: 'automation', setting: 'scan_timeline_enabled',
-    label: 'Scan timeline', where: 'Automation → Global policy',
+    get label() { return t("settingTargets.446eb6eb25") }, get where() { return t("settingTargets.ec9e4fafd5") },
   },
   'automation.scanTimelineModel': {
     surface: 'settings', section: 'Accounts', setting: 'scan_timeline_model',
-    label: 'Scan timeline model', where: 'Settings → Accounts → Models',
+    get label() { return t("settingTargets.4de13678da") }, get where() { return t("settingTargets.174313f841") },
   },
   'automation.attentionNarrationModel': {
     surface: 'settings', section: 'Accounts', setting: 'attention_narration_model',
-    label: 'Attention narration model', where: 'Settings → Accounts → Models',
+    get label() { return t("settingTargets.bf9b2a9f1e") }, get where() { return t("settingTargets.174313f841") },
   },
   'automation.projectCardModel': {
     surface: 'settings', section: 'Accounts', setting: 'project_card_model',
-    label: 'Project context card model', where: 'Settings → Accounts → Models',
+    get label() { return t("settingTargets.573c3bc117") }, get where() { return t("settingTargets.174313f841") },
   },
   'automation.budgets': {
     surface: 'automation', setting: 'automation_daily_budget',
-    label: 'Automation budgets', where: 'Automation → Global policy',
+    get label() { return t("settingTargets.863a101589") }, get where() { return t("settingTargets.ec9e4fafd5") },
   },
   // The land queue's install-wide emergency stop. Its own switch rather than a facet of
   // the automation engine: the sweep that moves a trunk checks this and nothing else, so
   // a queue with it off accepts requests and then silently never advances one.
   'automation.landQueue': {
     surface: 'automation', setting: 'land_queue_enabled',
-    label: 'Let auto-merge move trunks', where: 'Automation → Global policy',
+    get label() { return t("settingTargets.a2e3a5aabf") }, get where() { return t("settingTargets.ec9e4fafd5") },
   },
   // Per-Project opt-ins. Every one of these is off until a human turns it on for that
   // Project, so a surface reading from one is inert rather than empty until then.
   'project.automations': {
     surface: 'automation', setting: 'automations',
-    label: 'Automations', where: 'Automation → Projects',
+    get label() { return t("settingTargets.ad1fb9ec0c") }, get where() { return t("settingTargets.5be6ac8db0") },
   },
   'project.scanTimeline': {
     surface: 'automation', setting: 'automation:scan_timeline',
-    label: 'Scan timeline permitted for this Project', where: 'Automation → Projects',
+    get label() { return t("settingTargets.93b1aef862") }, get where() { return t("settingTargets.5be6ac8db0") },
   },
   'project.scanTimelineAutoArm': {
     surface: 'automation', setting: 'scan_timeline_auto_enable',
-    label: 'Arm every new conversation', where: 'Automation → Projects',
+    get label() { return t("settingTargets.ae2454b096") }, get where() { return t("settingTargets.5be6ac8db0") },
   },
   'project.titleRefinements': {
     surface: 'automation', setting: 'title_refinements',
-    label: 'Title refinements', where: 'Automation → Projects',
+    get label() { return t("settingTargets.5e0d71209a") }, get where() { return t("settingTargets.5be6ac8db0") },
   },
   'project.codeGraph': {
     surface: 'automation', setting: 'automation:code_graph',
-    label: 'Code-structure graph', where: 'Automation → Projects',
+    get label() { return t("settingTargets.a5a07135c7") }, get where() { return t("settingTargets.5be6ac8db0") },
   },
   'project.scheduledRuns': {
     surface: 'automation', setting: 'automation:scheduled_runs',
-    label: 'Scheduled runs', where: 'Automation → Projects',
+    get label() { return t("settingTargets.19110a1000") }, get where() { return t("settingTargets.5be6ac8db0") },
   },
   'project.attentionRanking': {
     surface: 'automation', setting: 'automation:attention_ranking',
-    label: 'Attention ranking', where: 'Automation → Projects',
+    get label() { return t("settingTargets.7c85333db5") }, get where() { return t("settingTargets.5be6ac8db0") },
   },
   'project.spawnReview': {
     surface: 'automation', setting: 'automation:observation_inbox',
-    label: 'Spawn request review', where: 'Automation → Projects',
+    get label() { return t("settingTargets.69c40c600e") }, get where() { return t("settingTargets.5be6ac8db0") },
   },
   // The four model-free detectors the Findings pane reads. Named individually rather
   // than behind `project.automations`, because that target is an *area*: it reveals the
   // heading above twenty checkboxes and leaves the reader to find four of them by name.
   'project.provenanceGraph': {
     surface: 'automation', setting: 'automation:provenance_graph',
-    label: 'Provenance graph', where: 'Automation → Projects',
+    get label() { return t("settingTargets.b0d4609be9") }, get where() { return t("settingTargets.5be6ac8db0") },
   },
   'project.loopDetection': {
     surface: 'automation', setting: 'automation:loop_detection',
-    label: 'Loop / stall detection', where: 'Automation → Projects',
+    get label() { return t("settingTargets.42465236ac") }, get where() { return t("settingTargets.5be6ac8db0") },
   },
   'project.declaredVsVerified': {
     surface: 'automation', setting: 'automation:declared_vs_verified',
-    label: 'Declared vs verified', where: 'Automation → Projects',
+    get label() { return t("settingTargets.256e71f389") }, get where() { return t("settingTargets.5be6ac8db0") },
   },
   'project.docDebt': {
     surface: 'automation', setting: 'automation:doc_debt',
-    label: 'Doc-debt ledger', where: 'Automation → Projects',
+    get label() { return t("settingTargets.c8d5a1d12a") }, get where() { return t("settingTargets.5be6ac8db0") },
   },
   'project.landQueue': {
     surface: 'automation', setting: 'automation:land_queue',
-    label: 'Auto-merge', where: 'Automation → Projects',
+    get label() { return t("settingTargets.788d20dbca") }, get where() { return t("settingTargets.5be6ac8db0") },
   },
   'project.sessionControl': {
     surface: 'automation', setting: 'automation:session_control',
-    label: 'Agent session control', where: 'Automation → Projects',
+    get label() { return t("settingTargets.009e0ae5e8") }, get where() { return t("settingTargets.5be6ac8db0") },
   },
   // The authority fields. Each is an opt-in's second half: the automation decides
   // whether an agent may ask, and these decide whether a human still approves each
@@ -247,35 +248,35 @@ export const SETTING_TARGETS = {
   // keeps a summary and a link, the same treatment the automation opt-ins already get.
   'project.authority': {
     surface: 'automation', setting: 'agent_authority',
-    label: 'Agent authority', where: 'Automation → Policy',
+    get label() { return t("settingTargets.1fac324f77") }, get where() { return t("settingTargets.37a381f097") },
   },
   'project.landGrant': {
     surface: 'automation', setting: 'land_grant',
-    label: 'Agent-started auto-merge', where: 'Automation → Policy',
+    get label() { return t("settingTargets.05445d4325") }, get where() { return t("settingTargets.37a381f097") },
   },
   'project.landVerifyGrant': {
     surface: 'project', setting: 'land_verify_grant',
-    label: 'Agent edits to the verification command', where: 'Project settings',
+    get label() { return t("settingTargets.59560c8d30") }, get where() { return t("settingTargets.fccd73a69e") },
   },
   'project.sessionControlGrant': {
     surface: 'automation', setting: 'session_control_grant',
-    label: 'Agent interrupt and end', where: 'Automation → Policy',
+    get label() { return t("settingTargets.8f585f6bfa") }, get where() { return t("settingTargets.37a381f097") },
   },
   'project.spawnGrant': {
     surface: 'automation', setting: 'spawn_grant',
-    label: 'Agent-initiated spawn', where: 'Automation → Policy',
+    get label() { return t("settingTargets.b926fdc36e") }, get where() { return t("settingTargets.37a381f097") },
   },
   'project.interjectGrant': {
     surface: 'automation', setting: 'interject_grant',
-    label: 'Mid-turn agent messages', where: 'Automation → Policy',
+    get label() { return t("settingTargets.b36d9cc563") }, get where() { return t("settingTargets.37a381f097") },
   },
   'project.messageEnvelope': {
     surface: 'automation', setting: 'message_envelope',
-    label: 'Metadata on agent messages', where: 'Automation → Policy',
+    get label() { return t("settingTargets.17bf57b622") }, get where() { return t("settingTargets.37a381f097") },
   },
   'project.settings': {
     surface: 'project',
-    label: 'This Project’s settings', where: 'Project settings',
+    get label() { return t("settingTargets.75c9b49472") }, get where() { return t("settingTargets.fccd73a69e") },
   },
 } as const satisfies Record<string, SettingTarget>
 

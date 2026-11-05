@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { serverNow } from './serverClock.ts'
 import { sessionDisplayName } from './sessionNames.ts'
 import type { Project, Session } from './types.ts'
@@ -43,14 +44,14 @@ export function buildFleetReadModel(sessions: Session[], projects: Project[], no
     counts[session.state] += 1
     const activityAt = session.last_activity_ts || session.created_at || now
     const activityAge = now - activityAt
-    const source = session.measurement_source || 'session ledger'
+    const source = session.measurement_source || t("fleetStatus.82b29b5cf0")
     const delivery = session.delivery_readiness?.state || 'unknown'
     return {
       session,
-      projectName: names.get(session.project_id) || session.project_label || 'Unknown project',
+      projectName: names.get(session.project_id) || session.project_label || t("fleetStatus.ed51cfeff0"),
       state: claim(session.state, source, now, activityAge, session.measurement_source ? 'proven' : 'inferred'),
-      awaiting: claim(session.awaiting_reason || null, session.awaiting_reason ? source : 'session ledger', now, activityAge, session.state === 'awaiting' ? 'proven' : 'inferred'),
-      delivery: claim(delivery, session.delivery_readiness?.reason || 'readiness unavailable', now, activityAge, session.delivery_readiness ? 'proven' : 'unknown'),
+      awaiting: claim(session.awaiting_reason || null, session.awaiting_reason ? source : t("fleetStatus.82b29b5cf0"), now, activityAge, session.state === 'awaiting' ? 'proven' : 'inferred'),
+      delivery: claim(delivery, session.delivery_readiness?.reason || t("fleetStatus.cadde08963"), now, activityAge, session.delivery_readiness ? 'proven' : 'unknown'),
       activity: claim(activityAt, source, now, activityAge, activityAt ? 'proven' : 'unknown'),
     }
   })
@@ -78,19 +79,19 @@ export function fleetRundown(model:FleetReadModel):string {
   const approvals = sessionsMatchingFleetPredicate(model,'approval').length
   const questions = sessionsMatchingFleetPredicate(model,'question').length
   const problems = model.counts.crashed + sessionsMatchingFleetPredicate(model,'stuck').length
-  return `Fleet status. Total sessions, ${model.sessions.length}. Active sessions, ${active}. Awaiting your approval, ${approvals}. Awaiting your answer, ${questions}. Needing attention, ${problems}. End of fleet status.`
+  return t("fleetStatus.3a1ba67f92", { value1: model.sessions.length, value2: active, value3: approvals, value4: questions, value5: problems })
 }
 
 export function fleetRundownDetail(
   model:FleetReadModel,
   addressing?:{addressFor:(item:FleetSession)=>VoiceSessionAddress|null;compound:boolean},
 ):string{
-  if (!model.sessions.length) return 'No sessions are running.'
-  return `Detailed fleet status. ${model.sessions.map((item,index) => {
+  if (!model.sessions.length) return t("fleetStatus.e2e8c68312")
+  return t("fleetStatus.17fa5fd09e", { value1: model.sessions.map((item,index) => {
     const reason = item.awaiting.value ? ` awaiting ${item.awaiting.value.replace('_',' ')}` : ` ${item.state.value}`
-    const freshness = item.activity.ageSeconds < 2 ? 'now' : `${item.activity.ageSeconds} seconds ago`
+    const freshness = item.activity.ageSeconds < 2 ? 'now' : t("fleetStatus.f53e1ed3f4", { value1: item.activity.ageSeconds })
     const address=addressing?.addressFor(item)
     const project=addressing?.compound&&address?`Project ${address.projectNumber}, `:''
-    return `${index?'Next session. ':''}${project}Session ${address?.sessionNumber??index+1}. Name, ${sessionDisplayName(item.session)}. Project, ${item.projectName}. Status,${reason}. Observed ${freshness} from ${item.state.source}.`
-  }).join(' ')} End of detailed fleet status.`
+    return t("fleetStatus.22f775d9c2", { value1: (index) ? 'yes' : 'no', value2: project, value3: address?.sessionNumber??index+1, value4: sessionDisplayName(item.session), value5: item.projectName, value6: reason, value7: freshness, value8: item.state.source })
+  }).join(' ') })
 }

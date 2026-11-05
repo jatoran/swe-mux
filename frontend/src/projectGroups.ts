@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import type { Session, Project } from './types'
 
 // Group session-process rows by project, ordered by project position then session
@@ -33,7 +34,7 @@ export function buildProjectGroups<G extends { session_id: string; project_id: s
     )
     .map(([id, groups]) => ({
       id,
-      label: projectById.get(id)?.name || 'Unknown project',
+      label: projectById.get(id)?.name || t("projectGroups.ed51cfeff0"),
       groups: groups.sort((first, second) => {
         const focus = Number(second.session_id === focusedSessionId) - Number(first.session_id === focusedSessionId)
         return focus || (sessionById.get(first.session_id)?.created_at || 0) -

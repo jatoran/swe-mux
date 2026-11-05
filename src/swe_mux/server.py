@@ -174,7 +174,7 @@ from .project_files import (
     write_note,
 )
 from .project_watcher import ProjectFileWatcher
-from .projects import ProjectManager
+from .projects import LayoutRevisionConflict, ProjectManager
 from .prompt_library import PromptLibrary
 from .prompt_queue import (
     OperatorWriter,
@@ -243,6 +243,7 @@ from .terminal_core import WriteCondition
 from .terminal_placement import TerminalPlacement
 from .tier0_store import Tier0Context, Tier0Store
 from .transcript_discovery import TranscriptScanner
+from .ui_messages import UI_LOCALE, error_text, resolve_ui_locale, ui_message
 from .update_check import UPDATE_CHECK_LOOP, UpdateChecker
 from .update_install import UpdateInstaller
 from .usage import UsageManager
@@ -342,6 +343,25 @@ async def correlation_middleware(request: web.Request, handler: Handler) -> web.
 
 
 @web.middleware
+async def localization_middleware(request: web.Request, handler: Handler) -> web.StreamResponse:
+    config = request.app.get(keys.CONFIG)
+    language = resolve_ui_locale(
+        getattr(config, "ui_language", ""), request.headers.get("Accept-Language", "")
+    )
+    token = UI_LOCALE.set(language)
+    try:
+        response = await handler(request)
+        if response.content_type == "application/json":
+            response.headers["Content-Language"] = language
+            response.headers["Vary"] = ", ".join(
+                filter(None, [response.headers.get("Vary"), "Accept-Language"])
+            )
+        return response
+    finally:
+        UI_LOCALE.reset(token)
+
+
+@web.middleware
 async def error_middleware(request: web.Request, handler: Handler) -> web.StreamResponse:
     try:
         return await handler(request)
@@ -359,7 +379,7 @@ async def error_middleware(request: web.Request, handler: Handler) -> web.Stream
             exc.kind,
             exc.key,
         )
-        return json_response({"error": str(exc), "code": "not_found", "kind": exc.kind}, 404)
+        return json_response({"error": error_text(exc), "code": "not_found", "kind": exc.kind}, 404)
     except HistorySearchBudgetExceeded as exc:
         # Not an error in the request and not a daemon fault: the search was
         # stopped mid-statement so the history thread could go back to serving
@@ -371,14 +391,14 @@ async def error_middleware(request: web.Request, handler: Handler) -> web.Stream
             request.path,
             exc.budget_ms,
         )
-        return json_response({"error": str(exc), "code": "search_budget_exceeded"}, 503)
+        return json_response({"error": error_text(exc), "code": "search_budget_exceeded"}, 503)
     except TelemetryUnavailable as exc:
         # The ledgers live in the worker process and it is restarting: a retry
         # in a moment is the remedy, not a different request.
         log.info("telemetry_unavailable path=%s reason=%s", request.path, exc)
         return json_response(
             {
-                "error": "telemetry is unavailable while its worker restarts",
+                "error": ui_message("server.679b4d6611"),
                 "code": "telemetry_unavailable",
             },
             503,
@@ -386,11 +406,13 @@ async def error_middleware(request: web.Request, handler: Handler) -> web.Stream
     except ProviderAccountConflict as exc:
         # Distinct from a bad request: the caller must resolve an ownership
         # clash or explicitly force the action.
-        return json_response({"error": str(exc), "conflict": True}, 409)
+        return json_response({"error": error_text(exc), "conflict": True}, 409)
     except QueueError as exc:
         # Typed queue-operation failures carry their own status and a machine
         # code the queue UI branches on (head-of-line, revision, readiness).
-        return json_response({"error": str(exc), "code": exc.code, **exc.payload}, exc.status)
+        return json_response(
+            {"error": error_text(exc), "code": exc.code, **exc.payload}, exc.status
+        )
     except git_review.GitReviewError as exc:
         log.warning(
             "git_review_request method=%s path=%s code=%s status=%s result=error",
@@ -399,7 +421,7 @@ async def error_middleware(request: web.Request, handler: Handler) -> web.Stream
             exc.code,
             exc.status,
         )
-        return json_response({"error": str(exc), "code": exc.code}, exc.status)
+        return json_response({"error": error_text(exc), "code": exc.code}, exc.status)
     except ProjectConfigConflict as exc:
         # A field-scoped conflict, so it says which fields moved and hands back the
         # current file: the editor resyncs and shows the collision in place rather
@@ -407,28 +429,30 @@ async def error_middleware(request: web.Request, handler: Handler) -> web.Stream
         # precede the generic `ValueError` clause below.
         return json_response(
             {
-                "error": str(exc),
+                "error": error_text(exc),
                 "code": "revision_conflict",
                 "conflicts": exc.fields,
                 "current": exc.current,
             },
             409,
         )
+    except LayoutRevisionConflict as exc:
+        return json_response({"error": error_text(exc), "code": "layout_revision_conflict"}, 400)
     except ProjectFileRevisionConflict as exc:
-        return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+        return json_response({"error": error_text(exc), "code": "revision_conflict"}, 409)
     except ProjectImageUnavailable as exc:
-        return json_response({"error": str(exc), "code": "image_unavailable"}, 415)
+        return json_response({"error": error_text(exc), "code": "image_unavailable"}, 415)
     except ProjectResourceExists as exc:
-        return json_response({"error": str(exc), "code": "resource_exists"}, 409)
+        return json_response({"error": error_text(exc), "code": "resource_exists"}, 409)
     except ProjectNoteProtected as exc:
         # A policy refusal, not a malformed request: the note exists and the
         # caller's revision was current. The browser branches on the code to
         # explain the rule rather than reporting a failed delete.
-        return json_response({"error": str(exc), "code": "note_protected"}, 409)
+        return json_response({"error": error_text(exc), "code": "note_protected"}, 409)
     except AssistantError as exc:
         # Typed assistant failures are user-visible refusals (disabled, budget
         # exhausted, unknown dialog), never internal errors.
-        return json_response({"error": str(exc)}, 400)
+        return json_response({"error": error_text(exc)}, 400)
     except VoiceError as exc:
         # Same class of refusal, translated centrally since 2026-08-29 rather than
         # route by route. Most voice routes already caught this and returned 409;
@@ -457,13 +481,13 @@ async def error_middleware(request: web.Request, handler: Handler) -> web.Stream
     except PreviewDestinationReserved as exc:
         # A ValueError subclass, caught first for its code: the browser opens such a
         # link outside the app rather than reporting a failed Preview.
-        return json_response({"error": str(exc), "code": exc.code}, 409)
+        return json_response({"error": error_text(exc), "code": exc.code}, 409)
     except ScheduleError as exc:
         # A ValueError subclass, so it must be caught before the generic clause
         # below: the schedule editor branches on the machine code and highlights
         # the exact field, which a bare message string cannot support.
         return json_response(
-            {"error": str(exc), "code": exc.code, "fields": exc.fields}, exc.status
+            {"error": error_text(exc), "code": exc.code, "fields": exc.fields}, exc.status
         )
     except (ValueError, ProviderAccountError) as exc:
         # `TypeError` used to be translated here too, and almost never meant a
@@ -477,7 +501,7 @@ async def error_middleware(request: web.Request, handler: Handler) -> web.Stream
             request.path,
             type(exc).__name__,
         )
-        return json_response({"error": str(exc)}, 400)
+        return json_response({"error": error_text(exc)}, 400)
     except SupervisorUnavailable as exc:
         # A refusal with a reason, not a bug. The one that matters is the spawn
         # the daemon deliberately fails rather than falling back in-process when
@@ -492,7 +516,7 @@ async def error_middleware(request: web.Request, handler: Handler) -> web.Stream
             request.path,
             exc,
         )
-        return json_response({"error": str(exc), "code": "supervisor_unreachable"}, 503)
+        return json_response({"error": error_text(exc), "code": "supervisor_unreachable"}, 503)
     except TimeoutError as exc:
         # `TimeoutError` subclasses `OSError`, so it matched nothing above and
         # became a 500 whose body said nothing. A deadline that expired is an
@@ -509,7 +533,7 @@ async def error_middleware(request: web.Request, handler: Handler) -> web.Stream
         # (the correlation filter), so the 500 the caller saw and the traceback
         # that explains it can be matched without guessing from timestamps.
         log.exception("unhandled request error method=%s path=%s", request.method, request.path)
-        return json_response({"error": "internal server error"}, 500)
+        return json_response({"error": ui_message("server.5b8c08901d")}, 500)
 
 
 def _apply_static_cache_headers(response: web.StreamResponse, request: web.Request) -> None:
@@ -568,7 +592,7 @@ async def starting_middleware(request: web.Request, handler: Handler) -> web.Str
         return await handler(request)
     response = json_response(
         {
-            "error": "the daemon is still starting",
+            "error": ui_message("server.c99e190343"),
             "code": "daemon_starting",
             **timeline.snapshot(),
         },
@@ -624,7 +648,7 @@ def create_app(
     relaunch_command: list[str] | None = None,
 ) -> web.Application:
     if desktop_control_token is not None and desktop_shutdown_event is None:
-        raise ValueError("desktop control requires a shutdown event")
+        raise ValueError(ui_message("server.684b91faab"))
     # `starting_middleware` sits inside the security check so an unauthorized
     # caller is still refused as unauthorized during the startup window, and
     # outside compression so a 503 is compressed like any other response.
@@ -634,6 +658,7 @@ def create_app(
     app = web.Application(
         middlewares=[
             correlation_middleware,
+            localization_middleware,
             error_middleware,
             security_middleware,
             starting_middleware,
@@ -1171,7 +1196,7 @@ async def _run_pending_factory_reset(config: Config, predecessor_pid: int = -1) 
     if request is None:
         return
     if not await _wait_for_exclusive_database(
-        config, predecessor_pid, ("factory reset",), label="factory reset"
+        config, predecessor_pid, ("factory reset",), label=ui_message("server.71718398e5")
     ):
         return
     log.warning(
@@ -2372,7 +2397,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     async def _assistant_note_list(project_id: str) -> list[dict[str, Any]]:
         project = projects.projects.get(project_id)
         if project is None:
-            raise ValueError("unknown project")
+            raise ValueError(ui_message("server.e222820974"))
         return await _assistant_note_summaries(project)
 
     async def _assistant_resolve_note(project: Any, note_reference: str | None) -> dict[str, Any]:
@@ -2398,7 +2423,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     ) -> dict[str, Any]:
         project = projects.projects.get(project_id)
         if project is None:
-            raise ValueError("unknown project")
+            raise ValueError(ui_message("server.e222820974"))
         resolved = await _assistant_resolve_note(project, note_reference)
         if resolved.get("error"):
             return resolved
@@ -2420,7 +2445,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         """
         project = projects.projects.get(project_id)
         if project is None:
-            raise ValueError("unknown project")
+            raise ValueError(ui_message("server.e222820974"))
         resolved = await _assistant_resolve_note(project, note_reference)
         if resolved.get("error"):
             return resolved
@@ -2543,7 +2568,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     def _assistant_action_project(project_id: str) -> ProjectRecord:
         project = projects.projects.get(project_id)
         if project is None:
-            raise ValueError("unknown project")
+            raise ValueError(ui_message("server.e222820974"))
         return project
 
     async def _assistant_action_catalog(project_id: str) -> dict[str, Any]:
@@ -2901,6 +2926,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         events,
         presence=device_presence,
         decision_store=telemetry,
+        language=lambda: config.ui_language,
     )
     background.start(PUSH_SENDER_LOOP, push_sender.run)
     # The one outbound request swe-mux makes on its own behalf, and the only

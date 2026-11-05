@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // What a truncated file search says about itself.
 //
 // A search stops for one of two unrelated reasons and the advice they deserve is opposite.
@@ -21,7 +22,7 @@ export type SearchTruncation = {
 /** The folder named in a file-limit notice, in words rather than as an empty string. */
 export function describeStopPoint(stoppedAt: string | null | undefined): string {
   const value = (stoppedAt ?? '').trim()
-  return value ? value : 'the Project root'
+  return value ? value : t("fileSearchLimit.273c5d2585")
 }
 
 /** The one line under a truncated result list, or `null` when there is nothing to say. */
@@ -35,12 +36,12 @@ export function searchTruncationNotice(
   // rather than going silent on the one build where a notice is all the reader gets.
   const reason = payload.truncated_reason ?? 'results'
   if (reason === 'results') {
-    return `Showing the first ${matchCount} matches; refine to narrow.`
+    return t("fileSearchLimit.f9ea06e914", { value1: matchCount })
   }
   if (reason === 'files') {
     return (
-      `Stopped at the file limit inside ${describeStopPoint(payload?.stopped_at)}; ` +
-      'deeper folders were not searched. Add an ignore pattern to narrow the tree.'
+      t("fileSearchLimit.ca4dd3a5c9", { value1: describeStopPoint(payload?.stopped_at) }) +
+      t("fileSearchLimit.fb7add7adb")
     )
   }
   return null

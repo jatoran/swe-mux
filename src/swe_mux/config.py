@@ -25,6 +25,7 @@ from .llm_endpoint import LLM_PROVIDERS, base_url_error
 from .llm_endpoint import catalog_url_error as llm_catalog_url_error
 from .llm_endpoint import model_error as llm_model_error
 from .prerequisites import PREREQUISITE_IDS
+from .ui_messages import ui_message
 
 
 def default_data_dir() -> Path:
@@ -582,7 +583,7 @@ BUDGET_SPECS: tuple[BudgetSpec, ...] = (
         max_usd=10_000.0,
         legacy_tokens="automation_daily_token_budget",
         legacy_usd="automation_daily_budget_usd",
-        label="All automation",
+        label=ui_message("config.2cad3fd77f"),
     ),
     BudgetSpec(
         field="automation_rule_daily_budget",
@@ -591,7 +592,7 @@ BUDGET_SPECS: tuple[BudgetSpec, ...] = (
         max_usd=10_000.0,
         legacy_tokens="automation_rule_daily_token_budget",
         legacy_usd="automation_rule_daily_budget_usd",
-        label="Per automation rule",
+        label=ui_message("config.e12a264df3"),
     ),
     BudgetSpec(
         field="assistant_daily_budget",
@@ -599,7 +600,7 @@ BUDGET_SPECS: tuple[BudgetSpec, ...] = (
         max_tokens=100_000_000,
         max_usd=1_000.0,
         legacy_usd="assistant_daily_budget_usd",
-        label="Assistant, daily",
+        label=ui_message("config.9f65f59e1c"),
     ),
     BudgetSpec(
         field="tts_daily_budget",
@@ -607,7 +608,7 @@ BUDGET_SPECS: tuple[BudgetSpec, ...] = (
         max_tokens=100_000_000,
         max_usd=100.0,
         legacy_usd="tts_daily_budget_usd",
-        label="Read-aloud summaries, daily",
+        label=ui_message("config.af92137de8"),
     ),
     BudgetSpec(
         field="project_card_daily_budget",
@@ -615,7 +616,7 @@ BUDGET_SPECS: tuple[BudgetSpec, ...] = (
         max_tokens=100_000_000,
         max_usd=100.0,
         legacy_usd="project_card_daily_budget_usd",
-        label="Project context card, daily",
+        label=ui_message("config.954155cbb6"),
     ),
 )
 
@@ -936,6 +937,8 @@ class Config:
     # The browser picks one by the same `(max-width:760px)` breakpoint the
     # workspace uses, so a desktop window dragged narrow switches with it.
     # Both default to 1.0: installing this build changes nothing on screen.
+    # Empty follows the client language until the operator makes an explicit choice.
+    ui_language: str = ""
     ui_scale_desktop: float = 1.0
     ui_scale_mobile: float = 1.0
     # How tightly the terminal's Action rail packs, split per device class for the
@@ -1780,9 +1783,7 @@ def agent_message_bounds(config: Config) -> AgentMessageBounds:
             max_chain_depth=int(config.agent_message_max_chain_depth),
             max_thread_turns=int(config.agent_message_max_thread_turns),
             interject_hourly_budget=int(config.agent_interject_hourly_budget),
-            interject_min_interval_seconds=float(
-                config.agent_interject_min_interval_seconds
-            ),
+            interject_min_interval_seconds=float(config.agent_interject_min_interval_seconds),
         )
     return AgentMessageBounds(
         limits_enabled=False,
@@ -1804,36 +1805,34 @@ def _validate_project_init_scripts(config: Config, errors: dict[str, str]) -> No
     """
     scripts = config.project_init_scripts
     if not isinstance(scripts, list) or len(scripts) > MAX_PROJECT_INIT_SCRIPTS:
-        errors["project_init_scripts"] = (
-            f"must be an array of at most {MAX_PROJECT_INIT_SCRIPTS} init scripts"
+        errors["project_init_scripts"] = ui_message(
+            "config.37327de1b7", value1=MAX_PROJECT_INIT_SCRIPTS
         )
         return
     seen: set[str] = set()
     for index, script in enumerate(scripts):
         prefix = f"project_init_scripts.{index}"
         if not isinstance(script, dict):
-            errors[prefix] = "must be an object with id, label, and command"
+            errors[prefix] = ui_message("config.1023032a88")
             continue
         unknown = set(script) - {"id", "label", "command", "default_enabled"}
         if unknown:
-            errors[prefix] = f"unknown keys: {', '.join(sorted(unknown))}"
+            errors[prefix] = ui_message("config.e22d8660cf", value1=", ".join(sorted(unknown)))
         identifier = script.get("id")
         if not isinstance(identifier, str) or not INIT_SCRIPT_ID.fullmatch(identifier):
-            errors[f"{prefix}.id"] = (
-                "must be 1–64 characters of letters, digits, hyphen, or underscore"
-            )
+            errors[f"{prefix}.id"] = ui_message("config.938c7499b5")
         elif identifier in seen:
-            errors[f"{prefix}.id"] = f"duplicate init script id {identifier}"
+            errors[f"{prefix}.id"] = ui_message("config.24c532f457", value1=identifier)
         else:
             seen.add(identifier)
         label = script.get("label")
         if not isinstance(label, str) or not label.strip() or len(label) > 80:
-            errors[f"{prefix}.label"] = "must be a non-empty name of 80 characters or fewer"
+            errors[f"{prefix}.label"] = ui_message("config.02803aa46e")
         command = script.get("command")
         if not isinstance(command, str) or not command.strip() or len(command) > 4000:
-            errors[f"{prefix}.command"] = "must be a non-empty command of 4000 characters or fewer"
+            errors[f"{prefix}.command"] = ui_message("config.bb22aa0e4b")
         if not isinstance(script.get("default_enabled", False), bool):
-            errors[f"{prefix}.default_enabled"] = "must be a boolean"
+            errors[f"{prefix}.default_enabled"] = ui_message("config.37643a8ef6")
 
 
 # ---------------------------------------------------------------------------- #
@@ -1900,141 +1899,142 @@ class _Pattern:
 
 
 _RANGE_RULES: tuple[_Range, ...] = (
-    _Range("port", 1, 65535, "must be between 1 and 65535"),
+    _Range("port", 1, 65535, ui_message("config.d4e1d5d4e7")),
     _Range(
         "terminal_gateway_port",
         1,
         65535,
-        "must be 0 (the daemon's port plus one) or between 1 and 65535",
+        ui_message("config.9f1142f2cc"),
         zero_disables=True,
     ),
     _Range(
         "note_font_size_px",
         8,
         48,
-        "must be 0 (editor default) or between 8 and 48",
+        ui_message("config.306cf9fddf"),
         zero_disables=True,
     ),
     _Range(
         "note_line_height",
         1.0,
         3.0,
-        "must be 0 (editor default) or between 1.0 and 3.0",
+        ui_message("config.9714e164fc"),
         zero_disables=True,
     ),
     _Range(
         "note_rail_button_size_px",
         32,
         96,
-        "must be 0 (editor default) or between 32 and 96",
+        ui_message("config.9d00901ce8"),
         zero_disables=True,
     ),
-    _Range("mobile_scroll_sensitivity", 0.25, 4, "must be between 0.25 and 4"),
-    _Range("ccusage_refresh_minutes", 0, 24 * 60, "must be between 0 and 1440 minutes"),
-    _Range("scrollback_bytes", 1024, 1024 * 1024 * 1024, "must be between 1 KiB and 1 GiB"),
-    _Range("attach_replay_bytes", 1024, 1024 * 1024 * 1024, "must be between 1 KiB and 1 GiB"),
+    _Range("mobile_scroll_sensitivity", 0.25, 4, ui_message("config.7c36bc797c")),
+    _Range("ccusage_refresh_minutes", 0, 24 * 60, ui_message("config.3442cb21b3")),
+    _Range("scrollback_bytes", 1024, 1024 * 1024 * 1024, ui_message("config.aa8e204c7e")),
+    _Range("attach_replay_bytes", 1024, 1024 * 1024 * 1024, ui_message("config.aa8e204c7e")),
     _Range(
         "session_recovery_checkpoint_bytes",
         0,
         64 * 1024 * 1024,
-        "must be between 0 and 64 MiB",
+        ui_message("config.328635a7f5"),
     ),
-    _Range("session_recovery_retention_days", 0, 365, "must be between 0 and 365 days"),
-    _Range("session_recovery_max_sessions", 0, 1000, "must be between 0 and 1000 sessions"),
-    _Range("git_poll_seconds", 0.25, 3600, "must be between 0.25 and 3600 seconds"),
-    _Range("process_poll_seconds", 0.5, 60, "must be between 0.5 and 60 seconds"),
-    _Range("process_orphan_grace_seconds", 1, 3600, "must be between 1 and 3600 seconds"),
+    _Range("session_recovery_retention_days", 0, 365, ui_message("config.ffa11e76a4")),
+    _Range("session_recovery_max_sessions", 0, 1000, ui_message("config.014af8e3da")),
+    _Range("git_poll_seconds", 0.25, 3600, ui_message("config.6d3d2803d4")),
+    _Range("process_poll_seconds", 0.5, 60, ui_message("config.a180729a98")),
+    _Range("process_orphan_grace_seconds", 1, 3600, ui_message("config.b1768da152")),
     # 1 ms is the measured floor: 0.5 ms was worse on every latency at 36 sessions,
     # and below the process's 1 ms timer period a shorter wait is not a finer one.
-    _Range("gil_switch_interval_ms", 1, 20, "must be between 1 and 20 milliseconds"),
-    _Range("ghost_window_poll_seconds", 0.5, 60, "must be between 0.5 and 60 seconds"),
-    _Range("process_evidence_retention_days", 1, 3650, "must be between 1 and 3650"),
-    _Range("operational_telemetry_retention_days", 1, 3650, "must be between 1 and 3650"),
-    _Range("status_timeline_retention_days", 1, 3650, "must be between 1 and 3650"),
-    _Range("provider_quota_poll_minutes", 5, 1440, "must be between 5 and 1440"),
-    _Range("provider_quota_turn_refresh_min_minutes", 1, 1440, "must be between 1 and 1440"),
-    _Range("history_limit", 1, 10000, "must be between 1 and 10000"),
-    _Range("clipboard_history_limit", 1, 2000, "must be between 1 and 2000 entries"),
+    _Range("gil_switch_interval_ms", 1, 20, ui_message("config.672047027b")),
+    _Range("ghost_window_poll_seconds", 0.5, 60, ui_message("config.a180729a98")),
+    _Range("process_evidence_retention_days", 1, 3650, ui_message("config.992e68c55f")),
+    _Range("operational_telemetry_retention_days", 1, 3650, ui_message("config.992e68c55f")),
+    _Range("status_timeline_retention_days", 1, 3650, ui_message("config.992e68c55f")),
+    _Range("provider_quota_poll_minutes", 5, 1440, ui_message("config.ac65decaf4")),
+    _Range("provider_quota_turn_refresh_min_minutes", 1, 1440, ui_message("config.9f8dff308d")),
+    _Range("history_limit", 1, 10000, ui_message("config.9f89607518")),
+    _Range("clipboard_history_limit", 1, 2000, ui_message("config.ae0a7f76ae")),
     _Range(
         "clipboard_history_entry_max_chars",
         256,
         1000000,
-        "must be between 256 and 1000000 characters",
+        ui_message("config.9f888ba83d"),
     ),
     _Range(
         "clipboard_history_retention_hours",
         0,
         8760,
-        "must be between 0 (keep until evicted) and 8760 hours",
+        ui_message("config.61ddad0431"),
     ),
-    _Range("automation_retention_days", 1, 3650, "must be between 1 and 3650"),
-    _Range("prompt_queue_retention_days", 1, 3650, "must be between 1 and 3650"),
+    _Range("automation_retention_days", 1, 3650, ui_message("config.992e68c55f")),
+    _Range("prompt_queue_retention_days", 1, 3650, ui_message("config.992e68c55f")),
     # Auto-delivery bounds. The lower bounds are the point: a zero-length
     # stability window or an unbounded grant would defeat the gate they exist
     # to be (`ROADMAP.md` Phase 5).
-    _Range("auto_delivery_stable_seconds", 2, 600, "must be between 2 and 600 seconds"),
-    _Range("auto_delivery_max_consecutive", 1, 50, "must be between 1 and 50 sends"),
-    _Range("auto_delivery_session_ttl_minutes", 1, 1440, "must be between 1 and 1440 minutes"),
-    _Range("auto_delivery_refusal_backoff_seconds", 0, 3600, "must be between 0 and 3600 seconds"),
+    _Range("auto_delivery_stable_seconds", 2, 600, ui_message("config.c631f596b5")),
+    _Range("auto_delivery_max_consecutive", 1, 50, ui_message("config.45fcd33664")),
+    _Range("auto_delivery_session_ttl_minutes", 1, 1440, ui_message("config.a1af5dec02")),
+    _Range("auto_delivery_refusal_backoff_seconds", 0, 3600, ui_message("config.2b3c64e12a")),
     # 0 is legal here and nowhere else in this group: the reply window is the one
     # bound that only ever *holds off* another bound, so switching it off is a
     # narrowing rather than the unbounded grant the others must refuse.
-    _Range("auto_delivery_reply_window_minutes", 0, 1440, "must be between 0 and 1440 minutes"),
+    _Range("auto_delivery_reply_window_minutes", 0, 1440, ui_message("config.3442cb21b3")),
     # Approval bounds. Every lower bound here is the point: an unbounded grant or
     # an unbounded answer count is standing authority, which is the one thing
     # this feature must not become.
-    _Range("approval_grant_ttl_minutes", 1, 480, "must be between 1 and 480 minutes"),
-    _Range("approval_max_auto_per_grant", 1, 5000, "must be between 1 and 5000 requests"),
-    _Range("approval_hook_timeout_seconds", 1, 60, "must be between 1 and 60 seconds"),
-    _Range("approval_keystroke_window_seconds", 1, 300, "must be between 1 and 300 seconds"),
-    _Range("agent_message_max_chars", 1, 100000, "must be between 1 and 100000 characters"),
-    _Range("agent_message_hourly_budget", 0, 1000, "must be between 0 and 1000 messages per hour"),
-    _Range("agent_message_pending_per_target", 1, 100, "must be between 1 and 100 messages"),
-    _Range("agent_message_max_chain_depth", 1, 10, "must be between 1 and 10 hops"),
-    _Range("agent_message_max_thread_turns", 1, 100, "must be between 1 and 100 messages"),
+    _Range("approval_grant_ttl_minutes", 1, 480, ui_message("config.3ae927aee9")),
+    _Range("approval_max_auto_per_grant", 1, 5000, ui_message("config.d4a24e91d2")),
+    _Range("approval_hook_timeout_seconds", 1, 60, ui_message("config.cd6eba7b24")),
+    _Range("approval_keystroke_window_seconds", 1, 300, ui_message("config.0b9a023898")),
+    _Range("agent_message_max_chars", 1, 100000, ui_message("config.13ad5047cd")),
+    _Range("agent_message_hourly_budget", 0, 1000, ui_message("config.b4ec5247b0")),
+    _Range("agent_message_pending_per_target", 1, 100, ui_message("config.f2acd5c0a0")),
+    _Range("agent_message_max_chain_depth", 1, 10, ui_message("config.24c2a24fb9")),
+    _Range("agent_message_max_thread_turns", 1, 100, ui_message("config.f2acd5c0a0")),
     _Range(
         "agent_interject_hourly_budget",
         0,
         1000,
-        "must be between 0 and 1000 mid-turn deliveries per hour",
+        ui_message("config.503b40ee6a"),
     ),
-    _Range("agent_interject_min_interval_seconds", 0, 3600, "must be between 0 and 3600 seconds"),
-    _Range("session_control_hourly_budget", 0, 1000, "must be between 0 and 1000 actions per hour"),
-    _Range("session_control_graceful_timeout_s", 1, 120, "must be between 1 and 120 seconds"),
-    _Range("agent_spawn_hourly_budget", 0, 1000, "must be between 0 and 1000 spawns per hour"),
-    _Range("session_watch_max_per_session", 1, 100, "must be between 1 and 100 watches"),
-    _Range("session_watch_max_minutes", 1, 24 * 60, "must be between 1 minute and 24 hours"),
-    _Range("scheduled_runs_max_concurrent", 0, 50, "must be between 0 and 50 sessions"),
-    _Range("land_hourly_budget", 0, 1000, "must be between 0 and 1000 land requests per hour"),
-    _Range("land_hold_timeout_seconds", 60, 24 * 3600, "must be between 60 seconds and 24 hours"),
-    _Range("land_verify_memo_seconds", 0, 7 * 24 * 3600, "must be between 0 (no reuse) and 7 days"),
-    _Range("scheduled_runs_poll_seconds", 1, 300, "must be between 1 and 300 seconds"),
-    _Range("scheduled_run_retention_days", 1, 3650, "must be between 1 and 3650 days"),
-    _Range("automation_concurrency", 1, 16, "must be between 1 and 16"),
-    _Range("automation_queue_size", 16, 4096, "must be between 16 and 4096"),
-    _Range("automation_max_input_tokens", 128, 128000, "must be between 128 and 128000"),
-    _Range("automation_max_output_tokens", 16, 8192, "must be between 16 and 8192"),
-    _Range("automation_hourly_call_cap", 1, 10000, "must be between 1 and 10000"),
-    _Range("automation_rule_hourly_call_cap", 1, 10000, "must be between 1 and 10000"),
-    _Range("project_card_max_input_tokens", 512, 128000, "must be between 512 and 128000"),
-    _Range("project_card_max_output_tokens", 128, 4096, "must be between 128 and 4096"),
-    _Range("attention_daily_interrupt_budget", 0, 100, "must be between 0 and 100"),
-    _Range("attention_hourly_interrupt_cap", 0, 100, "must be between 0 and 100"),
-    _Range("attention_incident_window_seconds", 60, 86400, "must be between 60 and 86400"),
-    _Range("openrouter_request_timeout_seconds", 1, 120, "must be between 1 and 120"),
-    _Range("assistant_max_output_tokens", 128, 8192, "must be between 128 and 8192"),
-    _Range("assistant_context_messages", 2, 200, "must be between 2 and 200"),
-    _Range("tts_kokoro_speed", 0.5, 2.0, "must be between 0.5 and 2.0"),
-    _Range("tts_sapi_rate", -10, 10, "must be between -10 and 10"),
-    _Range("tts_edge_rate_percent", -100, 100, "must be between -100 and 100"),
-    _Range("tts_edge_volume_percent", -100, 100, "must be between -100 and 100"),
-    _Range("tts_edge_pitch_hz", -100, 100, "must be between -100 and 100"),
-    _Range("tts_edge_risk_ack_version", 0, 1, "must be 0 or 1"),
-    _Range("tts_summary_max_tokens", 64, 2000, "must be between 64 and 2000"),
-    _Range("tts_verbatim_max_chars", 200, 40000, "must be between 200 and 40000"),
-    _Range("tts_cache_mb", 10, 5000, "must be between 10 and 5000"),
-    _Range("voice_chat_patience_ms", 0, 5000, "must be between 0 and 5000 milliseconds"),
+    _Range("agent_interject_min_interval_seconds", 0, 3600, ui_message("config.2b3c64e12a")),
+    _Range("session_control_hourly_budget", 0, 1000, ui_message("config.70f1125b69")),
+    _Range("session_control_graceful_timeout_s", 1, 120, ui_message("config.32d2e83181")),
+    _Range("agent_spawn_hourly_budget", 0, 1000, ui_message("config.540f08ddd2")),
+    _Range("session_watch_max_per_session", 1, 100, ui_message("config.b8557c69da")),
+    _Range("session_watch_max_minutes", 1, 24 * 60, ui_message("config.358c2fecec")),
+    _Range("scheduled_runs_max_concurrent", 0, 50, ui_message("config.d4c16255b3")),
+    _Range("land_hourly_budget", 0, 1000, ui_message("config.d5fc6fc788")),
+    _Range("land_hold_timeout_seconds", 60, 24 * 3600, ui_message("config.0fc2cd551a")),
+    _Range("land_verify_memo_seconds", 0, 7 * 24 * 3600, ui_message("config.ff84216d31")),
+    _Range("scheduled_runs_poll_seconds", 1, 300, ui_message("config.0b9a023898")),
+    _Range("scheduled_run_retention_days", 1, 3650, ui_message("config.fcb95e4671")),
+    _Range("automation_concurrency", 1, 16, ui_message("config.eb01fdb623")),
+    _Range("automation_queue_size", 16, 4096, ui_message("config.06a50be80c")),
+    _Range("automation_max_input_tokens", 128, 128000, ui_message("config.58c82bd901")),
+    _Range("automation_max_output_tokens", 16, 8192, ui_message("config.ae9e2eafe5")),
+    _Range("automation_hourly_call_cap", 1, 10000, ui_message("config.9f89607518")),
+    _Range("automation_rule_hourly_call_cap", 1, 10000, ui_message("config.9f89607518")),
+    _Range("project_card_max_input_tokens", 512, 128000, ui_message("config.bb8294fd53")),
+    _Range("project_card_max_output_tokens", 128, 4096, ui_message("config.a5c74cc5da")),
+    _Range("attention_daily_interrupt_budget", 0, 100, ui_message("config.0b48f96372")),
+    _Range("attention_hourly_interrupt_cap", 0, 100, ui_message("config.0b48f96372")),
+    _Range("attention_incident_window_seconds", 60, 86400, ui_message("config.ce47924dab")),
+    _Range("openrouter_request_timeout_seconds", 1, 120, ui_message("config.869c3ca924")),
+    _Range("assistant_max_output_tokens", 128, 8192, ui_message("config.0f9771e9b1")),
+    _Range("assistant_context_messages", 2, 200, ui_message("config.4092f48268")),
+    _Range("tts_kokoro_speed", 0.5, 2.0, ui_message("config.e458374ad7")),
+    _Range("tts_sapi_rate", -10, 10, ui_message("config.5aa2c2572a")),
+    _Range("tts_edge_rate_percent", -100, 100, ui_message("config.c1446445d3")),
+    _Range("tts_edge_volume_percent", -100, 100, ui_message("config.c1446445d3")),
+    _Range("tts_edge_pitch_hz", -100, 100, ui_message("config.c1446445d3")),
+    _Range("tts_edge_risk_ack_version", 0, 1, ui_message("config.68e5189867")),
+    _Range("tts_summary_max_tokens", 64, 2000, ui_message("config.54853dee26")),
+    _Range("tts_verbatim_max_chars", 200, 40000, ui_message("config.ae1e1276d6")),
+    _Range("tts_cache_mb", 10, 5000, ui_message("config.3ef5af68fe")),
+    _Range("voice_chat_patience_ms", 0, 5000, ui_message("config.e63f2aafbf")),
 )
+
 
 def _keymap_preset_ids() -> tuple[str, ...]:
     """The shipped preset ids, read from the keymap package rather than listed.
@@ -2054,24 +2054,23 @@ _CHOICE_RULES: tuple[_Choice, ...] = (
     _Choice(
         "host",
         LOOPBACK_HOSTS,
-        "must be a loopback address (127.0.0.1, localhost, or ::1); "
-        "direct tailnet listening uses the detected Tailscale address automatically",
+        ui_message("config.378fd1f597"),
     ),
-    _Choice("terminal_renderer", ("auto", "dom", "webgl"), "must be auto, dom, or webgl"),
+    _Choice("terminal_renderer", ("auto", "dom", "webgl"), ui_message("config.cbcfe13b83")),
     _Choice(
         "session_process_priority",
         ("normal", "below_normal"),
-        "must be normal or below_normal",
+        ui_message("config.4bb542f537"),
     ),
     _Choice(
         "daemon_process_priority",
         ("normal", "above_normal"),
-        "must be normal or above_normal",
+        ui_message("config.3a9b52348a"),
     ),
     _Choice(
         "experience_tier",
         ("", "terminal", "deterministic", "automations"),
-        "must be terminal, deterministic, automations, or empty (never chosen)",
+        ui_message("config.c9645939a0"),
     ),
     # The shipped preset ids plus "custom" (hand-edited) and "" (never chosen).
     # Read from the keymap package rather than transcribed, so adding a preset
@@ -2079,52 +2078,57 @@ _CHOICE_RULES: tuple[_Choice, ...] = (
     _Choice(
         "keymap_preset",
         ("", "custom", *_keymap_preset_ids()),
-        "must be a shipped keymap preset id, custom, or empty (never chosen)",
+        ui_message("config.fea6b781fc"),
     ),
-    _Choice("notes_default_open", ("dock", "popout"), "must be dock or popout"),
-    _Choice("note_syntax", ("markdown", "plain"), "must be markdown or plain"),
-    _Choice("note_tab_behavior", ("indent", "focus"), "must be indent or focus"),
+    _Choice("notes_default_open", ("dock", "popout"), ui_message("config.0987c344b3")),
+    _Choice("note_syntax", ("markdown", "plain"), ui_message("config.388eddb59a")),
+    _Choice("note_tab_behavior", ("indent", "focus"), ui_message("config.a74d276ff8")),
     _Choice(
         "note_shortcut_policy",
         ("browser-safe", "editor-first", "none"),
-        "must be browser-safe, editor-first, or none",
+        ui_message("config.9aef0ff33d"),
     ),
-    _Choice("note_command_rail", ("auto", "on", "off"), "must be auto, on, or off"),
+    _Choice("note_command_rail", ("auto", "on", "off"), ui_message("config.6f1dee4aab")),
     _Choice(
         "mobile_vertical_drag",
         ("smart", "terminal", "application", "disabled"),
-        "must be smart, terminal, application, or disabled",
+        ui_message("config.00d4f72e01"),
     ),
-    _Choice("mobile_scroll_direction", ("natural", "wheel"), "must be natural or wheel"),
-    _Choice("mobile_long_press", ("context_menu", "disabled"), "must be context_menu or disabled"),
+    _Choice("mobile_scroll_direction", ("natural", "wheel"), ui_message("config.edec74723b")),
+    _Choice("mobile_long_press", ("context_menu", "disabled"), ui_message("config.38217c2d72")),
     _Choice(
         "assistant_trust_reversible",
         ("auto", "cancel_window", "confirm"),
-        "must be auto, cancel_window, or confirm",
+        ui_message("config.e3cb8c9f4a"),
     ),
-    _Choice("tts_default_mode", ("off", "on_demand", "auto"), "must be off, on_demand, or auto"),
-    _Choice("tts_content", ("summary", "verbatim"), "must be summary or verbatim"),
+    _Choice("tts_default_mode", ("off", "on_demand", "auto"), ui_message("config.df9455259c")),
+    _Choice("tts_content", ("summary", "verbatim"), ui_message("config.85368f6993")),
     _Choice(
         "tts_engine",
         ("sapi", "kokoro", "edge"),
-        "must be sapi (the OS voice), kokoro, or edge",
+        ui_message("config.dce3efc5b8"),
     ),
-    _Choice("stt_engine", ("sapi", "whisper"), "must be sapi or whisper"),
-    _Choice("drawer_tab_display", ("icon", "title"), "must be icon or title"),
-    _Choice("utility_rail_display", ("icon", "title"), "must be icon or title"),
+    _Choice("stt_engine", ("sapi", "whisper"), ui_message("config.61e7b00c91")),
+    _Choice("drawer_tab_display", ("icon", "title"), ui_message("config.58c122b247")),
+    _Choice("utility_rail_display", ("icon", "title"), ui_message("config.58c122b247")),
     # These three build their message from the allowed set, exactly as the branches
     # they replace did, so a new theme or density is named by the error without an
     # edit here.
-    _Choice("theme", tuple(sorted(THEMES)), f"must be one of {', '.join(sorted(THEMES))}"),
+    _Choice("ui_language", ("", "en", "zh-Hans"), ui_message("config.61325e3ada")),
+    _Choice(
+        "theme",
+        tuple(sorted(THEMES)),
+        ui_message("config.3fe7eabe5b", value1=", ".join(sorted(THEMES))),
+    ),
     _Choice(
         "rail_density_desktop",
         tuple(RAIL_DENSITIES),
-        f"must be one of {', '.join(RAIL_DENSITIES)}",
+        ui_message("config.3fe7eabe5b", value1=", ".join(RAIL_DENSITIES)),
     ),
     _Choice(
         "rail_density_mobile",
         tuple(RAIL_DENSITIES),
-        f"must be one of {', '.join(RAIL_DENSITIES)}",
+        ui_message("config.3fe7eabe5b", value1=", ".join(RAIL_DENSITIES)),
     ),
 )
 
@@ -2135,30 +2139,30 @@ _CHOICE_RULES: tuple[_Choice, ...] = (
 _FONT_FAMILY_FORBIDDEN = re.compile(r"[;{}\x00-\x1f\x7f]")
 
 _TEXT_RULES: tuple[_Text, ...] = (
-    _Text("note_font_family", 200, "must be 200 characters or fewer"),
-    _Text("terminal_font_family", 200, "must be 200 characters or fewer"),
-    _Text("scan_timeline_model", 200, "must be an exact OpenRouter model id", required=True),
-    _Text("assistant_model", 200, "must be an exact OpenRouter model id", required=True),
+    _Text("note_font_family", 200, ui_message("config.63a438bde8")),
+    _Text("terminal_font_family", 200, ui_message("config.63a438bde8")),
+    _Text("scan_timeline_model", 200, ui_message("config.bb340e512c"), required=True),
+    _Text("assistant_model", 200, ui_message("config.bb340e512c"), required=True),
     _Text(
         "stt_whisper_model",
         120,
-        "must name a Whisper model in 120 characters or fewer",
+        ui_message("config.9d9d4c31b4"),
         required=True,
     ),
     _Text(
         "stt_routing_model",
         120,
-        "must name a Whisper model in 120 characters or fewer, or be blank",
+        ui_message("config.36170520da"),
     ),
     _Text(
         "tts_edge_python",
         1000,
-        "must name an external Python interpreter in 1000 characters or fewer, or be blank",
+        ui_message("config.e8a0b0ce21"),
     ),
     _Text(
         "tts_edge_voice",
         160,
-        "must name an Edge voice in 160 characters or fewer",
+        ui_message("config.546d2d0c22"),
         required=True,
     ),
 )
@@ -2167,12 +2171,12 @@ _PATTERN_RULES: tuple[_Pattern, ...] = (
     _Pattern(
         "tts_kokoro_voice",
         re.compile(r"[a-z]{2}_[a-z]+"),
-        "must be a Kokoro voice id such as af_heart",
+        ui_message("config.2d978736b1"),
     ),
     _Pattern(
         "stt_language",
         re.compile(r"[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})?"),
-        "must be a language tag such as en-US",
+        ui_message("config.91cc691914"),
     ),
 )
 
@@ -2220,16 +2224,21 @@ def _automation_policy_errors(config: Config) -> dict[str, str]:
     if not isinstance(allow_map, dict) or any(
         not isinstance(name, str) or not isinstance(flag, bool) for name, flag in allow_map.items()
     ):
-        errors["automation_global_allow"] = "must map automation ids to booleans"
+        errors["automation_global_allow"] = ui_message("config.5a44be524f")
     elif unknown_ids := set(allow_map) - set(_registry.REGISTRY):
-        errors["automation_global_allow"] = "unknown automations: " + ", ".join(
-            sorted(unknown_ids)
+        errors["automation_global_allow"] = ui_message(
+            "config.5694e8396c", value1=", ".join(sorted(unknown_ids))
         )
     elif switched := set(allow_map) & set(_registry.DEDICATED_INSTALL_SWITCHES):
         # One switch, one key: these ids are governed by their dedicated install
         # switches, and a second entry here would be a second owner.
-        errors["automation_global_allow"] = "governed by dedicated switches: " + ", ".join(
-            sorted(f"{name} ({_registry.DEDICATED_INSTALL_SWITCHES[name]})" for name in switched)
+        errors["automation_global_allow"] = ui_message(
+            "config.65b8f80610",
+            value1=", ".join(
+                sorted(
+                    f"{name} ({_registry.DEDICATED_INSTALL_SWITCHES[name]})" for name in switched
+                )
+            ),
         )
 
     defaults_map = config.automation_project_defaults
@@ -2237,14 +2246,14 @@ def _automation_policy_errors(config: Config) -> dict[str, str]:
         not isinstance(name, str) or not isinstance(flag, bool)
         for name, flag in defaults_map.items()
     ):
-        errors["automation_project_defaults"] = "must map automation ids to booleans"
+        errors["automation_project_defaults"] = ui_message("config.5a44be524f")
         return errors
     # The dedicated-switch ids are deliberately allowed here, unlike in the
     # ceiling above: the switch is that automation's ceiling, and "what does an
     # undecided Project do" is a different question it does not answer.
     if unknown_defaults := set(defaults_map) - set(_registry.REGISTRY):
-        errors["automation_project_defaults"] = "unknown automations: " + ", ".join(
-            sorted(unknown_defaults)
+        errors["automation_project_defaults"] = ui_message(
+            "config.5694e8396c", value1=", ".join(sorted(unknown_defaults))
         )
     elif unimplemented := {
         name
@@ -2254,8 +2263,8 @@ def _automation_policy_errors(config: Config) -> dict[str, str]:
         # The same refusal the Project write and the grant path make, for the same
         # reason: a template entry that reads as on and does nothing is worse than
         # one that would not go on.
-        errors["automation_project_defaults"] = "not implemented yet: " + ", ".join(
-            sorted(unimplemented)
+        errors["automation_project_defaults"] = ui_message(
+            "config.fde754c436", value1=", ".join(sorted(unimplemented))
         )
     refinements = config.title_refinements_default
     if (
@@ -2263,8 +2272,8 @@ def _automation_policy_errors(config: Config) -> dict[str, str]:
         or not isinstance(refinements, int)
         or not 0 <= refinements <= _registry.TITLE_REFINEMENTS_MAX
     ):
-        errors["title_refinements_default"] = (
-            f"must be an integer from 0 to {_registry.TITLE_REFINEMENTS_MAX}"
+        errors["title_refinements_default"] = ui_message(
+            "config.971bc66156", value1=_registry.TITLE_REFINEMENTS_MAX
         )
     return errors
 
@@ -2281,7 +2290,7 @@ def _validate_terminal_gateway_port(config: Config, errors: dict[str, str]) -> N
     if "terminal_gateway_port" in errors or "port" in errors:
         return
     if config.terminal_gateway_listen_port() == config.port:
-        errors["terminal_gateway_port"] = "must differ from the daemon's port"
+        errors["terminal_gateway_port"] = ui_message("config.e6ed18e9ee")
 
 
 def _validate(config: Config) -> None:
@@ -2321,17 +2330,15 @@ def _validate(config: Config) -> None:
     # blank is the default and any name is the browser's to resolve. Only what cannot
     # be part of a name is refused.
     if _FONT_FAMILY_FORBIDDEN.search(config.terminal_font_family):
-        errors["terminal_font_family"] = (
-            "must not contain semicolons, braces, or control characters"
-        )
+        errors["terminal_font_family"] = ui_message("config.d8f5d628ea")
     _validate_terminal_gateway_port(config, errors)
     if config.default_backend != "shell" and not is_agent_harness(config.default_backend):
-        errors["default_backend"] = "must be shell or a registered agent"
+        errors["default_backend"] = ui_message("config.6d7053df7b")
     if config.default_harness and not is_agent_harness(config.default_harness):
         # No `shell` escape hatch here, unlike `default_backend`: this field
         # exists precisely to answer "which agent", and accepting `shell` would
         # let it be set to a value that can never satisfy the callers that read it.
-        errors["default_harness"] = "must be empty or a registered agent"
+        errors["default_harness"] = ui_message("config.63972af5f3")
     # `bool` is an `int` subclass and `True` would otherwise validate as a 1-column cap.
     if (
         not isinstance(config.claude_max_columns, int)
@@ -2339,13 +2346,13 @@ def _validate(config: Config) -> None:
         or config.claude_max_columns not in CLAUDE_MAX_COLUMNS
     ):
         allowed = ", ".join(str(step) for step in sorted(CLAUDE_MAX_COLUMNS))
-        errors["claude_max_columns"] = f"must be one of {allowed} (0 removes the cap)"
+        errors["claude_max_columns"] = ui_message("config.dd8d639327", value1=allowed)
     if str(config.log_level).strip().upper() not in {"DEBUG", "INFO", "WARNING", "ERROR"}:
-        errors["log_level"] = "must be DEBUG, INFO, WARNING, or ERROR"
+        errors["log_level"] = ui_message("config.76128cd1fc")
     if not isinstance(config.note_shortcut_overrides, dict):
-        errors["note_shortcut_overrides"] = "must be a mapping of chord to command"
+        errors["note_shortcut_overrides"] = ui_message("config.f74082a56f")
     elif len(config.note_shortcut_overrides) > 128:
-        errors["note_shortcut_overrides"] = "must hold at most 128 chords"
+        errors["note_shortcut_overrides"] = ui_message("config.81c45283c4")
     else:
         bad_chords = sorted(
             str(chord)
@@ -2357,16 +2364,17 @@ def _validate(config: Config) -> None:
             or (command != "" and not NOTE_SHORTCUT_COMMAND.match(command))
         )
         if bad_chords:
-            errors["note_shortcut_overrides"] = (
-                'each entry must map a normalized chord to a command id or "" '
-                "(release); invalid: " + ", ".join(bad_chords)
+            errors["note_shortcut_overrides"] = ui_message(
+                "config.1f7a143e62", value1=", ".join(bad_chords)
             )
     if not isinstance(config.mobile_gestures, dict):
-        errors["mobile_gestures"] = "must be a mapping of gesture slots to command ids"
+        errors["mobile_gestures"] = ui_message("config.c169d94c5e")
     else:
         unknown_slots = set(config.mobile_gestures) - set(MOBILE_GESTURE_SLOTS)
         if unknown_slots:
-            errors["mobile_gestures"] = "unknown gesture slots: " + ", ".join(sorted(unknown_slots))
+            errors["mobile_gestures"] = ui_message(
+                "config.542c9e6ff4", value1=", ".join(sorted(unknown_slots))
+            )
         else:
             bad = sorted(
                 slot
@@ -2374,13 +2382,13 @@ def _validate(config: Config) -> None:
                 if command != "" and not is_command(command)
             )
             if bad:
-                errors["mobile_gestures"] = "unknown command for gestures: " + ", ".join(bad)
+                errors["mobile_gestures"] = ui_message("config.58dd221c9a", value1=", ".join(bad))
     if (
         not isinstance(config.usage_command, list)
         or not config.usage_command
         or not all(isinstance(item, str) and item for item in config.usage_command)
     ):
-        errors["usage_command"] = "must be a non-empty array of strings"
+        errors["usage_command"] = ui_message("config.acb64f6129")
     for field_name in ("harness_args", "usage_commands"):
         value = getattr(config, field_name)
         if not isinstance(value, dict) or any(
@@ -2399,7 +2407,7 @@ def _validate(config: Config) -> None:
         not isinstance(name, str) or not isinstance(executable, str) or not executable.strip()
         for name, executable in config.harness_exe.items()
     ):
-        errors["harness_exe"] = "must map harness names to non-empty executable strings"
+        errors["harness_exe"] = ui_message("config.5109f95a4a")
     for bool_map in (
         "harness_enabled",
         "harness_mcp_enabled",
@@ -2411,14 +2419,14 @@ def _validate(config: Config) -> None:
         if not isinstance(value, dict) or any(
             not isinstance(name, str) or not isinstance(flag, bool) for name, flag in value.items()
         ):
-            errors[bool_map] = "must map harness names to booleans"
+            errors[bool_map] = ui_message("config.c824bdc157")
     # Assigned from a helper rather than branched on inline: `_validate` is the
     # function the C901 cap of 88 is *set* to, so a new `if`/`elif` pair here does
     # not fit and must not be made to fit by raising the cap.
     errors.update(_tool_path_errors(config))
     quests = config.quests_dismissed
     if not isinstance(quests, list) or any(entry not in QUEST_IDS for entry in quests):
-        errors["quests_dismissed"] = "entries must be quest ids: " + ", ".join(QUEST_IDS)
+        errors["quests_dismissed"] = ui_message("config.b2f435a330", value1=", ".join(QUEST_IDS))
     for field_name in (
         "harness_exe",
         "harness_args",
@@ -2432,7 +2440,9 @@ def _validate(config: Config) -> None:
         if isinstance(value, dict):
             unknown = set(value) - set(HARNESSES)
             if unknown:
-                errors[field_name] = "unknown harnesses: " + ", ".join(sorted(unknown))
+                errors[field_name] = ui_message(
+                    "config.0b634d854b", value1=", ".join(sorted(unknown))
+                )
     errors.update(_automation_policy_errors(config))
     from .agent_authority import AUTHORITY_FIELDS as _authority_fields
 
@@ -2442,11 +2452,11 @@ def _validate(config: Config) -> None:
             not isinstance(name, str) or not isinstance(level, str)
             for name, level in authority_map.items()
         ):
-            errors[map_name] = "must map agent authority fields to levels"
+            errors[map_name] = ui_message("config.bbafa5bd6d")
             continue
         unknown_fields = sorted(set(authority_map) - set(_authority_fields))
         if unknown_fields:
-            errors[map_name] = "unknown authority fields: " + ", ".join(unknown_fields)
+            errors[map_name] = ui_message("config.60062deda3", value1=", ".join(unknown_fields))
             continue
         bad_levels = sorted(
             f"{name} ({level})"
@@ -2454,11 +2464,11 @@ def _validate(config: Config) -> None:
             if _authority_fields[name].rank(level) < 0
         )
         if bad_levels:
-            errors[map_name] = "invalid levels: " + ", ".join(bad_levels)
+            errors[map_name] = ui_message("config.864f0dd0eb", value1=", ".join(bad_levels))
     if not isinstance(config.project_ignore_patterns, list) or not all(
         isinstance(item, str) for item in config.project_ignore_patterns
     ):
-        errors["project_ignore_patterns"] = "must be an array of strings"
+        errors["project_ignore_patterns"] = ui_message("config.2a2e757b38")
     if isinstance(config.project_ignore_patterns, list) and (
         len(config.project_ignore_patterns) > PROJECT_IGNORE_PATTERN_LIMIT
         or any(
@@ -2466,25 +2476,23 @@ def _validate(config: Config) -> None:
             for pattern in config.project_ignore_patterns
         )
     ):
-        errors["project_ignore_patterns"] = (
-            "must contain at most 256 non-empty patterns of 200 characters or fewer"
-        )
+        errors["project_ignore_patterns"] = ui_message("config.53c3af036d")
     if config.ccusage_enabled and not config.usage_command:
-        errors["usage_command"] = "must not be empty while usage analytics is enabled"
+        errors["usage_command"] = ui_message("config.3da6e858ec")
     if not isinstance(config.worktree_root, str):
-        errors["worktree_root"] = "must be an absolute directory path or empty"
+        errors["worktree_root"] = ui_message("config.408ddfb68a")
     elif config.worktree_root.strip():
         worktree_root = Path(config.worktree_root.strip()).expanduser()
         if not worktree_root.is_absolute():
-            errors["worktree_root"] = "must be an absolute directory path or empty"
+            errors["worktree_root"] = ui_message("config.408ddfb68a")
         elif worktree_root.parent == worktree_root:
-            errors["worktree_root"] = "must not be a filesystem root"
+            errors["worktree_root"] = ui_message("config.99b212a7c1")
     if not isinstance(config.git_swe_mux_prompt_enabled, bool):
-        errors["git_swe_mux_prompt_enabled"] = "must be true or false"
+        errors["git_swe_mux_prompt_enabled"] = ui_message("config.70e5eed812")
     decisions = config.git_swe_mux_prompt_decisions
     if not isinstance(decisions, dict) or len(decisions) > GIT_SWE_MUX_PROMPT_DECISION_LIMIT:
-        errors["git_swe_mux_prompt_decisions"] = (
-            f"must map at most {GIT_SWE_MUX_PROMPT_DECISION_LIMIT} Project ids to decisions"
+        errors["git_swe_mux_prompt_decisions"] = ui_message(
+            "config.1cd8cb1f66", value1=GIT_SWE_MUX_PROMPT_DECISION_LIMIT
         )
     elif any(
         not isinstance(project_id, str)
@@ -2493,23 +2501,21 @@ def _validate(config: Config) -> None:
         or decision not in GIT_SWE_MUX_PROMPT_DECISIONS
         for project_id, decision in decisions.items()
     ):
-        errors["git_swe_mux_prompt_decisions"] = (
-            "must map bounded Project ids to keep_visible or ignore_all"
-        )
+        errors["git_swe_mux_prompt_decisions"] = ui_message("config.fb0b6d0357")
     if not isinstance(config.new_project_parent, str):
-        errors["new_project_parent"] = "must be an absolute directory path or empty"
+        errors["new_project_parent"] = ui_message("config.408ddfb68a")
     elif config.new_project_parent.strip():
         project_parent = Path(config.new_project_parent.strip()).expanduser()
         if not project_parent.is_absolute():
-            errors["new_project_parent"] = "must be an absolute directory path or empty"
+            errors["new_project_parent"] = ui_message("config.408ddfb68a")
         elif project_parent.parent == project_parent:
-            errors["new_project_parent"] = "must not be a filesystem root"
+            errors["new_project_parent"] = ui_message("config.99b212a7c1")
     for field_name in ("auto_delivery_quiet_start", "auto_delivery_quiet_end"):
         value = str(getattr(config, field_name) or "")
         if value and not QUIET_TIME.fullmatch(value):
-            errors[field_name] = "must be empty or a HH:MM time"
+            errors[field_name] = ui_message("config.e33fe4ee68")
     if config.llm_provider not in LLM_PROVIDERS:
-        errors["llm_provider"] = "must be " + " or ".join(LLM_PROVIDERS)
+        errors["llm_provider"] = ui_message("config.be71758194", value1=" or ".join(LLM_PROVIDERS))
     elif config.llm_provider == "custom":
         # Only validated while it is the selected provider. A half-filled custom
         # endpoint left behind after switching back to OpenRouter is inert
@@ -2522,7 +2528,7 @@ def _validate(config: Config) -> None:
         if error := llm_catalog_url_error(config.custom_llm_catalog_url):
             errors["custom_llm_catalog_url"] = error
     if not isinstance(config.tts_kokoro_lexicon, dict) or len(config.tts_kokoro_lexicon) > 500:
-        errors["tts_kokoro_lexicon"] = "must be a map of at most 500 respellings"
+        errors["tts_kokoro_lexicon"] = ui_message("config.e0f600e053")
     else:
         for lexicon_word, lexicon_spoken in config.tts_kokoro_lexicon.items():
             # Keys must be single tokens in the exact shape kokoro_tts._WORD
@@ -2535,10 +2541,7 @@ def _validate(config: Config) -> None:
                 or not lexicon_spoken.strip()
                 or len(lexicon_spoken) > 200
             ):
-                errors["tts_kokoro_lexicon"] = (
-                    "keys must be single words of at most 60 characters and values "
-                    "non-empty respellings of at most 200 characters"
-                )
+                errors["tts_kokoro_lexicon"] = ui_message("config.52ee895ef3")
                 break
     if (
         not isinstance(config.voice_wake_words, list)
@@ -2548,22 +2551,24 @@ def _validate(config: Config) -> None:
             for word in config.voice_wake_words
         )
     ):
-        errors["voice_wake_words"] = "must be 1–64 non-empty wake words of 40 characters or fewer"
+        errors["voice_wake_words"] = ui_message("config.141a8bc788")
     if not isinstance(config.voice_commands, list) or len(config.voice_commands) > 64:
-        errors["voice_commands"] = "must be an array of at most 64 command definitions"
+        errors["voice_commands"] = ui_message("config.ff5b73fb08")
     else:
         seen_actions: set[str] = set()
         for index, command in enumerate(config.voice_commands):
             prefix = f"voice_commands.{index}"
             if not isinstance(command, dict):
-                errors[prefix] = "must be an object with action and phrases"
+                errors[prefix] = ui_message("config.c6d96009d9")
                 continue
             action = command.get("action")
             phrases = command.get("phrases")
             if action not in VOICE_COMMAND_ACTIONS:
-                errors[f"{prefix}.action"] = f"must be one of {', '.join(VOICE_COMMAND_ACTIONS)}"
+                errors[f"{prefix}.action"] = ui_message(
+                    "config.3fe7eabe5b", value1=", ".join(VOICE_COMMAND_ACTIONS)
+                )
             elif action in seen_actions:
-                errors[f"{prefix}.action"] = f"duplicate action {action}"
+                errors[f"{prefix}.action"] = ui_message("config.18422c6242", value1=action)
             else:
                 seen_actions.add(str(action))
             if (
@@ -2574,18 +2579,16 @@ def _validate(config: Config) -> None:
                     for phrase in (phrases or [])
                 )
             ):
-                errors[f"{prefix}.phrases"] = (
-                    "must be up to 64 non-empty phrases of 80 characters or fewer"
-                )
+                errors[f"{prefix}.phrases"] = ui_message("config.49d88dc84d")
     for scale_field in ("ui_scale_desktop", "ui_scale_mobile"):
         # TOML round-trips 1.0 as a float but a JSON PATCH sends bare `1`, so an
         # int is a legitimate spelling of a scale and must not be rejected here.
         value = getattr(config, scale_field)
         if not isinstance(value, (int, float)) or isinstance(value, bool):
-            errors[scale_field] = "must be a number"
+            errors[scale_field] = ui_message("config.5ede25dad6")
         elif not any(abs(float(value) - step) < 1e-9 for step in UI_SCALES):
             allowed = ", ".join(f"{step:g}" for step in sorted(UI_SCALES))
-            errors[scale_field] = f"must be one of {allowed}"
+            errors[scale_field] = ui_message("config.3fe7eabe5b", value1=allowed)
     if set(config.custom_theme) != CUSTOM_THEME_KEYS or any(
         not isinstance(value, str)
         or len(value) != 7
@@ -2593,48 +2596,46 @@ def _validate(config: Config) -> None:
         or any(character not in "0123456789abcdefABCDEF" for character in value[1:])
         for value in config.custom_theme.values()
     ):
-        errors["custom_theme"] = "must contain every semantic token as a #RRGGBB color"
+        errors["custom_theme"] = ui_message("config.4b0ddf100b")
     elif contrast_ratio(config.custom_theme["background"], config.custom_theme["foreground"]) < 4.5:
-        errors["custom_theme"] = "background and foreground require at least 4.5:1 contrast"
+        errors["custom_theme"] = ui_message("config.0b3c4ea65d")
     ids = [profile.id for profile in config.shell_profiles]
     if len(ids) != len(set(ids)) or any(not value.strip() for value in ids):
-        errors["shell_profiles"] = "profile ids must be non-empty and unique"
-    shell_ids = [
-        profile.id for profile in config.shell_profiles if profile.backend == "shell"
-    ]
+        errors["shell_profiles"] = ui_message("config.24ee484234")
+    shell_ids = [profile.id for profile in config.shell_profiles if profile.backend == "shell"]
     if config.shell_profiles and config.default_shell_profile not in shell_ids:
         # Scoped to shell profiles because this is the default for `New terminal`.
         # An agent profile named here would make every plain terminal unspawnable.
-        errors["default_shell_profile"] = "must reference an existing shell launch profile"
+        errors["default_shell_profile"] = ui_message("config.0c3cb76f85")
     _validate_project_init_scripts(config, errors)
     for index, profile in enumerate(config.shell_profiles):
         prefix = f"shell_profiles.{index}"
         agent = is_agent_harness(profile.backend)
         if profile.backend != "shell" and not agent:
-            errors[f"{prefix}.backend"] = "must be shell or a registered agent harness"
+            errors[f"{prefix}.backend"] = ui_message("config.442f3c2b92")
         if not profile.label.strip():
-            errors[prefix] = "label is required"
+            errors[prefix] = ui_message("config.baa364bed2")
         elif not agent and not profile.executable.strip():
             # An agent profile may inherit `harness_exe`; a shell profile has nothing
             # to inherit, so its executable is still required.
-            errors[prefix] = "label and executable are required"
+            errors[prefix] = ui_message("config.d697323173")
         if profile.cwd_strategy not in {"native", "home", "wsl"}:
-            errors[f"{prefix}.cwd_strategy"] = "must be native, home, or wsl"
+            errors[f"{prefix}.cwd_strategy"] = ui_message("config.f1838dd695")
         if not all(isinstance(item, str) for item in profile.args):
-            errors[f"{prefix}.args"] = "must be an array of strings"
+            errors[f"{prefix}.args"] = ui_message("config.2a2e757b38")
         if not all(
             isinstance(key, str) and isinstance(value, str) for key, value in profile.env.items()
         ):
-            errors[f"{prefix}.env"] = "must be a string map"
+            errors[f"{prefix}.env"] = ui_message("config.6129fa7ec8")
         if agent:
             if profile.cwd_strategy != "native":
-                errors[f"{prefix}.cwd_strategy"] = "an agent launch profile must use native"
+                errors[f"{prefix}.cwd_strategy"] = ui_message("config.364c5fea18")
             if profile.cwd_integration:
-                errors[f"{prefix}.cwd_integration"] = "is available only for a shell profile"
+                errors[f"{prefix}.cwd_integration"] = ui_message("config.97a88e36db")
             conflict = reserved_launch_arg_conflict(profile.backend, profile.args)
             if conflict:
-                errors[f"{prefix}.args"] = (
-                    f"{conflict} is built by swe-mux for {profile.backend} and cannot be set here"
+                errors[f"{prefix}.args"] = ui_message(
+                    "config.f55316c5d3", value1=conflict, value2=profile.backend
                 )
     if errors:
         raise ValueError(errors)
@@ -2728,9 +2729,7 @@ def _default_shell_profile(executable: str) -> LaunchProfile:
         # POSIX host the profile list is a list of real shells, and one row saying
         # "Default shell" beside `bash` and `zsh` tells the reader nothing about
         # which one it is.
-        return LaunchProfile(
-            "default", executable_name or "Shell", executable, args, marker="sh"
-        )
+        return LaunchProfile("default", executable_name or "Shell", executable, args, marker="sh")
     return LaunchProfile("default", "Default shell", executable, args)
 
 
@@ -2777,9 +2776,7 @@ SCHEMA_23_LEGACY_BUDGET_SCALARS: dict[str, float] = {
 }
 
 
-def _migrate_budget_fields(
-    cfg: Config, raw: dict[str, Any], *, source_schema: int
-) -> bool:
+def _migrate_budget_fields(cfg: Config, raw: dict[str, Any], *, source_schema: int) -> bool:
     """Fold the pre-`Budget` scalar caps into the one budget shape, losslessly.
 
     The non-negotiable rule: a config written by the previous build must enforce
@@ -3103,9 +3100,7 @@ def host_shaped_field_candidates() -> tuple[str, ...]:
     executable. Nested names are dotted (`shell_profiles.executable`).
     """
     found: list[str] = [
-        name
-        for name in Config.__dataclass_fields__
-        if name.endswith(HOST_SHAPED_FIELD_MARKERS)
+        name for name in Config.__dataclass_fields__ if name.endswith(HOST_SHAPED_FIELD_MARKERS)
     ]
     found.extend(
         f"shell_profiles.{name}"
@@ -3362,9 +3357,7 @@ def load_config(path: Path | None = None) -> Config:
                 for pattern in cfg.project_ignore_patterns
                 if isinstance(pattern, str)
             }
-            missing = [
-                pattern for pattern in SCHEMA_32_IGNORE_ADDITIONS if pattern not in existing
-            ]
+            missing = [pattern for pattern in SCHEMA_32_IGNORE_ADDITIONS if pattern not in existing]
             # Respect the ceiling `_validate` enforces rather than appending past it and
             # failing startup on a config this migration itself made invalid.
             room = PROJECT_IGNORE_PATTERN_LIMIT - len(cfg.project_ignore_patterns)
@@ -3395,9 +3388,7 @@ def load_config(path: Path | None = None) -> Config:
             cfg.shell_exe = "pwsh.exe"
         cfg.shell_profiles = [_default_shell_profile(cfg.shell_exe)]
     elif (
-        IS_WINDOWS
-        and _is_auto_managed_windows_powershell_default(cfg)
-        and shutil.which("pwsh.exe")
+        IS_WINDOWS and _is_auto_managed_windows_powershell_default(cfg) and shutil.which("pwsh.exe")
     ):
         cfg.shell_exe = "pwsh.exe"
         cfg.shell_profiles = [_default_shell_profile(cfg.shell_exe)]

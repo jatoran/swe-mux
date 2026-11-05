@@ -46,6 +46,7 @@ from .transcript_view import (
     searchable_transcript_messages,
     transcript_time_summary,
 )
+from .ui_messages import ui_message
 
 T = TypeVar("T")
 log = logging.getLogger(__name__)
@@ -169,6 +170,7 @@ def _public_history_row(row: sqlite3.Row) -> dict[str, Any]:
         else {}
     )
     return item
+
 
 # Which timestamp a history listing is organised by. One control in the browser picks
 # it, and it decides two different things, which is why there are two tables.
@@ -382,6 +384,8 @@ def canonical_worktree_root(value: str) -> str:
     alone so the value still names the directory as its owner spells it.
     """
     return value.replace("\\", "/").rstrip("/")
+
+
 _GIT_PROVENANCE_UPSERT = (
     "INSERT INTO git_provenance("
     "id,session_id,session_name,agent_run_id,project_id,worktree_root,commit_oid,"
@@ -960,8 +964,7 @@ class HistoryIndex:
         if "owner_label" not in artifact_columns:
             self._db.execute("ALTER TABLE artifacts ADD COLUMN owner_label TEXT")
         provenance_columns = {
-            row["name"]
-            for row in self._db.execute("PRAGMA table_info(git_provenance)").fetchall()
+            row["name"] for row in self._db.execute("PRAGMA table_info(git_provenance)").fetchall()
         }
         # Attribution columns (Phase 7.8). Existing rows keep `observer`, which is
         # exactly what they recorded: a session that was present when a commit
@@ -1004,9 +1007,7 @@ class HistoryIndex:
                 "(SELECT MIN(h.spawned_at) FROM history h WHERE h.project_id=projects.id),0)"
             )
         if "last_used_at" not in project_columns:
-            self._db.execute(
-                "ALTER TABLE projects ADD COLUMN last_used_at REAL NOT NULL DEFAULT 0"
-            )
+            self._db.execute("ALTER TABLE projects ADD COLUMN last_used_at REAL NOT NULL DEFAULT 0")
             # Older databases have no exact prompt-submit record. A non-imported
             # session start is the closest durable evidence of explicit prior use
             # and avoids resetting every upgraded sidebar to manual tie order.
@@ -1024,9 +1025,7 @@ class HistoryIndex:
             # One column rather than one per harness: the set of harnesses is a
             # registry, and a schema that had to change whenever a harness was added
             # would make adding one a database migration.
-            self._db.execute(
-                "ALTER TABLE projects ADD COLUMN default_agent_profiles_json TEXT"
-            )
+            self._db.execute("ALTER TABLE projects ADD COLUMN default_agent_profiles_json TEXT")
         self._db.execute(
             "CREATE INDEX IF NOT EXISTS idx_history_agent_project "
             "ON history(agent_visible,project_id,spawned_at DESC)"
@@ -1089,8 +1088,7 @@ class HistoryIndex:
             )
         }
         message_columns = {
-            str(row["name"])
-            for row in self._db.execute("PRAGMA table_info(history_messages)")
+            str(row["name"]) for row in self._db.execute("PRAGMA table_info(history_messages)")
         }
         self._drop_message_search_triggers()
         if "ts_epoch" not in message_columns:
@@ -1227,8 +1225,7 @@ class HistoryIndex:
         cursor = int(state["cursor_id"])
         target = int(state["target_max_id"])
         rows = self._db.execute(
-            "SELECT id,ts,text FROM history_messages WHERE id>? AND id<=? "
-            "ORDER BY id LIMIT ?",
+            "SELECT id,ts,text FROM history_messages WHERE id>? AND id<=? ORDER BY id LIMIT ?",
             (cursor, target, batch_size),
         ).fetchall()
         next_cursor = int(rows[-1]["id"]) if rows else target
@@ -1278,9 +1275,7 @@ class HistoryIndex:
                 bounded_batch,
             )
             while not state["ready"]:
-                state = await self._run(
-                    lambda: self._maintain_message_search_batch(bounded_batch)
-                )
+                state = await self._run(lambda: self._maintain_message_search_batch(bounded_batch))
                 batches += 1
                 if batches % 50 == 0 and not state["ready"]:
                     log.info(
@@ -1464,12 +1459,10 @@ class HistoryIndex:
         """
 
         def op() -> None:
-            rows = self._db.execute(
-                "SELECT id FROM projects WHERE deleted_at IS NULL"
-            ).fetchall()
+            rows = self._db.execute("SELECT id FROM projects WHERE deleted_at IS NULL").fetchall()
             current_ids = {str(row["id"]) for row in rows}
             if len(ordered_ids) != len(current_ids) or set(ordered_ids) != current_ids:
-                raise ValueError("project order must contain every registered project once")
+                raise ValueError(ui_message("history.2dc8ebf902"))
             with self._db:
                 self._db.executemany(
                     "UPDATE projects SET position=? WHERE id=?",
@@ -2006,9 +1999,7 @@ class HistoryIndex:
                     run_id = str(row["id"])
                     note_id = str(row["note_id"] or "")
                     claimed_backend = str(row["backend"])
-                    root_backend = infer_agent_executable_backend(
-                        row["executable"], arguments(row)
-                    )
+                    root_backend = infer_agent_executable_backend(row["executable"], arguments(row))
                     if (
                         root_backend is None
                         or root_backend == claimed_backend
@@ -2044,9 +2035,7 @@ class HistoryIndex:
                     )
                     if owner is None:
                         continue
-                    self._db.execute(
-                        "DELETE FROM history_messages WHERE history_id=?", (run_id,)
-                    )
+                    self._db.execute("DELETE FROM history_messages WHERE history_id=?", (run_id,))
                     self._db.execute(
                         "DELETE FROM history_transcript_index WHERE history_id=?",
                         (run_id,),
@@ -2228,8 +2217,7 @@ class HistoryIndex:
         of them stayed broken on the development host.
         """
         exists = self._db.execute(
-            "SELECT id,transcript_path FROM history "
-            "WHERE backend=? AND native_id=? AND external=0",
+            "SELECT id,transcript_path FROM history WHERE backend=? AND native_id=? AND external=0",
             (backend, native_id),
         ).fetchone()
         if not exists:
@@ -2639,9 +2627,7 @@ class HistoryIndex:
         request must never call back into a loop that may have closed by then.
         """
         pending = [
-            (item, future)
-            for item in items
-            if (future := self._summary_future(item)) is not None
+            (item, future) for item in items if (future := self._summary_future(item)) is not None
         ]
         if not pending:
             return 0
@@ -3099,14 +3085,12 @@ class HistoryIndex:
 
         return await self._run(op)
 
-    async def record_git_provenance_batch(
-        self, records: list[dict[str, Any]]
-    ) -> int:
+    async def record_git_provenance_batch(self, records: list[dict[str, Any]]) -> int:
         """Upsert an explicit provenance import in one bounded transaction."""
         if not records:
             return 0
         if len(records) > 1000:
-            raise ValueError("git provenance batch exceeds 1000 rows")
+            raise ValueError(ui_message("history.4b30333857"))
         timestamp = time.time()
 
         def op() -> int:
@@ -3546,13 +3530,11 @@ class HistoryIndex:
         before any transcript text crosses the MCP boundary.
         """
         if search_scope not in {"all", "user", "assistant", "metadata"}:
-            raise ValueError("history search scope must be all, user, assistant, or metadata")
+            raise ValueError(ui_message("history.9212d14b1e"))
         if query_mode not in {"hybrid", "all_terms", "any_terms", "phrase", "substring"}:
-            raise ValueError(
-                "history query mode must be hybrid, all_terms, any_terms, phrase, or substring"
-            )
+            raise ValueError(ui_message("history.9c22d515d2"))
         if order not in {"relevance", "recent"}:
-            raise ValueError("history search order must be relevance or recent")
+            raise ValueError(ui_message("history.6f3b7c8666"))
         offset = max(0, offset)
         limit = max(1, min(limit, 50))
         max_per_session = max(1, min(max_per_session, 5))
@@ -3672,9 +3654,7 @@ class HistoryIndex:
                 f"WHERE hm.text LIKE ? ESCAPE '\\' AND {' AND '.join(clauses)} "
                 "ORDER BY hm.history_id,hm.ordinal LIMIT ?"
             )
-            return self._db.execute(
-                sql, [_like_pattern(query), *args, candidate_limit]
-            ).fetchall()
+            return self._db.execute(sql, [_like_pattern(query), *args, candidate_limit]).fetchall()
 
         def fallback_message_rows() -> list[sqlite3.Row]:
             clauses, args = message_filters()
@@ -3690,9 +3670,7 @@ class HistoryIndex:
                 f"WHERE {predicate} AND {' AND '.join(clauses)} "
                 "ORDER BY hm.history_id,hm.ordinal LIMIT ?"
             )
-            return self._db.execute(
-                sql, [*query_args, *args, candidate_limit]
-            ).fetchall()
+            return self._db.execute(sql, [*query_args, *args, candidate_limit]).fetchall()
 
         def metadata_rows() -> list[sqlite3.Row]:
             clauses, args = history_filters()
@@ -3782,9 +3760,13 @@ class HistoryIndex:
                     item["relevance"] = 0.0
                     ranked[key] = item
 
-            search_metadata = include_metadata and search_scope in {"all", "metadata"} and (
-                (bool(query) and message_after is None and message_before is None)
-                or search_scope == "metadata"
+            search_metadata = (
+                include_metadata
+                and search_scope in {"all", "metadata"}
+                and (
+                    (bool(query) and message_after is None and message_before is None)
+                    or search_scope == "metadata"
+                )
             )
             include_filter_only = not query and not filter_requests_messages
             if search_metadata or include_filter_only:
@@ -3797,8 +3779,7 @@ class HistoryIndex:
                     run_id = str(item["id"])
                     metadata_key = (run_id, None, "metadata" if query else "session")
                     title_match = folded and (
-                        folded in str(item.get("name") or "").casefold()
-                        or run_id in generated_ids
+                        folded in str(item.get("name") or "").casefold() or run_id in generated_ids
                     )
                     item.update(
                         {
@@ -3810,9 +3791,7 @@ class HistoryIndex:
                             "match_mtime_ns": None,
                             "match_size": None,
                             "match_parser_version": None,
-                            "relevance": (0.05 if title_match else 0.02)
-                            if query
-                            else 0.0,
+                            "relevance": (0.05 if title_match else 0.02) if query else 0.0,
                         }
                     )
                     ranked[metadata_key] = item
@@ -4088,9 +4067,9 @@ class HistoryIndex:
         """
         limit = max(1, min(limit, 200))
         if search_scope not in {"all", "user", "assistant", "metadata"}:
-            raise ValueError("history search scope must be all, user, assistant, or metadata")
+            raise ValueError(ui_message("history.9212d14b1e"))
         if time_basis not in _HISTORY_ORDER_COLUMNS:
-            raise ValueError("history time basis must be started or last_message")
+            raise ValueError(ui_message("history.68a72be00f"))
         search_index_ready = bool((await self.message_search_status())["ready"])
         order_column = _HISTORY_ORDER_COLUMNS[time_basis]
         sql = (
@@ -4210,14 +4189,13 @@ class HistoryIndex:
                     item["matches"] = matches
                     item["match_count"] = count
             next_cursor = (
-                f"{page[-1][_HISTORY_ORDER_KEY]}:{page[-1]['id']}"
-                if has_more and page
-                else None
+                f"{page[-1][_HISTORY_ORDER_KEY]}:{page[-1]['id']}" if has_more and page else None
             )
             return {"items": items, "next_cursor": next_cursor}
 
         if budget_ms is None:
             return await self._run(op)
+
         # The guard runs INSIDE the executor, wrapping the statement itself:
         # installed out here it would arm on the event loop thread and never see
         # the query it is supposed to bound.
@@ -4234,7 +4212,7 @@ class HistoryIndex:
         if not match_query or search_scope == "metadata":
             return []
         if search_scope not in {"all", "user", "assistant"}:
-            raise ValueError("history search scope must be all, user, assistant, or metadata")
+            raise ValueError(ui_message("history.9212d14b1e"))
         search_index_ready = bool((await self.message_search_status())["ready"])
 
         def op() -> list[dict[str, Any]]:
@@ -4363,9 +4341,7 @@ class HistoryIndex:
     async def delete_history_entry(self, session_id: str) -> bool:
         def op() -> bool:
             with self._db:
-                self._db.execute(
-                    "DELETE FROM git_provenance WHERE agent_run_id=?", (session_id,)
-                )
+                self._db.execute("DELETE FROM git_provenance WHERE agent_run_id=?", (session_id,))
                 self._db.execute("DELETE FROM history_messages WHERE history_id=?", (session_id,))
                 self._db.execute(
                     "DELETE FROM history_transcript_index WHERE history_id=?", (session_id,)

@@ -1,3 +1,4 @@
+import { rich, t } from './localization/index.ts'
 import { useEffect, useState } from 'preact/hooks'
 import type { ComponentType } from 'preact'
 import type { ChangeMapPaneProps } from './ChangeMapPane'
@@ -27,7 +28,7 @@ export function LazyChangeMap(props: ChangeMapPaneProps) {
       .catch(cause => { if (live) setError(cause instanceof Error ? cause.message : String(cause)) })
     return () => { live = false }
   }, [])
-  if (error) return <div class="change-map-pane change-map-state error" role="alert">Change Map unavailable: {error}</div>
-  if (!Pane) return <div class="change-map-pane change-map-state" aria-busy="true" aria-label="Change Map"><span>Preparing the Change Map…</span></div>
+  if (error) return <div class="change-map-pane change-map-state error" role="alert">{rich("LazyChangeMap.6678a10274", { error: error })}</div>
+  if (!Pane) return <div class="change-map-pane change-map-state" aria-busy="true" aria-label={t("LazyChangeMap.fd53359946")}><span>{t("LazyChangeMap.87c19cdee4")}</span></div>
   return <Pane {...props} />
 }

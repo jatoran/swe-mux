@@ -1,3 +1,4 @@
+import { withCatalogText } from './support/localizedSource.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -19,7 +20,7 @@ import {
 import { terminalPanePropsEqual } from '../src/terminalPaneMemo.ts'
 
 const root = dirname(fileURLToPath(import.meta.url))
-const source = (name: string) => readFileSync(join(root, '..', 'src', name), 'utf8')
+const source = (name: string) => withCatalogText(readFileSync(join(root, '..', 'src', name), 'utf8'))
 
 test('the default stack is what the terminal has always been drawn with', () => {
   // Installing this build must change nothing on screen: blank resolves to the
@@ -159,6 +160,6 @@ test('a font family change reaches live panes without rebuilding them', () => {
   assert.match(settings, /Nerd Font/)
   // The note editor's own typography now says what it is for, so nobody types a
   // terminal font into it and restarts waiting for something to change.
-  assert.match(settings, /<h3>Note editor typography<\/h3>/)
+  assert.match(settings, /<h3\b[^>]*>Note editor typography<\/h3>/)
   assert.match(settings, /placeholder="notes only;/)
 })

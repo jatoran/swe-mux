@@ -1,3 +1,4 @@
+import { t, sourceText, type MessageId } from './localization/index.ts'
 /**
  * Other names for Settings entries, so the panel-wide search answers the words people
  * actually type rather than only the words the panel happens to print.
@@ -38,91 +39,93 @@ export type SettingsAliasTarget = {
   aliases: string[]
 }
 
+const aliasTerms=(ids:readonly MessageId[]):string[] => [...new Set(ids.flatMap(id=>[sourceText(id),t(id)]).map(normalizeSearchText))]
+
 export const SETTINGS_SEARCH_ALIASES: SettingsAliasTarget[] = [
   // General
-  { tab: 'general', label: 'Startup directory', aliases: ['cwd', 'start folder', 'initial directory'] },
-  { tab: 'general', label: 'Tier', aliases: ['experience level', 'beginner mode', 'simple mode', 'advanced mode'] },
-  { tab: 'general', label: 'Reset & run tutorial', aliases: ['onboarding', 'walkthrough', 'tour'] },
-  { tab: 'general', label: 'Reveal config directory', aliases: ['config file', 'config.toml', 'settings file', 'open config'] },
-  { tab: 'general', label: 'Export sanitized', aliases: ['export settings', 'backup settings'] },
-  { tab: 'general', label: 'Restore defaults', aliases: ['reset settings', 'reset config'] },
+  { tab: 'general', get label() { return t("settingsSearchAliases.4953f9baec") }, get aliases(){return aliasTerms(["settingsSearchAliases.6f2f7e6c65","settingsSearchAliases.4e3d605973","settingsSearchAliases.0cbdee57ed"])} },
+  { tab: 'general', get label() { return t("settingsSearchAliases.cb9e8664ed") }, get aliases(){return aliasTerms(["settingsSearchAliases.0369d26a4e","settingsSearchAliases.c0cb24b800","settingsSearchAliases.be64790185","settingsSearchAliases.979cb478f1"])} },
+  { tab: 'general', get label() { return t("settingsSearchAliases.708bf8b65a") }, get aliases(){return aliasTerms(["settingsSearchAliases.a4963c4996","settingsSearchAliases.e0837458ff","settingsSearchAliases.d7b44809a0"])} },
+  { tab: 'general', get label() { return t("settingsSearchAliases.1f2df45014") }, get aliases(){return aliasTerms(["settingsSearchAliases.721d60619b","settingsSearchAliases.28043ff911","settingsSearchAliases.ac6b2b35d2","settingsSearchAliases.85057bd3c7"])} },
+  { tab: 'general', get label() { return t("settingsSearchAliases.cf675af0cc") }, get aliases(){return aliasTerms(["settingsSearchAliases.9f63bb4588","settingsSearchAliases.5e7744dd97"])} },
+  { tab: 'general', get label() { return t("settingsSearchAliases.602f8e6370") }, get aliases(){return aliasTerms(["settingsSearchAliases.7d03e10824","settingsSearchAliases.7a73022503"])} },
   // Projects
-  { tab: 'projects', label: 'Default parent folder', aliases: ['new project folder', 'projects directory', 'project root'] },
-  { tab: 'projects', label: 'Ignore patterns', aliases: ['gitignore', 'exclude files', 'hidden files'] },
+  { tab: 'projects', get label() { return t("settingsSearchAliases.38b03c0bae") }, get aliases(){return aliasTerms(["settingsSearchAliases.bfb4174c84","settingsSearchAliases.ac8f98a712","settingsSearchAliases.9240a87f98"])} },
+  { tab: 'projects', get label() { return t("settingsSearchAliases.6b12ef00cf") }, get aliases(){return aliasTerms(["settingsSearchAliases.a1aa659678","settingsSearchAliases.b7fb3a34b8","settingsSearchAliases.933eec8499"])} },
   // Terminals
-  { tab: 'terminals', label: 'Renderer', aliases: ['webgl', 'gpu', 'hardware acceleration'] },
-  { tab: 'terminals', label: 'Scrollback bytes', aliases: ['history size', 'buffer size', 'scrollback size', 'scrollback lines'] },
-  { tab: 'terminals', label: 'Global default terminal profile', aliases: ['default shell', 'shell', 'powershell', 'bash'] },
-  { tab: 'terminals', label: 'Launch agents through swe-mux', aliases: ['agent shim', 'intercept agent'] },
+  { tab: 'terminals', get label() { return t("settingsSearchAliases.9deb780b43") }, get aliases(){return aliasTerms(["settingsSearchAliases.5207e65b92","settingsSearchAliases.e3c5ba51db","settingsSearchAliases.7a9df95825"])} },
+  { tab: 'terminals', get label() { return t("settingsSearchAliases.19e4a94704") }, get aliases(){return aliasTerms(["settingsSearchAliases.69cf86bb1b","settingsSearchAliases.b24add9a8c","settingsSearchAliases.36e7de90e9","settingsSearchAliases.e437e98bbe"])} },
+  { tab: 'terminals', get label() { return t("settingsSearchAliases.6a30847162") }, get aliases(){return aliasTerms(["settingsSearchAliases.f5dd32ce0f","settingsSearchAliases.ce635c4eab","settingsSearchAliases.86f51b1707","settingsSearchAliases.37d2b12d5d"])} },
+  { tab: 'terminals', get label() { return t("settingsSearchAliases.f6acb9c4de") }, get aliases(){return aliasTerms(["settingsSearchAliases.bcd23e32d5","settingsSearchAliases.f4cd82ba97"])} },
   // Git
-  { tab: 'git', label: 'Worktree root', aliases: ['worktree folder', 'worktrees directory'] },
-  { tab: 'git', label: 'Git poll seconds', aliases: ['git refresh', 'git polling'] },
+  { tab: 'git', get label() { return t("settingsSearchAliases.7aabad254f") }, get aliases(){return aliasTerms(["settingsSearchAliases.479907d8bc","settingsSearchAliases.a88085d23b"])} },
+  { tab: 'git', get label() { return t("settingsSearchAliases.693933a8fd") }, get aliases(){return aliasTerms(["settingsSearchAliases.d55db75d01","settingsSearchAliases.d1a15d4405"])} },
   // Processes
-  { tab: 'processes', label: 'Session process priority', aliases: ['cpu priority', 'nice', 'niceness'] },
+  { tab: 'processes', get label() { return t("settingsSearchAliases.1baa8f3ed8") }, get aliases(){return aliasTerms(["settingsSearchAliases.1fcde3b08d","settingsSearchAliases.e186022d09","settingsSearchAliases.b5ef7f493a"])} },
   // Harnesses
-  { tab: 'harnesses', label: 'Default harness', kind: 'field', aliases: ['default agent', 'default cli'] },
-  { tab: 'harnesses', label: 'Instrument with mux hooks', aliases: ['hooks', 'agent hooks'] },
-  { tab: 'harnesses', label: 'Reconcile native history on startup', aliases: ['import history', 'conversation import'] },
+  { tab: 'harnesses', get label() { return t("settingsSearchAliases.c039f423b8") }, kind: 'field', get aliases(){return aliasTerms(["settingsSearchAliases.b3ea5ed73d","settingsSearchAliases.4210763bdb"])} },
+  { tab: 'harnesses', get label() { return t("settingsSearchAliases.e90af19a3c") }, get aliases(){return aliasTerms(["settingsSearchAliases.a9fa9fda98","settingsSearchAliases.acec148ce7"])} },
+  { tab: 'harnesses', get label() { return t("settingsSearchAliases.1f280417b0") }, get aliases(){return aliasTerms(["settingsSearchAliases.541b624758","settingsSearchAliases.c118951e6b"])} },
   // Accounts
-  { tab: 'accounts', label: 'Provider accounts', kind: 'section', aliases: ['switch account', 'claude login', 'codex login', 'multiple accounts'] },
-  { tab: 'accounts', label: 'Model provider', kind: 'field', aliases: ['llm provider', 'ai provider', 'openrouter', 'llm endpoint'] },
-  { tab: 'accounts', label: 'API key', aliases: ['openrouter key', 'llm key'] },
-  { tab: 'accounts', label: 'Refresh models', aliases: ['model list', 'model catalog'] },
+  { tab: 'accounts', get label() { return t("settingsSearchAliases.a701acdcc0") }, kind: 'section', get aliases(){return aliasTerms(["settingsSearchAliases.4aa5dd8bec","settingsSearchAliases.1d839ac9ac","settingsSearchAliases.53b7014e73","settingsSearchAliases.fdee390edc"])} },
+  { tab: 'accounts', get label() { return t("settingsSearchAliases.ea70384c46") }, kind: 'field', get aliases(){return aliasTerms(["settingsSearchAliases.0443cd7a63","settingsSearchAliases.8d5016f8ae","settingsSearchAliases.7f871cbf90","settingsSearchAliases.f5caa6bb97"])} },
+  { tab: 'accounts', get label() { return t("settingsSearchAliases.16f0ee47f9") }, get aliases(){return aliasTerms(["settingsSearchAliases.1f682b3296","settingsSearchAliases.6a3ffe7250"])} },
+  { tab: 'accounts', get label() { return t("settingsSearchAliases.04903063b2") }, get aliases(){return aliasTerms(["settingsSearchAliases.e2f7f430e8","settingsSearchAliases.f1a68134ac"])} },
   // Prompt queue
-  { tab: 'queue', label: 'Allow auto-delivery for agent conversations', aliases: ['autopilot', 'auto send', 'auto-send'] },
-  { tab: 'queue', label: 'Allow swe-mux to answer approvals', aliases: ['auto approve', 'auto-approve', 'yolo', 'permissions'] },
-  { tab: 'queue', label: 'Allow agent-to-agent messages', aliases: ['agent chat', 'inter-agent'] },
-  { tab: 'queue', label: 'Let agents request spawns', aliases: ['spawn agents', 'subagents'] },
+  { tab: 'queue', get label() { return t("settingsSearchAliases.a7ed28c4c2") }, get aliases(){return aliasTerms(["settingsSearchAliases.06a8d99fc6","settingsSearchAliases.7ff91cf545","settingsSearchAliases.5bb0dd2f64"])} },
+  { tab: 'queue', get label() { return t("settingsSearchAliases.98473e42a5") }, get aliases(){return aliasTerms(["settingsSearchAliases.337abba9f5","settingsSearchAliases.deddf5e179","settingsSearchAliases.311fe3feed","settingsSearchAliases.4fe3cdd404"])} },
+  { tab: 'queue', get label() { return t("settingsSearchAliases.6671bb2f54") }, get aliases(){return aliasTerms(["settingsSearchAliases.548467235e","settingsSearchAliases.4835a00136"])} },
+  { tab: 'queue', get label() { return t("settingsSearchAliases.dc57c727ca") }, get aliases(){return aliasTerms(["settingsSearchAliases.c12a41ec87","settingsSearchAliases.d298391b07"])} },
   // Automation
-  { tab: 'automation', label: 'Open Automation workspace', aliases: ['workflows', 'triggers', 'cron', 'automations'] },
+  { tab: 'automation', get label() { return t("settingsSearchAliases.9e8cab89ac") }, get aliases(){return aliasTerms(["settingsSearchAliases.45b34f16db","settingsSearchAliases.51936fd380","settingsSearchAliases.c374eea599","settingsSearchAliases.238ae7bbfd"])} },
   // Plugins
-  { tab: 'plugins', label: 'Browse marketplace', aliases: ['install plugin', 'addons', 'add-ons'] },
+  { tab: 'plugins', get label() { return t("settingsSearchAliases.2ad20c9748") }, get aliases(){return aliasTerms(["settingsSearchAliases.f61a07955c","settingsSearchAliases.960f41e99c","settingsSearchAliases.bcbe7ab642"])} },
   // Usage
-  { tab: 'usage', label: 'Open telemetry dashboard', aliases: ['spend', 'billing', 'token usage', 'usage dashboard'] },
-  { tab: 'usage', label: 'Provider quota poll minutes', aliases: ['quota', 'rate limit'] },
+  { tab: 'usage', get label() { return t("settingsSearchAliases.908e673dbf") }, get aliases(){return aliasTerms(["settingsSearchAliases.f64a33ff88","settingsSearchAliases.0c95c7ece1","settingsSearchAliases.860cf7215d","settingsSearchAliases.84ac3b8f96"])} },
+  { tab: 'usage', get label() { return t("settingsSearchAliases.ad0cf189ea") }, get aliases(){return aliasTerms(["settingsSearchAliases.b878a6801d","settingsSearchAliases.a0f3a11be6"])} },
   // Appearance
-  { tab: 'appearance', label: 'Theme', aliases: ['dark mode', 'light mode', 'color scheme', 'colors', 'colours', 'skin'] },
-  { tab: 'appearance', label: 'This browser', aliases: ['desktop mode', 'mobile mode', 'phone layout', 'force mobile'] },
-  { tab: 'appearance', label: 'Font family', aliases: ['typeface', 'monospace font'] },
-  { tab: 'appearance', label: 'Desktop interface scale', aliases: ['zoom', 'ui size', 'text size'] },
-  { tab: 'appearance', label: 'Mobile interface scale', aliases: ['mobile zoom', 'phone text size'] },
-  { tab: 'appearance', label: 'Drawer tabs', aliases: ['right panel', 'drawer'] },
-  { tab: 'appearance', label: 'Session rows', kind: 'section', aliases: ['sidebar rows', 'session list'] },
-  { tab: 'appearance', label: 'Session top bars', kind: 'section', aliases: ['pane header', 'title bar', 'pane toolbar'] },
+  { tab: 'appearance', get label() { return t("heading.efb52e7172") }, get aliases(){return aliasTerms(["settingsSearchAliases.ddf377084a","settingsSearchAliases.a6ea4833bc","settingsSearchAliases.f8e7856638","settingsSearchAliases.5f40adcebb","settingsSearchAliases.9a1ee26aae","settingsSearchAliases.2a0070d014"])} },
+  { tab: 'appearance', get label() { return t("settingsSearchAliases.101f4d9537") }, get aliases(){return aliasTerms(["settingsSearchAliases.27de889bbb","settingsSearchAliases.d9ae1c9874","settingsSearchAliases.1e8e7040bf","settingsSearchAliases.52b4afad71"])} },
+  { tab: 'appearance', get label() { return t("settingsSearchAliases.119ef3fa60") }, get aliases(){return aliasTerms(["settingsSearchAliases.a140ff7ea9","settingsSearchAliases.0ec906a2c1"])} },
+  { tab: 'appearance', get label() { return t("settingsSearchAliases.150f572502") }, get aliases(){return aliasTerms(["settingsSearchAliases.d21bb53772","settingsSearchAliases.835452c3ea","settingsSearchAliases.ec6f34a8fa"])} },
+  { tab: 'appearance', get label() { return t("settingsSearchAliases.8857605282") }, get aliases(){return aliasTerms(["settingsSearchAliases.5d5b780099","settingsSearchAliases.f03d01644c"])} },
+  { tab: 'appearance', get label() { return t("settingsSearchAliases.dfcf46351f") }, get aliases(){return aliasTerms(["settingsSearchAliases.f082db5796","settingsSearchAliases.d329f11d9a"])} },
+  { tab: 'appearance', get label() { return t("heading.30921545c4") }, kind: 'section', get aliases(){return aliasTerms(["settingsSearchAliases.1aa9002b51","settingsSearchAliases.6812551e52"])} },
+  { tab: 'appearance', get label() { return t("heading.363df1ed9e") }, kind: 'section', get aliases(){return aliasTerms(["settingsSearchAliases.9c857af028","settingsSearchAliases.df043d1199","settingsSearchAliases.eca395eae5"])} },
   // Actions
-  { tab: 'actions', label: 'Show the rail on desktop', aliases: ['command rail', 'button bar', 'toolbar'] },
-  { tab: 'actions', label: 'Add custom action', aliases: ['custom button', 'macro', 'snippet'] },
+  { tab: 'actions', get label() { return t("settingsSearchAliases.e04b865f75") }, get aliases(){return aliasTerms(["settingsSearchAliases.e62c78571b","settingsSearchAliases.95b9328d0b","settingsSearchAliases.d45928fd48"])} },
+  { tab: 'actions', get label() { return t("settingsSearchAliases.282a09e2cb") }, get aliases(){return aliasTerms(["settingsSearchAliases.7ba642aa90","settingsSearchAliases.27d66c0dce","settingsSearchAliases.d3086fc138"])} },
   // Input
-  { tab: 'input', label: 'Middle-click paste', aliases: ['paste'] },
-  { tab: 'input', label: 'Broadcast by default', aliases: ['send to all', 'multi-input', 'sync panes', 'synchronize panes'] },
-  { tab: 'input', label: 'Scroll direction', aliases: ['natural scrolling', 'invert scroll', 'reverse scroll'] },
-  { tab: 'input', label: 'Keep clipboard history', aliases: ['clipboard', 'copy history'] },
-  { tab: 'input', label: 'Touch gestures', aliases: ['swipe', 'gestures'] },
-  { tab: 'input', label: 'Keyboard preset', aliases: ['keymap preset', 'vim', 'emacs', 'tmux keys'] },
-  { tab: 'input', label: 'Keyboard shortcuts', aliases: ['hotkeys', 'keybindings', 'key bindings', 'keymap', 'bindings'] },
+  { tab: 'input', get label() { return t("settingsSearchAliases.42bdbfd3e3") }, get aliases(){return aliasTerms(["settingsSearchAliases.a2c183d5a1"])} },
+  { tab: 'input', get label() { return t("settingsSearchAliases.fc1a062179") }, get aliases(){return aliasTerms(["settingsSearchAliases.b84d0c873a","settingsSearchAliases.fb545e4ea9","settingsSearchAliases.5e7073a035","settingsSearchAliases.f4dfbc4d7a"])} },
+  { tab: 'input', get label() { return t("settingsSearchAliases.bad6ca037b") }, get aliases(){return aliasTerms(["settingsSearchAliases.ef15907363","settingsSearchAliases.3e37a2ad8f","settingsSearchAliases.061a0a32ce"])} },
+  { tab: 'input', get label() { return t("settingsSearchAliases.5194a6b4e2") }, get aliases(){return aliasTerms(["settingsSearchAliases.a78c946754","settingsSearchAliases.c12251a696"])} },
+  { tab: 'input', get label() { return t("settingsSearchAliases.f3e334b454") }, get aliases(){return aliasTerms(["settingsSearchAliases.02aaf1960a","settingsSearchAliases.896df61145"])} },
+  { tab: 'input', get label() { return t("heading.f5281d5e03") }, get aliases(){return aliasTerms(["settingsSearchAliases.d062b7b18e","settingsSearchAliases.0f2ed9e33d","settingsSearchAliases.9dc3436295","settingsSearchAliases.bf09b07fa1"])} },
+  { tab: 'input', get label() { return t("heading.e9bef0b0f3") }, get aliases(){return aliasTerms(["settingsSearchAliases.a44728efae","settingsSearchAliases.79cf3fa97e","settingsSearchAliases.2b6bffd5d9","settingsSearchAliases.101dfd46b4","settingsSearchAliases.1f7378b5c1"])} },
   // Notes
-  { tab: 'notes', label: 'Spellcheck', aliases: ['spelling', 'spell check'] },
-  { tab: 'notes', label: 'Global Scratchpad', aliases: ['scratch', 'quick notes'] },
-  { tab: 'notes', label: 'Editor shortcuts', aliases: ['note hotkeys', 'note keybindings'] },
+  { tab: 'notes', get label() { return t("settingsSearchAliases.8691e20252") }, get aliases(){return aliasTerms(["settingsSearchAliases.a6105b3238","settingsSearchAliases.00f42c8115"])} },
+  { tab: 'notes', get label() { return t("settingsSearchAliases.b9b69191a6") }, get aliases(){return aliasTerms(["settingsSearchAliases.5a9cb6b54e","settingsSearchAliases.f4cb6b2927"])} },
+  { tab: 'notes', get label() { return t("settingsSearchAliases.8178e6c324") }, get aliases(){return aliasTerms(["settingsSearchAliases.b1e4a32a40","settingsSearchAliases.93d7f7d634"])} },
   // Voice
-  { tab: 'voice', label: 'Read aloud is on (master)', aliases: ['tts', 'text to speech', 'speak replies'] },
-  { tab: 'voice', label: 'Provider', aliases: ['tts engine', 'voice engine', 'kokoro', 'sapi'] },
-  { tab: 'voice', label: 'Enable Talk & dictation', kind: 'field', aliases: ['microphone', 'mic', 'speech to text', 'stt', 'voice input', 'push to talk'] },
-  { tab: 'voice', label: 'Wake words', kind: 'field', aliases: ['hotword', 'wake phrase', 'hey mux'] },
-  { tab: 'voice', label: 'Enable the Mux assistant', aliases: ['voice assistant', 'ai assistant', 'chatbot'] },
+  { tab: 'voice', get label() { return t("settingsSearchAliases.781d1ae86a") }, get aliases(){return aliasTerms(["settingsSearchAliases.317e938a48","settingsSearchAliases.3220340f6c","settingsSearchAliases.e584d86734"])} },
+  { tab: 'voice', get label() { return t("settingsSearchAliases.472590ae97") }, get aliases(){return aliasTerms(["settingsSearchAliases.ee5b5b7f6f","settingsSearchAliases.a61ef801ae","settingsSearchAliases.1791019474","settingsSearchAliases.46f843559b"])} },
+  { tab: 'voice', get label() { return t("settingsSearchAliases.c04a719695") }, kind: 'field', get aliases(){return aliasTerms(["settingsSearchAliases.d7f4d3ccee","settingsSearchAliases.224948ca81","settingsSearchAliases.94bf83953f","settingsSearchAliases.f9eec27ab1","settingsSearchAliases.1a0dfdf443","settingsSearchAliases.fdbe21549a"])} },
+  { tab: 'voice', get label() { return t("settingsSearchAliases.f5f0563199") }, kind: 'field', get aliases(){return aliasTerms(["settingsSearchAliases.361b352d69","settingsSearchAliases.3477e22ff3","settingsSearchAliases.faf371aaf3"])} },
+  { tab: 'voice', get label() { return t("settingsSearchAliases.dff4641557") }, get aliases(){return aliasTerms(["settingsSearchAliases.698e347e64","settingsSearchAliases.c5f9d8f01e","settingsSearchAliases.386ebc0efd"])} },
   // Alerts
-  { tab: 'notifications', label: 'Sound in the open app', aliases: ['alert sound', 'notification sound', 'chime', 'beep'] },
-  { tab: 'notifications', label: 'Push in the background', aliases: ['push notifications', 'web push'] },
-  { tab: 'notifications', label: 'Quiet hours', aliases: ['do not disturb', 'dnd', 'mute'] },
+  { tab: 'notifications', get label() { return t("settingsSearchAliases.b4c963cccb") }, get aliases(){return aliasTerms(["settingsSearchAliases.52ebc736be","settingsSearchAliases.b6972688cb","settingsSearchAliases.41a68bae2c","settingsSearchAliases.d01b7ce915"])} },
+  { tab: 'notifications', get label() { return t("settingsSearchAliases.ff2e147b76") }, get aliases(){return aliasTerms(["settingsSearchAliases.29e77a40bc","settingsSearchAliases.65baf902ca"])} },
+  { tab: 'notifications', get label() { return t("settingsSearchAliases.bf0671dd69") }, get aliases(){return aliasTerms(["settingsSearchAliases.d16a08bb39","settingsSearchAliases.8b38db591e","settingsSearchAliases.a7aa1b9790"])} },
   // Remote
-  { tab: 'remote', label: 'Listen on Tailscale IPv4', aliases: ['tailscale', 'tailnet', 'lan access', 'network access'] },
-  { tab: 'remote', label: 'Connect a phone…', aliases: ['mobile access', 'qr code', 'pair phone'] },
+  { tab: 'remote', get label() { return t("settingsSearchAliases.b87f5d702f") }, get aliases(){return aliasTerms(["settingsSearchAliases.795b104abe","settingsSearchAliases.ec6f049478","settingsSearchAliases.4d8608d973","settingsSearchAliases.045ee54aae"])} },
+  { tab: 'remote', get label() { return t("settingsSearchAliases.5ea4f31d60") }, get aliases(){return aliasTerms(["settingsSearchAliases.d708cf35ec","settingsSearchAliases.f6deff0095","settingsSearchAliases.7eb686d54d"])} },
   // Maintenance
-  { tab: 'maintenance', label: 'Check for new releases', aliases: ['update', 'updates', 'auto update', 'upgrade'] },
-  { tab: 'maintenance', label: 'Reload daemon (keep sessions)', aliases: ['restart daemon', 'restart server', 'restart'] },
-  { tab: 'maintenance', label: 'Daemon log level', aliases: ['debug logging', 'verbose', 'logs'] },
-  { tab: 'maintenance', label: 'Export diagnostics', kind: 'action', aliases: ['bug report', 'support bundle'] },
-  { tab: 'maintenance', label: 'Factory reset…', aliases: ['wipe', 'erase all data', 'start over'] },
+  { tab: 'maintenance', get label() { return t("settingsSearchAliases.4a99175ce6") }, get aliases(){return aliasTerms(["settingsSearchAliases.2937013f21","settingsSearchAliases.35759b3ca7","settingsSearchAliases.f47900787f","settingsSearchAliases.7fef9479c8"])} },
+  { tab: 'maintenance', get label() { return t("settingsSearchAliases.b12a0f8d97") }, get aliases(){return aliasTerms(["settingsSearchAliases.4d791b04cb","settingsSearchAliases.d253bee345","settingsSearchAliases.3ace60b0a0"])} },
+  { tab: 'maintenance', get label() { return t("settingsSearchAliases.4c36f2b86a") }, get aliases(){return aliasTerms(["settingsSearchAliases.9153a7339a","settingsSearchAliases.fd343ae984","settingsSearchAliases.98f38f12db"])} },
+  { tab: 'maintenance', get label() { return t("settingsSearchAliases.b4205182f0") }, kind: 'action', get aliases(){return aliasTerms(["settingsSearchAliases.b3e5ea77d2","settingsSearchAliases.5a22eada1a"])} },
+  { tab: 'maintenance', get label() { return t("settingsSearchAliases.8f6bc9df7a") }, get aliases(){return aliasTerms(["settingsSearchAliases.c6f51afddd","settingsSearchAliases.3b2d4f271f","settingsSearchAliases.2d153b4ca2"])} },
 ]
 
 const targetMatches = (target: SettingsAliasTarget, entry: SettingsSearchEntry): boolean =>

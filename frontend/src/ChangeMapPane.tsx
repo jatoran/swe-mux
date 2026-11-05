@@ -1,3 +1,4 @@
+import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { mobileLayout, watchDeviceMode } from './deviceMode'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import Graph from 'graphology'
@@ -63,7 +64,7 @@ function readPalette(): RolePalette {
 type Chrome = { text: string; line: string; bg: string }
 
 function readChrome(): Chrome {
-  const fallback: Chrome = { text: '#e7eaf0', line: '#252b34', bg: '#090b0e' }
+  const fallback: Chrome = { get text() { return t("ChangeMapPane.4efefe8f8e") }, line: '#252b34', bg: '#090b0e' }
   if (typeof document === 'undefined') return fallback
   const style = getComputedStyle(document.documentElement)
   return {
@@ -163,7 +164,7 @@ export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Change
   // Undirected links, rebuilt only when the map itself changes. Both projections
   // read it: the graph's highlight through `linksRef`, and the mobile detail card's
   // neighbour list directly.
-  const links = useMemo(() => adjacency(edges), [data])
+  const links = useMemo(() => adjacency(edges), [data, uiLocale.value, catalogRevision.value])
   useEffect(() => { linksRef.current = links }, [links])
 
   /** Recompute what the reducers draw and repaint once.
@@ -238,7 +239,7 @@ export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Change
         renderLabels: true,
         renderEdgeLabels: false,
         enableEdgeEvents: false,
-        labelFont: "'Cascadia Mono',Consolas,monospace",
+        get labelFont() { return t("ChangeMapPane.ca44b6a968") },
         labelSize: 11,
         labelWeight: '400',
         labelColor: { color: chrome.text },
@@ -368,13 +369,13 @@ export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Change
   const activeScope = data?.scope || scope || 'session'
   const controls = <div class="change-map-controls">
     <label class="change-map-scope" title={SCOPE_DESCRIPTIONS[activeScope]}>
-      <span>show</span>
+      <span>{t("ChangeMapPane.1c6333509d")}</span>
       <Dropdown value={activeScope} disabled={!sid}
         onChange={value => setScope(value as ChangeMapScope)}
         options={offered.map(choice => ({ value: choice, label: SCOPE_LABELS[choice] }))}/>
     </label>
-    <label class="change-map-hops" title="How many dependency steps of blast radius to include">
-      <span>hops</span>
+    <label class="change-map-hops" title={t("ChangeMapPane.f0e59d1b38")}>
+      <span>{t("ChangeMapPane.98e037737e")}</span>
       <Dropdown value={String(hops)} disabled={!sid}
         onChange={value => setHops(clampHops(Number(value)))}
         options={HOP_CHOICES.map(choice => ({ value: String(choice), label: String(choice) }))}/>
@@ -385,16 +386,16 @@ export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Change
   // against what, because "since <sha>" is not enough to tell one worktree of
   // several apart — and that is exactly when a reader has several open.
   const measuredFrom = data
-    ? checkoutNote(data) || (data.baseline_head ? `since ${data.baseline_head.slice(0, 8)}` : 'no baseline commit')
-    : 'no baseline commit'
+    ? checkoutNote(data) || (data.baseline_head ? `since ${data.baseline_head.slice(0, 8)}` : t("ChangeMapPane.9409cdb3b6"))
+    : t("ChangeMapPane.9409cdb3b6")
   const header = <header class="change-map-header">
     <div>
-      <strong>Change Map</strong>
+      <strong>{t("ChangeMapPane.fd53359946")}</strong>
       <small>{measuredFrom}</small>
     </div>
     {onPopOut && <button type="button" class="change-map-popout"
-      title="Open this change map as a workspace tab"
-      aria-label="Open this change map as a workspace tab"
+      title={t("ChangeMapPane.f80b8cd2ac")}
+      aria-label={t("ChangeMapPane.f80b8cd2ac")}
       onClick={onPopOut}>↗</button>}
   </header>
 
@@ -403,10 +404,10 @@ export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Change
     <small>{data.lower_bound_note}</small>
   </footer>
 
-  if (!session) return <p class="drawer-empty">Focus a session to see what it changed.</p>
+  if (!session) return <p class="drawer-empty">{t("ChangeMapPane.b8d12a3662")}</p>
   if (!data) return <section class="change-map-pane">
     {header}
-    <p class="change-map-note">{error || (loading ? 'Loading change map…' : 'No change map for this session.')}</p>
+    <p class="change-map-note">{error || (loading ? t("ChangeMapPane.2e68ef774c") : t("ChangeMapPane.c9f5b67bd4"))}</p>
   </section>
 
   if (!data.available) {
@@ -417,15 +418,13 @@ export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Change
     const gated = data.disabled_reason === 'automation_disabled' && !!projectId
     return <section class="change-map-pane">
       {header}
-      {gated
-        ? <GrantGate ids={['project.codeGraph']} projectId={projectId} heading={note}
+      {gated ? <GrantGate ids={['project.codeGraph']} projectId={projectId} heading={note}
             onGranted={() => void load()}>
             <p class="change-map-off-hint">{hint}</p>
-          </GrantGate>
-        : <div class="change-map-off">
+          </GrantGate> : <div class="change-map-off">
             <p>{note}</p>
             <p class="change-map-off-hint">{hint}</p>
-            {!projectId && <p class="change-map-off-hint">This session is not attached to a registered Project.</p>}
+            {!projectId && <p class="change-map-off-hint">{t("ChangeMapPane.e2dd75066e")}</p>}
           </div>}
       {footer}
     </section>
@@ -439,28 +438,20 @@ export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Change
     <div class="change-map-off">
       {/* "Wrote nothing mappable" is a different answer from "wrote nothing", and
           a session that only touched scratch files deserves the first one. */}
-      <p>{data.empty_reason === 'excluded'
-        ? 'Every source file edited here sits outside the indexed project tree.'
-        : data.scope === 'branch'
-          ? 'This branch has not changed a source file the index covers.'
-          : data.empty_reason === 'no_edits'
-            ? 'No source edits in this session yet.'
-            : 'Nothing to map for this session yet.'}</p>
-      {excluded
-        ? <p class="change-map-off-hint">{excluded}</p>
-        : <p class="change-map-off-hint">The map fills in on the turn after this session writes a source file.</p>}
+      <p>{data.empty_reason === 'excluded' ? t("ChangeMapPane.112e763a60") : data.scope === 'branch' ? t("ChangeMapPane.6d96c50abb") : data.empty_reason === 'no_edits' ? t("ChangeMapPane.2f55cf44b5") : t("ChangeMapPane.7b9e3f61f2")}</p>
+      {excluded ? <p class="change-map-off-hint">{excluded}</p> : <p class="change-map-off-hint">{t("ChangeMapPane.813ebb3f8c")}</p>}
     </div>
     {footer}
   </section>
 
   const legend = data.scope === 'project' && data.sessions.length
-    ? <div class="change-map-legend" role="list" aria-label="Sessions">
+    ? <div class="change-map-legend" role="list" aria-label={t("ChangeMapPane.6fa3cbf451")}>
       {data.sessions.map(item => <span key={item.id} role="listitem" class="change-map-legend-item">
         <b style={{ background: graphColor(item.hue, DEFAULT_ROLE_PALETTE.seed) }} aria-hidden="true" />
         {item.name}
       </span>)}
     </div>
-    : <div class="change-map-legend" role="list" aria-label="Node roles">
+    : <div class="change-map-legend" role="list" aria-label={t("ChangeMapPane.56b7fc0397")}>
       {ROLE_ORDER.map(role => <span key={role} role="listitem" class={`change-map-legend-item role-${role}`}
         title={ROLE_DESCRIPTIONS[role]}>
         <b aria-hidden="true" />{ROLE_LABELS[role]}
@@ -481,21 +472,18 @@ export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Change
     <code>{selected.path}</code>
     <div>
       <span class={`change-map-role role-${selected.role}`}>{ROLE_LABELS[selected.role]}</span>
-      {selected.role === 'blast' && selected.hop ? <span>{selected.hop} hop{selected.hop > 1 ? 's' : ''} out</span> : null}
-      <span>{degrees[selected.path] || 0} link{(degrees[selected.path] || 0) === 1 ? '' : 's'}</span>
+      {selected.role === 'blast' && selected.hop ? <span>{rich("ChangeMapPane.7214084ef1", { hop: selected.hop, value2: (selected.hop > 1) ? 'yes' : 'no' })}</span> : null}
+      <span>{rich("ChangeMapPane.657c943e18", { value1: degrees[selected.path] || 0, value2: ((degrees[selected.path] || 0) === 1) ? 'yes' : 'no' })}</span>
     </div>
-    {!!selected.sessions?.length && <small>edited by {selected.sessions
+    {!!selected.sessions?.length && <small>{rich("ChangeMapPane.bf13025df5", { value1: selected.sessions
       .map(id => data.sessions.find(item => item.id === id)?.name || id.slice(0, 8))
-      .join(', ')}</small>}
+      .join(', ') })}</small>}
     {/* Without this, an unindexed file's empty neighbourhood reads as "nothing
         depends on it" — a conclusion, where the truth is an absence of data. */}
-    {selected.indexed === false && <small class="change-map-unindexed">
-      {UNINDEXED_MARK} not in the code index yet — new on this branch, so nothing
-      here can link to it until it lands.
-    </small>}
+    {selected.indexed === false && <small class="change-map-unindexed">{rich("ChangeMapPane.0729c8ab6f", { UNINDEXED_MARK: UNINDEXED_MARK })}</small>}
     {/* The graph draws this; a list cannot, so the neighbours are spelled out where
         there is no picture to read them from. */}
-    {!!neighbors.length && <ul class="change-map-neighbors" aria-label="Linked files">
+    {!!neighbors.length && <ul class="change-map-neighbors" aria-label={t("ChangeMapPane.8194497d03")}>
       {neighbors.map(node => <li key={node.path}>
         <button type="button" class={`change-map-role role-${node.role}`}
           onClick={() => setSelectedPath(node.path)}>
@@ -507,11 +495,9 @@ export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Change
     <div class="change-map-detail-actions">
       {onOpenFile && <button type="button" class="change-map-open"
         disabled={!selected.display_path}
-        title={selected.display_path
-          ? `Open ${selected.display_path} as a workspace tab`
-          : 'This file no longer exists in the checkout'}
-        onClick={() => openFile(selected)}>open file</button>}
-      <button type="button" onClick={() => setSelectedPath(null)}>clear</button>
+        title={selected.display_path ? t("ChangeMapPane.997ab6e978", { display_path: selected.display_path }) : t("ChangeMapPane.d81992144c")}
+        onClick={() => openFile(selected)}>{t("ChangeMapPane.97e9c6a77e")}</button>}
+      <button type="button" onClick={() => setSelectedPath(null)}>{t("ChangeMapPane.913a4cb91b")}</button>
     </div>
   </div>
 
@@ -533,10 +519,10 @@ export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Change
     </div>
     : <div class="change-map-stage">
       <div class="change-map-canvas" ref={containerRef} role="img"
-        aria-label={`Change map: ${nodes.length} files, ${edges.length} dependencies`} />
+        aria-label={t("ChangeMapPane.dff2a69b88", { length: nodes.length, value2: edges.length })} />
       {(loading || layoutPending) && <div class="change-map-busy" role="status">
         <span class="change-map-spinner" aria-hidden="true" />
-        <span>{loading ? 'Loading change map…' : `Laying out ${nodes.length} nodes…`}</span>
+        <span>{loading ? t("ChangeMapPane.2e68ef774c") : t("ChangeMapPane.dec59fd396", { length: nodes.length })}</span>
       </div>}
     </div>
 
@@ -547,20 +533,12 @@ export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Change
   // know you changed — is a puzzle.
   const unindexed = unindexedNote(unindexedCount(nodes))
   const status = <div class="change-map-status">
-    {data.truncated && data.totals && <small class="change-map-truncated">
-      Showing {data.totals.shown} of {data.totals.blast + data.totals.context + nodes.filter(n => n.role === 'seed').length} reachable files — blast radius capped for legibility.
-    </small>}
-    {data.checkout?.truncated && <small class="change-map-truncated">
-      This branch changes more files than the map will seed — showing the first of them.
-    </small>}
-    {data.scope_fallback === 'no_comparison_base' && <small class="change-map-truncated">
-      This checkout has no comparison base, so the branch view is unavailable — showing this session's own edits.
-    </small>}
+    {data.truncated && data.totals && <small class="change-map-truncated">{rich("ChangeMapPane.ce6f48a8a1", { shown: data.totals.shown, value2: data.totals.blast + data.totals.context + nodes.filter(n => n.role === 'seed').length })}</small>}
+    {data.checkout?.truncated && <small class="change-map-truncated">{t("ChangeMapPane.547b202278")}</small>}
+    {data.scope_fallback === 'no_comparison_base' && <small class="change-map-truncated">{t("ChangeMapPane.804c381667")}</small>}
     {!!excluded && <small class="change-map-note-inline">{excluded}</small>}
     {!!unindexed && <small class="change-map-note-inline">{unindexed}</small>}
-    {!mobile && nodes.length > 0 && edges.length === 0 && <small class="change-map-note-inline">
-      No dependency links found for these files. Nothing in the indexed project tree imports or calls them yet.
-    </small>}
+    {!mobile && nodes.length > 0 && edges.length === 0 && <small class="change-map-note-inline">{t("ChangeMapPane.9ea5de9166")}</small>}
   </div>
 
   return <section class="change-map-pane">
@@ -569,7 +547,7 @@ export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Change
     {legend}
     {status}
     {error && <p class="usage-error">{error}</p>}
-    {renderError && <p class="usage-error">The graph could not be drawn: {renderError}</p>}
+    {renderError && <p class="usage-error">{rich("ChangeMapPane.82c1b8c331", { renderError: renderError })}</p>}
     {body}
     {detail}
     {footer}

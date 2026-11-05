@@ -9,26 +9,28 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tests.support.frontend_source import localized_source, source_contains
+
 ROOT = Path(__file__).parents[1] / "frontend" / "src"
 
 
 def test_the_queue_tab_exposes_the_bounded_conversation_policy_and_its_state() -> None:
-    pane = (ROOT / "QueuePane.tsx").read_text(encoding="utf-8")
+    pane = localized_source((ROOT / "QueuePane.tsx").read_text(encoding="utf-8"))
 
-    assert "auto-deliver armed messages" in pane
-    assert "accept agent messages armed" in pane
+    assert source_contains(pane, "auto-deliver armed messages")
+    assert source_contains(pane, "accept agent messages armed")
     # The strip must show the bounds, not just an on/off: sends left, time
     # left, and why it is off when it is.
-    assert "send${row.sends_remaining === 1 ? '' : 's'} left" in pane
-    assert "${minutes} min left" in pane
-    assert "quiet hours — paused" in pane
-    assert "paused (emergency stop)" in pane
+    assert source_contains(pane, "send${row.sends_remaining === 1 ? '' : 's'} left")
+    assert source_contains(pane, "${minutes} min left")
+    assert source_contains(pane, "quiet hours — paused")
+    assert source_contains(pane, "paused (emergency stop)")
     # The conversation policy cannot be changed while the install master is off.
-    assert "disabled={busyId === 'auto' || !auto?.master_enabled}" in pane
+    assert source_contains(pane, "disabled={busyId === 'auto' || !auto?.master_enabled}")
 
 
 def test_a_lapse_is_explained_where_the_reader_is_already_asking_why() -> None:
-    """"Lapsed while the conversation was idle" is true and unactionable alone.
+    """ "Lapsed while the conversation was idle" is true and unactionable alone.
 
     The strip is where somebody looks when a message has not moved, so it
     carries the numbers behind the lapse — how long the conversation was idle,
@@ -36,23 +38,25 @@ def test_a_lapse_is_explained_where_the_reader_is_already_asking_why() -> None:
     the bound itself. The window is a *value* rather than a switch, so per
     `setting-links.md` that is a link and never a grant.
     """
-    pane = (ROOT / "QueuePane.tsx").read_text(encoding="utf-8")
+    pane = localized_source((ROOT / "QueuePane.tsx").read_text(encoding="utf-8"))
 
-    assert "describeLapse" in pane
-    assert "idle ${Math.round(lapse.idle_seconds / 60)} min" in pane
-    assert "${lapse.pending} waiting" in pane
-    assert 'target="queue.grantWindow"' in pane
+    assert source_contains(pane, "describeLapse")
+    assert source_contains(pane, "idle ${Math.round(lapse.idle_seconds / 60)} min")
+    assert source_contains(pane, "${lapse.pending} waiting")
+    assert source_contains(pane, 'target="queue.grantWindow"')
     # A grant held open by a live exchange says so, because otherwise it is
     # indistinguishable from one that was simply granted a moment ago.
-    assert "'reply window open'" in pane
-    assert "is owed a reply" in pane
+    assert source_contains(pane, "'reply window open'")
+    assert source_contains(pane, "is owed a reply")
 
 
 def test_settings_explain_that_agent_conversations_default_on() -> None:
-    settings = (ROOT / "Settings.tsx").read_text(encoding="utf-8")
+    settings = localized_source((ROOT / "Settings.tsx").read_text(encoding="utf-8"))
 
-    assert "New observed agent conversations start enabled with these bounds" in settings
-    assert "Allow auto-delivery for agent conversations" in settings
+    assert source_contains(
+        settings, "New observed agent conversations start enabled with these bounds"
+    )
+    assert source_contains(settings, "Allow auto-delivery for agent conversations")
 
 
 def test_the_two_grant_windows_are_editable_and_marked_for_deep_links() -> None:
@@ -63,101 +67,103 @@ def test_the_two_grant_windows_are_editable_and_marked_for_deep_links() -> None:
     it, and its prose has to say what it does *not* widen — otherwise "keeps its
     grant while awaiting a reply" reads as a second delivery path.
     """
-    settings = (ROOT / "Settings.tsx").read_text(encoding="utf-8")
+    settings = localized_source((ROOT / "Settings.tsx").read_text(encoding="utf-8"))
 
-    assert 'data-setting="auto_delivery_session_ttl_minutes"' in settings
-    assert 'data-setting="auto_delivery_reply_window_minutes"' in settings
-    assert "Minutes a session keeps its grant while awaiting a reply" in settings
-    assert "Extends only the current request-response exchange" in settings
-    assert "Set 0 to disable." in settings
+    assert source_contains(settings, 'data-setting="auto_delivery_session_ttl_minutes"')
+    assert source_contains(settings, 'data-setting="auto_delivery_reply_window_minutes"')
+    assert source_contains(settings, "Minutes a session keeps its grant while awaiting a reply")
+    assert source_contains(settings, "Extends only the current request-response exchange")
+    assert source_contains(settings, "Set 0 to disable.")
 
 
 def test_scheduling_is_a_property_of_the_queued_item() -> None:
-    pane = (ROOT / "QueuePane.tsx").read_text(encoding="utf-8")
-    api = (ROOT / "queueApi.ts").read_text(encoding="utf-8")
+    pane = localized_source((ROOT / "QueuePane.tsx").read_text(encoding="utf-8"))
+    api = localized_source((ROOT / "queueApi.ts").read_text(encoding="utf-8"))
 
-    assert "scheduleQueueMessage" in pane
-    assert "Clear schedule" in pane
+    assert source_contains(pane, "scheduleQueueMessage")
+    assert source_contains(pane, "Clear schedule")
     # Stamped on the daemon's clock, because the daemon is what waits on it: a
     # browser out of step would release the message early or hold it late.
-    assert "not_before: serverNow() + preset.seconds" in pane
-    assert "Date.now()" not in pane
+    assert source_contains(pane, "not_before: serverNow() + preset.seconds")
+    assert not source_contains(pane, "Date.now()")
     # No browser timer anywhere in the send path.
-    assert "setTimeout" not in pane
-    assert "a browser timer dies with the tab" in api
+    assert not source_contains(pane, "setTimeout")
+    assert source_contains(api, "a browser timer dies with the tab")
 
 
 def test_the_emergency_controls_need_nothing_opened_to_reach() -> None:
     """A brake reachable only by opening an overlay is a brake you cannot reach in the
     moment you want it. The install-wide stop lives on the one queue surface that
     delivers, and on a command that needs nothing open at all."""
-    pane = (ROOT / "QueuePane.tsx").read_text(encoding="utf-8")
-    app = (ROOT / "App.tsx").read_text(encoding="utf-8")
+    pane = localized_source((ROOT / "QueuePane.tsx").read_text(encoding="utf-8"))
+    app = localized_source((ROOT / "App.tsx").read_text(encoding="utf-8"))
 
-    assert "pause all auto-delivery" in pane
-    assert "report unsafe delivery" in pane
-    assert "Stops every automatic delivery immediately, on every session" in pane
-    assert "autodelivery.pause" in app
-    assert "Pause all auto-delivery (install-wide)" in app
-    assert "Resume auto-delivery (install-wide)" in app
+    assert source_contains(pane, "pause all auto-delivery")
+    assert source_contains(pane, "report unsafe delivery")
+    assert source_contains(pane, "Stops every automatic delivery immediately, on every session")
+    assert source_contains(app, "autodelivery.pause")
+    assert source_contains(app, "Pause all auto-delivery (install-wide)")
+    assert source_contains(app, "Resume auto-delivery (install-wide)")
     # The status line and the stop behind it survive an empty target: the install-wide
     # state is true with no session focused, and it is the state that makes every
     # per-session reading a lie when it is off.
-    assert "if (!sessionId) return 'armed for this install'" in pane
+    assert source_contains(pane, "if (!sessionId) return 'armed for this install'")
 
 
 def test_the_fleet_queue_reports_the_delivery_state_and_never_owns_it() -> None:
     """It is a review surface. Nothing in it delivers, and nothing in it is a brake."""
-    fleet = (ROOT / "FleetQueue.tsx").read_text(encoding="utf-8")
-    pane = (ROOT / "QueuePane.tsx").read_text(encoding="utf-8")
+    fleet = localized_source((ROOT / "FleetQueue.tsx").read_text(encoding="utf-8"))
+    pane = localized_source((ROOT / "QueuePane.tsx").read_text(encoding="utf-8"))
 
-    assert "sendQueueMessage" not in fleet
-    assert "Send now" not in fleet
-    assert "setAutoPaused" not in fleet
-    assert "reportUnsafeDelivery" not in fleet
-    assert "paused (emergency stop)" in fleet
-    assert "Revoke" in fleet
+    assert not source_contains(fleet, "sendQueueMessage")
+    assert not source_contains(fleet, "Send now")
+    assert not source_contains(fleet, "setAutoPaused")
+    assert not source_contains(fleet, "reportUnsafeDelivery")
+    assert source_contains(fleet, "paused (emergency stop)")
+    assert source_contains(fleet, "Revoke")
     # Proving-period numbers stay visible in both places an operator reviews deliveries.
-    assert "{promotion.proving_days}/{promotion.required_days} days" in fleet
-    assert "{auto.promotion.proving_days}/{auto.promotion.required_days} days" in pane
+    assert source_contains(fleet, "{promotion.proving_days}/{promotion.required_days} days")
+    assert source_contains(
+        pane, "{auto.promotion.proving_days}/{auto.promotion.required_days} days"
+    )
 
 
 def test_the_session_queue_and_the_fleet_queue_have_non_overlapping_scopes() -> None:
-    queue = (ROOT / "QueuePane.tsx").read_text(encoding="utf-8")
-    fleet = (ROOT / "FleetQueue.tsx").read_text(encoding="utf-8")
-    api = (ROOT / "queueApi.ts").read_text(encoding="utf-8")
-    tabs = (ROOT / "drawerTabs.ts").read_text(encoding="utf-8")
+    queue = localized_source((ROOT / "QueuePane.tsx").read_text(encoding="utf-8"))
+    fleet = localized_source((ROOT / "FleetQueue.tsx").read_text(encoding="utf-8"))
+    api = localized_source((ROOT / "queueApi.ts").read_text(encoding="utf-8"))
+    tabs = localized_source((ROOT / "drawerTabs.ts").read_text(encoding="utf-8"))
 
-    assert "fetchFleetQueue" not in queue
-    assert "inbox" not in queue
-    assert "outbox" not in queue
-    assert "agents + automation" in fleet
-    assert "human" in fleet
-    assert "Project" in fleet
-    assert "Session" in fleet
-    assert "project_id" in api
-    assert "target_session_id" in api
+    assert not source_contains(queue, "fetchFleetQueue")
+    assert not source_contains(queue, "inbox")
+    assert not source_contains(queue, "outbox")
+    assert source_contains(fleet, "agents + automation")
+    assert source_contains(fleet, "human")
+    assert source_contains(fleet, "Project")
+    assert source_contains(fleet, "Session")
+    assert source_contains(api, "project_id")
+    assert source_contains(api, "target_session_id")
     # Queue keeps the docked column, because deciding to send needs the terminal beside
     # it. The fleet view has no send button, so it is a modal and not a tab at all.
-    assert "id: 'queue'" in tabs and "scope: 'session'" in tabs
-    assert "id: 'mailbox'" not in tabs
-    assert 'role="dialog"' in fleet
-    assert "useModalFocus" in fleet
+    assert source_contains(tabs, "id: 'queue'") and source_contains(tabs, "scope: 'session'")
+    assert not source_contains(tabs, "id: 'mailbox'")
+    assert source_contains(fleet, 'role="dialog"')
+    assert source_contains(fleet, "useModalFocus")
 
 
 def test_a_drafted_spawn_request_is_approved_by_a_human_in_the_fleet_queue() -> None:
-    fleet = (ROOT / "FleetQueue.tsx").read_text(encoding="utf-8")
-    api = (ROOT / "queueApi.ts").read_text(encoding="utf-8")
-    app = (ROOT / "App.tsx").read_text(encoding="utf-8")
+    fleet = localized_source((ROOT / "FleetQueue.tsx").read_text(encoding="utf-8"))
+    api = localized_source((ROOT / "queueApi.ts").read_text(encoding="utf-8"))
+    app = localized_source((ROOT / "App.tsx").read_text(encoding="utf-8"))
 
-    assert "spawn request" in fleet
-    assert "Approve and start session" in fleet
-    assert "Dismiss" in fleet
-    assert "decideSpawnRequest" in fleet
-    assert "/decide" in api
-    assert "Nothing was started" in fleet
-    assert "observations.open" not in app
-    assert "<Observations" not in app
+    assert source_contains(fleet, "spawn request")
+    assert source_contains(fleet, "Approve and start session")
+    assert source_contains(fleet, "Dismiss")
+    assert source_contains(fleet, "decideSpawnRequest")
+    assert source_contains(api, "/decide")
+    assert source_contains(fleet, "Nothing was started")
+    assert not source_contains(app, "observations.open")
+    assert not source_contains(app, "<Observations")
 
 
 def test_the_fleet_queue_is_reachable_from_any_device() -> None:
@@ -165,31 +171,31 @@ def test_the_fleet_queue_is_reachable_from_any_device() -> None:
     anything waiting anywhere", and the Queue tab's control answers "what else is staged
     while I look at this one" — the same watch-here/act-there pair Processes has with the
     process fleet."""
-    app = (ROOT / "App.tsx").read_text(encoding="utf-8")
-    drawer = (ROOT / "UtilityDrawer.tsx").read_text(encoding="utf-8")
-    pane = (ROOT / "QueuePane.tsx").read_text(encoding="utf-8")
+    app = localized_source((ROOT / "App.tsx").read_text(encoding="utf-8"))
+    drawer = localized_source((ROOT / "UtilityDrawer.tsx").read_text(encoding="utf-8"))
+    pane = localized_source((ROOT / "QueuePane.tsx").read_text(encoding="utf-8"))
 
-    assert "queue.fleet" in app
-    assert "Fleet queue" in app
-    assert "<FleetQueue" in app
-    assert "onOpenFleetQueue" in drawer
-    assert "onOpenFleetQueue" in pane
+    assert source_contains(app, "queue.fleet")
+    assert source_contains(app, "Fleet queue")
+    assert source_contains(app, "<FleetQueue")
+    assert source_contains(drawer, "onOpenFleetQueue")
+    assert source_contains(pane, "onOpenFleetQueue")
 
 
 def test_the_queue_is_a_drawer_tab_and_the_pane_leaf_is_only_a_pop_out() -> None:
     """The placement itself, pinned: a queue that replaces or covers its terminal cannot
     show the state the decision to send is made from."""
-    tabs = (ROOT / "drawerTabs.ts").read_text(encoding="utf-8")
-    drawer = (ROOT / "UtilityDrawer.tsx").read_text(encoding="utf-8")
-    app = (ROOT / "App.tsx").read_text(encoding="utf-8")
+    tabs = localized_source((ROOT / "drawerTabs.ts").read_text(encoding="utf-8"))
+    drawer = localized_source((ROOT / "UtilityDrawer.tsx").read_text(encoding="utf-8"))
+    app = localized_source((ROOT / "App.tsx").read_text(encoding="utf-8"))
 
-    assert "id: 'queue'" in tabs
-    assert "scope: 'session'" in tabs
-    assert "<QueuePane" in drawer
+    assert source_contains(tabs, "id: 'queue'")
+    assert source_contains(tabs, "scope: 'session'")
+    assert source_contains(drawer, "<QueuePane")
     # The chip focuses its session before opening the panel: the tab follows focus, so a
     # chip clicked on an unfocused pane would otherwise show another agent's queue.
-    assert "if (session) await selectSession(session)" in app
-    assert "openDrawerTab('queue',session?.project_id||projectId)" in app
+    assert source_contains(app, "if (session) await selectSession(session)")
+    assert source_contains(app, "openDrawerTab('queue',session?.project_id||projectId)")
     # Exactly one place still builds the leaf, and it is the explicit pop-out.
     assert app.count("resourceLeaf('queue'") == 1
-    assert "onQueueOpenAsTab" in app
+    assert source_contains(app, "onQueueOpenAsTab")

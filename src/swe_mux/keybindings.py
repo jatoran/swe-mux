@@ -40,6 +40,7 @@ from .keychords import (
     normalize_sequence,
     sequence_warnings,
 )
+from .ui_messages import ui_message
 
 KEYBINDINGS_FILE_VERSION = 3
 
@@ -301,8 +302,7 @@ KEYBINDING_COMMANDS: tuple[tuple[str, str, str], ...] = (
         for index in range(1, 10)
     ),
     *tuple(
-        (f"tab.activate({index})", f"Focus workspace tab {index}", "pane")
-        for index in range(1, 10)
+        (f"tab.activate({index})", f"Focus workspace tab {index}", "pane") for index in range(1, 10)
     ),
 )
 
@@ -394,13 +394,13 @@ def normalize_when(expression: object) -> str:
         return ""
     terms = [term.strip() for term in raw.split("&&")]
     if any(not term for term in terms):
-        raise ValueError("empty term in a when clause")
+        raise ValueError(ui_message("keybindings.90c7312324"))
     for term in terms:
         if not _WHEN_TERM.fullmatch(term):
-            raise ValueError(f"malformed when term {term!r}")
+            raise ValueError(ui_message("keybindings.42759d06f2", value1=repr(term)))
         flag = term[1:] if term.startswith("!") else term
         if flag not in WHEN_FLAGS:
-            raise ValueError(f"unknown when flag {flag!r}")
+            raise ValueError(ui_message("keybindings.079f39660a", value1=repr(flag)))
     return " && ".join(terms)
 
 
@@ -439,23 +439,23 @@ class Rule:
 def normalize_rule(raw: object) -> Rule:
     """One validated rule, or ValueError. `command: ""` is a legal erasure."""
     if not isinstance(raw, dict):
-        raise ValueError("a binding rule must be an object")
+        raise ValueError(ui_message("keybindings.718410f78e"))
     keys = normalize_sequence(raw.get("keys", ""))
     command = str(raw.get("command", ""))
     if command:
         command = migrate_command(command)
         if not is_command(command):
-            raise ValueError(f"unknown command id {command!r}")
+            raise ValueError(ui_message("keybindings.51216fb7c3", value1=repr(command)))
     host = raw.get("host") or None
     if host is not None:
         host = str(host)
         if host not in HOSTS:
-            raise ValueError(f"unknown host {host!r}")
+            raise ValueError(ui_message("keybindings.0817254d33", value1=repr(host)))
     platform = raw.get("platform") or None
     if platform is not None:
         platform = str(platform)
         if platform not in PLATFORMS:
-            raise ValueError(f"unknown platform {platform!r}")
+            raise ValueError(ui_message("keybindings.cccf6ad3d0", value1=repr(platform)))
     return Rule(
         keys=keys,
         command=command,
@@ -559,8 +559,7 @@ def resolve(
                         {
                             "severity": "blocked",
                             "scope": "sequence",
-                            "message": "another binding continues from this chord, "
-                            "so it arms the next keystroke instead of firing",
+                            "message": ui_message("keybindings.b2de4e4fcf"),
                         }
                     ],
                 }
@@ -576,13 +575,13 @@ def parse_document(raw: object) -> tuple[str, list[Rule], dict[str, str]]:
     reader is the Settings panel, which needs to say what it ignored.
     """
     if not isinstance(raw, dict):
-        raise ValueError("keybindings.json must contain an object")
+        raise ValueError(ui_message("keybindings.73306f5eed"))
     preset = str(raw.get("preset") or "")
     entries = raw.get("rules")
     if entries is None:
         entries = []
     if not isinstance(entries, list):
-        raise ValueError("keybindings.json `rules` must be a list")
+        raise ValueError(ui_message("keybindings.113eda3c51"))
     rules: list[Rule] = []
     rejected: dict[str, str] = {}
     for index, entry in enumerate(entries):

@@ -11,6 +11,7 @@ from .. import (
 )
 from ..http_support import json_response
 from ..meta_hooks import MetaHookEngine
+from ..ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ async def push_unsubscribe(request: web.Request) -> web.Response:
     body = await request.json()
     endpoint = str(body.get("endpoint") or "")
     if not endpoint:
-        raise ValueError("endpoint is required")
+        raise ValueError(ui_message("push.69d45e9853"))
     request.app[keys.PUSH_STORE].remove(endpoint)
     return json_response({"ok": True})
 
@@ -39,7 +40,7 @@ async def push_presence(request: web.Request) -> web.Response:
     body = await request.json()
     endpoint = str(body.get("endpoint") or "")
     if not endpoint:
-        raise ValueError("endpoint is required")
+        raise ValueError(ui_message("push.69d45e9853"))
     ttl = body.get("ttl")
     request.app[keys.PUSH_STORE].set_presence(
         endpoint, bool(body.get("focused")), float(ttl) if isinstance(ttl, (int, float)) else 90.0

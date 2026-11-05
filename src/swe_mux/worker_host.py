@@ -52,6 +52,7 @@ from .framed_ipc import (
 from .process_reaper import ProcessReaper, create_reaper
 from .spawn_contract import scrub_claude_session_markers
 from .subprocess_flags import background_creation_flags
+from .ui_messages import ui_message
 from .worker import WORKER_PROTOCOL, WORKER_ROLE
 
 log = logging.getLogger(__name__)
@@ -375,9 +376,7 @@ class WorkerHost:
             )
             if connected not in done:
                 if exited in done:
-                    raise RuntimeError(
-                        f"the worker exited with code {exited.result()} before its hello"
-                    )
+                    raise RuntimeError(ui_message("worker_host.2c3a0af7ed", value1=exited.result()))
                 raise TimeoutError(f"the worker sent no hello within {self._ready_timeout:g}s")
             peer = connected.result()
             for hook in tuple(self._ready_hooks):
@@ -539,7 +538,7 @@ class WorkerHost:
         connected = self._connected
         if connected is None or connected.done():
             # The incarnation gave up on this one between its hello and here.
-            raise RuntimeError("no incarnation is waiting for a worker")
+            raise RuntimeError(ui_message("worker_host.04a60b0334"))
         self._peer = peer
         self.generation += 1
         # The worker's own pid, which is the spawned one's child under a Windows

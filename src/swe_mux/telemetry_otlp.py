@@ -19,6 +19,7 @@ from typing import Any
 
 from .harness import HARNESSES, NativeTelemetry
 from .models import MuxEvent
+from .ui_messages import ui_message
 
 PARSER_VERSION = "otlp-json-v2"
 
@@ -410,9 +411,7 @@ def _invocation_layer(backend: str, call_id: str | None) -> str | None:
     return None
 
 
-def _tool_result(
-    ts: float, session_id: str, backend: str, attributes: dict[str, Any]
-) -> MuxEvent:
+def _tool_result(ts: float, session_id: str, backend: str, attributes: dict[str, Any]) -> MuxEvent:
     common = _common(attributes, backend)
     call_id = _first_text(attributes, "tool_use_id", "call_id")
     truncated = _boolean(attributes.get("output_truncated"))
@@ -551,9 +550,7 @@ def _sandbox_outcome(
     )
 
 
-def _skill(
-    ts: float, session_id: str, backend: str, attributes: dict[str, Any]
-) -> MuxEvent | None:
+def _skill(ts: float, session_id: str, backend: str, attributes: dict[str, Any]) -> MuxEvent | None:
     skill = _first_text(attributes, "skill.name", "skill_name")
     if skill is None:
         return None
@@ -566,9 +563,7 @@ def _skill(
             **_common(attributes, backend),
             "skill": skill,
             "invocation_id": _text(attributes.get("invocation_id")),
-            "invocation_trigger": _first_text(
-                attributes, "invocation_trigger", "invocation_type"
-            ),
+            "invocation_trigger": _first_text(attributes, "invocation_trigger", "invocation_type"),
             "skill_source": _text(attributes.get("skill.source")),
             "skill_scope": _text(attributes.get("skill_scope")),
             "plugin_id": _first_text(attributes, "plugin.name", "plugin_id"),
@@ -577,9 +572,7 @@ def _skill(
     )
 
 
-def _compaction(
-    ts: float, session_id: str, backend: str, attributes: dict[str, Any]
-) -> MuxEvent:
+def _compaction(ts: float, session_id: str, backend: str, attributes: dict[str, Any]) -> MuxEvent:
     return _event(
         ts,
         session_id,
@@ -598,9 +591,7 @@ def _compaction(
     )
 
 
-def _subagent(
-    ts: float, session_id: str, backend: str, attributes: dict[str, Any]
-) -> MuxEvent:
+def _subagent(ts: float, session_id: str, backend: str, attributes: dict[str, Any]) -> MuxEvent:
     return _event(
         ts,
         session_id,
@@ -663,9 +654,7 @@ def _api_request(
     )
 
 
-def _api_error(
-    ts: float, session_id: str, backend: str, attributes: dict[str, Any]
-) -> MuxEvent:
+def _api_error(ts: float, session_id: str, backend: str, attributes: dict[str, Any]) -> MuxEvent:
     error = attributes.get("error")
     error_text = error if isinstance(error, str) else (json.dumps(error) if error else None)
     return _event(
@@ -729,8 +718,7 @@ def _websocket_request(
             **_common(attributes, backend),
             "success": False,
             "duration_ms": _number(attributes.get("duration_ms")),
-            "error_type": _first_text(attributes, "error_type", "error.type")
-            or "websocket_error",
+            "error_type": _first_text(attributes, "error_type", "error.type") or "websocket_error",
         },
     )
 
@@ -774,10 +762,10 @@ def otlp_log_reduction(payload: Any, *, session_id: str, backend: str) -> OtlpRe
     """Reduce OTLP logs to safe canonical observations and discard raw content."""
 
     if not isinstance(payload, dict):
-        raise ValueError("OTLP payload must be an object")
+        raise ValueError(ui_message("telemetry_otlp.f665f083e2"))
     resources = payload.get("resourceLogs")
     if not isinstance(resources, list):
-        raise ValueError("OTLP payload must contain resourceLogs")
+        raise ValueError(ui_message("telemetry_otlp.856449f1a0"))
     reduction = OtlpReduction()
     for resource in resources:
         if not isinstance(resource, dict):
@@ -928,10 +916,10 @@ def otlp_metric_reduction(payload: Any, *, session_id: str, backend: str) -> Otl
     """
 
     if not isinstance(payload, dict):
-        raise ValueError("OTLP payload must be an object")
+        raise ValueError(ui_message("telemetry_otlp.f665f083e2"))
     resources = payload.get("resourceMetrics")
     if not isinstance(resources, list):
-        raise ValueError("OTLP payload must contain resourceMetrics")
+        raise ValueError(ui_message("telemetry_otlp.ca271f359c"))
     reduction = OtlpReduction()
     for resource in resources:
         if not isinstance(resource, dict):
@@ -960,9 +948,7 @@ def otlp_metric_reduction(payload: Any, *, session_id: str, backend: str) -> Otl
                 if not isinstance(aggregate, dict):
                     continue
                 temporality = (
-                    "cumulative"
-                    if str(aggregate.get("aggregationTemporality")) == "2"
-                    else "delta"
+                    "cumulative" if str(aggregate.get("aggregationTemporality")) == "2" else "delta"
                 )
                 points = aggregate.get("dataPoints")
                 for point in points if isinstance(points, list) else []:
@@ -1025,7 +1011,7 @@ def otlp_reduction(payload: Any, *, session_id: str, backend: str) -> OtlpReduct
         return otlp_log_reduction(payload, session_id=session_id, backend=backend)
     if isinstance(payload, dict) and "resourceMetrics" in payload:
         return otlp_metric_reduction(payload, session_id=session_id, backend=backend)
-    raise ValueError("OTLP payload must contain resourceLogs or resourceMetrics")
+    raise ValueError(ui_message("telemetry_otlp.2dc82f5fba"))
 
 
 def otlp_events(payload: Any, *, session_id: str, backend: str) -> list[MuxEvent]:

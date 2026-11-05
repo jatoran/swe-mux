@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // Sticky Ctrl / Alt / Shift for the command rail.
 //
 // One chip per modifier, and the phone-keyboard shift model rather than a chord: tap to
@@ -20,15 +21,15 @@ export type RailModifier = 'ctrl' | 'alt' | 'shift'
 export const RAIL_MODIFIERS: readonly RailModifier[] = ['ctrl', 'alt', 'shift']
 
 export const RAIL_MODIFIER_LABELS: Readonly<Record<RailModifier, string>> = {
-  ctrl: 'Ctrl',
-  alt: 'Alt',
-  shift: 'Shift',
+  get ctrl() { return t("railModifiers.e2ee2909fe") },
+  get alt() { return t("railModifiers.c91da2e020") },
+  get shift() { return t("railModifiers.2e544a292f") },
 }
 
 /** Catalog id of the chip that works each modifier, and the reverse lookup. */
 export const RAIL_MODIFIER_ITEM_IDS: Readonly<Record<RailModifier, string>> = {
   ctrl: 'modCtrl',
-  alt: 'modAlt',
+  get alt() { return t("railModifiers.3c95e6b37b") },
   shift: 'modShift',
 }
 

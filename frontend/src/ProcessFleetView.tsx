@@ -1,3 +1,4 @@
+import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useEffect, useMemo, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
 import { api } from './api'
@@ -85,9 +86,7 @@ export function ProcessFleetView({
   // it enumerates by the time the first read runs.
   useEffect(() => { setFleetSessions(sessions) }, [sessions])
   const request = useMemo(
-    () => ({ sessionId: selectedSessionId, includeEnded }),
-    [selectedSessionId, includeEnded],
-  )
+    () => ({ sessionId: selectedSessionId, includeEnded }), [selectedSessionId, includeEnded, uiLocale.value, catalogRevision.value])
   useEffect(() => subscribeFleet(request, result => {
     setSnapshot(result.snapshot)
     setRegistered(result.previews)
@@ -100,13 +99,9 @@ export function ProcessFleetView({
   }, [confirm])
 
   const sessionGroups = useMemo(
-    () => scopedSessionGroups(snapshot, sessions, projectScope, selectedSessionId),
-    [snapshot, sessions, projectScope, selectedSessionId],
-  )
+    () => scopedSessionGroups(snapshot, sessions, projectScope, selectedSessionId), [snapshot, sessions, projectScope, selectedSessionId, uiLocale.value, catalogRevision.value])
   const projectProcessGroups = useMemo(
-    () => buildProjectGroups(sessionGroups, sessions, projects, focusedSessionId),
-    [sessionGroups, sessions, projects, focusedSessionId],
-  )
+    () => buildProjectGroups(sessionGroups, sessions, projects, focusedSessionId), [sessionGroups, sessions, projects, focusedSessionId, uiLocale.value, catalogRevision.value])
   const scoped = !!projectScope || !!selectedSessionId
   const totals = fleetViewTotals(snapshot, sessionGroups, scoped)
   const ownershipDiagnostics = (snapshot?.ownership_diagnostics || []).slice(-10).reverse()
@@ -156,7 +151,7 @@ export function ProcessFleetView({
       return <li class={`${process.exited_at ? 'ended ' : ''}evidence-${state}${open ? ' open' : ''}`} key={key}>
         <button class="process-row" aria-expanded={open} title={process.command || undefined} onClick={() => toggleExpanded(key)}>
           <i class="process-caret" aria-hidden="true"/>
-          <i class={`process-state-dot ${state}`} title={`evidence ${state.replace('_', ' ')}`}/>
+          <i class={`process-state-dot ${state}`} title={t("ProcessFleetView.ca5217646f", { value1: state.replace('_', ' ') })}/>
           <strong>{process.executable}</strong>
           <span class="process-pid">{process.pid}</span>
           <span class="process-args">{commandTail(process)}</span>
@@ -166,7 +161,7 @@ export function ProcessFleetView({
         </button>
         {open && <div class="process-detail">
           <dl>{processDetails(process).map(detail => <div key={detail.label}><dt>{detail.label}</dt><dd>{detail.value}</dd></div>)}</dl>
-          <div class="process-actions"><button onClick={() => void navigator.clipboard.writeText(String(process.pid))}>Copy PID</button><button onClick={() => void navigator.clipboard.writeText(process.command || String(process.pid))}>Copy command</button><button disabled={!!process.exited_at} title="Re-checks PID, creation time, and ownership before acting" onClick={() => void act(group.session_id, process, 'interrupt')}>Interrupt</button><button disabled={!!process.exited_at} title="Re-checks the durable process fingerprint before acting" class={confirm === terminateKey ? 'confirming' : ''} onClick={() => void act(group.session_id, process, 'terminate')}>{confirm === terminateKey ? '✓' : 'Terminate'}</button><button disabled={!!process.exited_at} title="Re-checks this process and every attributable child before acting" class={confirm === treeKey ? 'confirming' : ''} onClick={() => void act(group.session_id, process, 'terminate_tree')}>{confirm === treeKey ? '✓' : 'Terminate tree'}</button></div>
+          <div class="process-actions"><button onClick={() => void navigator.clipboard.writeText(String(process.pid))}>{t("ProcessFleetView.175c2e931a")}</button><button onClick={() => void navigator.clipboard.writeText(process.command || String(process.pid))}>{t("ProcessFleetView.9a01feecae")}</button><button disabled={!!process.exited_at} title={t("ProcessFleetView.e6baa7a529")} onClick={() => void act(group.session_id, process, 'interrupt')}>{t("ProcessFleetView.b625231412")}</button><button disabled={!!process.exited_at} title={t("ProcessFleetView.c2f7a58854")} class={confirm === terminateKey ? 'confirming' : ''} onClick={() => void act(group.session_id, process, 'terminate')}>{confirm === terminateKey ? '✓' : t("ProcessFleetView.f913f09210")}</button><button disabled={!!process.exited_at} title={t("ProcessFleetView.c2934aa4e1")} class={confirm === treeKey ? 'confirming' : ''} onClick={() => void act(group.session_id, process, 'terminate_tree')}>{confirm === treeKey ? '✓' : t("ProcessFleetView.4edf58573d")}</button></div>
         </div>}
         {node.children.length > 0 && <ul>{node.children.map(renderProcessNode)}</ul>}
       </li>
@@ -179,39 +174,39 @@ export function ProcessFleetView({
         <button
           class="process-session-heading"
           aria-current={focused ? 'true' : undefined}
-          title={`${project?.name || 'unknown project'} :: ${sessionLabel(session, group.session_id)}${selectedSessionId ? '' : ' · click to inspect this session alone'}`}
+          title={t("ProcessFleetView.39bbfa1f05", { value1: project?.name || t("ProcessFleetView.e222820974"), value2: sessionLabel(session, group.session_id), value3: (selectedSessionId) ? 'yes' : 'no' })}
           onClick={() => onSelectedSessionId(selectedSessionId === group.session_id ? null : group.session_id)}
         >
           <span>
             <i class={`state-dot ${session?.state || 'running'}`}/>
             <strong>{sessionLabel(session, group.session_id)}</strong>
-            {focused && <em class="process-session-focused" title="The focused terminal">focused</em>}
+            {focused && <em class="process-session-focused" title={t("ProcessFleetView.c39ff383fe")}>{t("ProcessFleetView.b0185429c6")}</em>}
           </span>
           {rollup && <small>{rollupLabel(rollup)}</small>}
         </button>
         {onRevealSession && <button
           class="process-session-reveal"
-          title="Reveal this terminal"
-          aria-label={`Reveal ${sessionLabel(session, group.session_id)}`}
+          title={t("ProcessFleetView.250b4aa6d0")}
+          aria-label={t("ProcessFleetView.cd5c1cf423", { value1: sessionLabel(session, group.session_id) })}
           onClick={() => onRevealSession(group.session_id)}
         >↗</button>}
       </div>
       {/* One line each, for the same reason the process rows are: the URL and its owner are
           the whole content, and a heading plus a stacked button pair cost four rows to say it. */}
       {previews.map(preview => <div class="process-link-row" key={preview.id}>
-        <i class="process-link-mark registered" title="Registered preview">▣</i>
+        <i class="process-link-mark registered" title={t("ProcessFleetView.bbb5d524e3")}>▣</i>
         <strong>{preview.url}</strong>
-        <span>{preview.source} · port {preview.port}</span>
-        {preview.port_conflict && <em class="process-port-shared" title={portConflictNotice(preview.port_conflict)?.headline}>⚠ port shared</em>}
-        <button onClick={() => void navigator.clipboard.writeText(preview.url)}>copy</button>
+        <span>{rich("ProcessFleetView.a4f718124c", { source: preview.source, port: preview.port })}</span>
+        {preview.port_conflict && <em class="process-port-shared" title={portConflictNotice(preview.port_conflict)?.headline}>{t("ProcessFleetView.f5cfcd5be3")}</em>}
+        <button onClick={() => void navigator.clipboard.writeText(preview.url)}>{t("ProcessFleetView.6f5a6034e7")}</button>
       </div>)}
       {servers.map(server => <div class="process-link-row" key={`${server.pid}:${server.port}`}>
-        <i class="process-link-mark" title="Loopback listener">⇢</i>
+        <i class="process-link-mark" title={t("ProcessFleetView.c4d004a6f4")}>⇢</i>
         <strong>{server.url}</strong>
         <span>{group.processes.find(process => process.pid === server.pid)?.executable} {server.pid}</span>
-        {server.shared_with && <em class="process-port-shared" title={`Port ${server.port} is also held by PID ${server.shared_with.join(', ')}. The OS picks which process answers each connection, so this URL may not reach PID ${server.pid}.`}>⚠ shared with {server.shared_with.join(', ')}</em>}
-        <button title={`Open ${server.url} as a preview beside this session`} onClick={() => void attach(group.session_id, server.url)}>preview</button>
-        <button onClick={() => void navigator.clipboard.writeText(server.url)}>copy</button>
+        {server.shared_with && <em class="process-port-shared" title={t("ProcessFleetView.a04eb49735", { port: server.port, value2: server.shared_with.join(', '), pid: server.pid })}>{rich("ProcessFleetView.22a345c2c0", { value1: server.shared_with.join(', ') })}</em>}
+        <button title={t("ProcessFleetView.de904322f0", { url: server.url })} onClick={() => void attach(group.session_id, server.url)}>{t("ProcessFleetView.5975cf1bba")}</button>
+        <button onClick={() => void navigator.clipboard.writeText(server.url)}>{t("ProcessFleetView.6f5a6034e7")}</button>
       </div>)}
       <ul class="process-list process-tree">{buildProcessTree(group.processes).map(renderProcessNode)}</ul>
     </section>
@@ -231,9 +226,9 @@ export function ProcessFleetView({
       // Runtime members carry no session attribution or evidence chain, so they get the
       // observational subset rather than blank rows where those would be.
       const details = [
-        { label: 'command', value: process.command || 'command line unavailable' },
-        { label: 'parent', value: process.parent_pid ? `PID ${process.parent_pid}` : 'none observed' },
-        { label: 'role', value: role === 'daemon' ? 'swe-mux server process' : 'daemon-owned child not attributed to a terminal session' },
+        { get label() { return t("ProcessFleetView.5d347fd948") }, value: process.command || t("ProcessFleetView.c564afe628") },
+        { get label() { return t("ProcessFleetView.e47125968b") }, value: process.parent_pid ? `PID ${process.parent_pid}` : t("ProcessFleetView.05705fa0ab") },
+        { get label() { return t("ProcessFleetView.4b168d88dc") }, value: role === 'daemon' ? 'swe-mux server process' : 'daemon-owned child not attributed to a terminal session' },
         ...processDetails(process).filter(detail => detail.label === 'network' || detail.label === 'warnings'),
       ]
       return <li class={open ? 'open' : ''} key={key}>
@@ -244,24 +239,22 @@ export function ProcessFleetView({
           <span class="process-pid">{process.pid}</span>
           <span class="process-args">{commandTail(process)}</span>
           {process.conditions.length > 0 && <em class="process-warn" title={process.conditions.join(' · ')}>⚠ {process.conditions.length}</em>}
-          {role === 'daemon' && <b class="process-evidence active">daemon</b>}
+          {role === 'daemon' && <b class="process-evidence active">{t("ProcessFleetView.f77b12a53e")}</b>}
           <span class="process-metrics">{processMetrics(process)}</span>
         </button>
         {open && <div class="process-detail">
           <dl>{details.map(detail => <div key={detail.label}><dt>{detail.label}</dt><dd>{detail.value}</dd></div>)}</dl>
           {/* Observational only: the runtime is never interrupt/terminate territory. */}
-          <div class="process-actions"><button onClick={() => void navigator.clipboard.writeText(String(process.pid))}>Copy PID</button><button onClick={() => void navigator.clipboard.writeText(process.command || String(process.pid))}>Copy command</button></div>
+          <div class="process-actions"><button onClick={() => void navigator.clipboard.writeText(String(process.pid))}>{t("ProcessFleetView.175c2e931a")}</button><button onClick={() => void navigator.clipboard.writeText(process.command || String(process.pid))}>{t("ProcessFleetView.9a01feecae")}</button></div>
         </div>}
         {node.children.length > 0 && <ul>{node.children.map(renderDaemonNode)}</ul>}
       </li>
     }
     return <section class="process-project-group process-daemon-group">
-      <h2>daemon + infrastructure</h2>
+      <h2 data-heading-message="ProcessFleetView.37e808aa51">{t("ProcessFleetView.37e808aa51")}</h2>
       <section class="process-session-group">
-        <div class="process-session-bar"><div class="process-session-heading process-daemon-heading"><span><i class="state-dot running"/><strong>swe-mux runtime</strong></span><small>{daemon.processes} proc · CPU {daemon.cpu_pct.toFixed(1)}% · {memoryLabel(daemon.memory_bytes)}{daemon.listeners || daemon.connections ? ` · ${daemon.listeners || 0}L/${daemon.connections || 0}C` : ''}</small></div></div>
-        {members.length > 0
-          ? <ul class="process-list process-tree">{buildProcessTree(members).map(renderDaemonNode)}</ul>
-          : <p class="process-empty">Detailed daemon members are unavailable from the running daemon.</p>}
+        <div class="process-session-bar"><div class="process-session-heading process-daemon-heading"><span><i class="state-dot running"/><strong>{t("ProcessFleetView.301ae7e557")}</strong></span><small>{rich("ProcessFleetView.8400d9e148", { processes: daemon.processes, value2: daemon.cpu_pct.toFixed(1), value3: memoryLabel(daemon.memory_bytes), value4: daemon.listeners || daemon.connections ? t("ProcessFleetView.551d015a20", { value1: daemon.listeners || 0, value2: daemon.connections || 0 }) : '' })}</small></div></div>
+        {members.length > 0 ? <ul class="process-list process-tree">{buildProcessTree(members).map(renderDaemonNode)}</ul> : <p class="process-empty">{t("ProcessFleetView.779556f6f0")}</p>}
       </section>
     </section>
   }
@@ -269,37 +262,35 @@ export function ProcessFleetView({
   const endedToggle = <button
     class={`process-ended-toggle ${includeEnded ? 'active' : ''}`}
     aria-pressed={includeEnded}
-    title={includeEnded
-      ? 'Showing ended processes recorded during this daemon run. They support no actions and are excluded from totals.'
-      : 'Show processes that have already exited, for this daemon run only.'}
+    title={includeEnded ? t("ProcessFleetView.33fabd292d") : t("ProcessFleetView.c8aa6126d9")}
     onClick={() => setIncludeEnded(current => !current)}
-  >{includeEnded ? '✓ ended' : 'ended'}</button>
+  >{includeEnded ? t("ProcessFleetView.452044b979") : t("ProcessFleetView.e87ba7a0b7")}</button>
 
   // Opening at a Project prefilters the fleet, but the scope stays a visible, clearable
   // control rather than a hidden mode — on both surfaces, so a drawer scoped to the active
   // Project can still answer a question about the whole machine.
   const scopeSelect = <Dropdown
     class="process-scope-select"
-    ariaLabel="Filter processes by project"
+    ariaLabel={t("ProcessFleetView.8f5c6aac57")}
     value={projectScope}
     onChange={value => { onProjectScope(value); onSelectedSessionId(null) }}
     filter
-    filterPlaceholder="Filter Projects…"
+    filterPlaceholder={t("ProcessFleetView.2e0060c45e")}
     options={[
-      { value: '', label: 'All projects' },
+      { value: '', get label() { return t("ProcessFleetView.4b87271b6b") } },
       ...projectDropdownOptions(projects, project => ({ value: project.id, label: project.name, detail: project.root })),
     ]}
   />
 
-  const refresh = <button class="process-refresh" title="Re-read the latest sample" onClick={() => refreshFleet(request)}>Refresh</button>
+  const refresh = <button class="process-refresh" title={t("ProcessFleetView.93768d333d")} onClick={() => refreshFleet(request)}>{t("ProcessFleetView.0e91610117")}</button>
 
   const summary = <div class="process-fleet-summary">
     {scopeSelect}
-    <span>{totals.sessions} session{totals.sessions === 1 ? '' : 's'}</span>
-    <span>{totals.processes} processes</span>
-    <span>CPU {totals.cpu_pct.toFixed(1)}%</span>
-    <span>memory {memoryLabel(totals.memory_bytes)}</span>
-    <span>network {totals.listeners} listeners · {totals.connections} connections</span>
+    <span>{rich("ProcessFleetView.ecbddcb0b5", { sessions: totals.sessions, value2: (totals.sessions === 1) ? 'yes' : 'no' })}</span>
+    <span>{rich("ProcessFleetView.977641b5f1", { processes: totals.processes })}</span>
+    <span>{rich("ProcessFleetView.d8c52ecda0", { value1: totals.cpu_pct.toFixed(1) })}</span>
+    <span>{rich("ProcessFleetView.586b04cdff", { value1: memoryLabel(totals.memory_bytes) })}</span>
+    <span>{rich("ProcessFleetView.89d6c6c5b5", { listeners: totals.listeners, connections: totals.connections })}</span>
     {endedToggle}
     {refresh}
   </div>
@@ -309,15 +300,15 @@ export function ProcessFleetView({
   const sessionToolbar = selectedSession && <div class="process-toolbar">
     <input
       value={customUrl}
-      aria-label="Loopback preview URL"
-      placeholder="http://127.0.0.1:3000/"
+      aria-label={t("ProcessFleetView.fc2a9089a4")}
+      placeholder={t("ProcessFleetView.c51203df6e")}
       onInput={event => setCustomUrl(event.currentTarget.value)}
     />
     <button
       disabled={!customUrl.trim()}
-      title="Register a loopback URL you vouch for. Use this when the server is not attributable to this session, such as one running in WSL or Docker or started outside it."
+      title={t("ProcessFleetView.a159d73a80")}
       onClick={() => void attach(selectedSession.id, customUrl, true)}
-    >Add preview by URL</button>
+    >{t("ProcessFleetView.b5fed4f2c9")}</button>
     {endedToggle}
     {refresh}
   </div>
@@ -326,22 +317,22 @@ export function ProcessFleetView({
     {selectedSession ? sessionToolbar : summary}
     <div class="process-fleet-list">
       {error && <p class="process-error" aria-live="assertive">{error}</p>}
-      {!snapshot && !error && <p class="process-empty">Loading process trees…</p>}
+      {!snapshot && !error && <p class="process-empty">{t("ProcessFleetView.26d53d28a1")}</p>}
       {snapshot && !snapshot.available && <p class="process-empty">{snapshot.diagnostic}</p>}
       {ownershipDiagnostics.length > 0 && <details class="process-ownership-diagnostics">
-        <summary>Ownership diagnostics ({ownershipDiagnostics.length} recent)</summary>
+        <summary>{rich("ProcessFleetView.a1ac81c13e", { length: ownershipDiagnostics.length })}</summary>
         <ul>{ownershipDiagnostics.map((item, index) => <li key={`${item.ts}:${item.kind}:${item.pid || 0}:${index}`}>
           <strong>{item.kind.replaceAll('_', ' ')}</strong>
-          <span>{item.pid ? `PID ${item.pid}` : 'process'}{item.session_id ? ` · session ${item.session_id}` : ''}{item.other_session_id ? ` · conflicting session ${item.other_session_id}` : ''}{item.parent_pid ? ` · parent PID ${item.parent_pid}` : ''}{item.reason ? ` · ${item.reason}` : ''} · {new Date(item.ts * 1000).toLocaleString()}</span>
+          <span>{item.pid ? t("ProcessFleetView.4a52d42108", { pid: item.pid }) : t("ProcessFleetView.19ed40bf62")}{item.session_id ? t("ProcessFleetView.6248166fd7", { session_id: item.session_id }) : ''}{item.other_session_id ? t("ProcessFleetView.858d14140d", { other_session_id: item.other_session_id }) : ''}{item.parent_pid ? t("ProcessFleetView.4c73845d9d", { parent_pid: item.parent_pid }) : ''}{item.reason ? t("ProcessFleetView.a1712aaece", { reason: item.reason }) : ''} · {new Date(item.ts * 1000).toLocaleString(uiLocale.value)}</span>
         </li>)}</ul>
       </details>}
       {renderDaemonGroup()}
       {projectProcessGroups.map(group => <section class="process-project-group" key={group.id}>
-        <h2>project::{group.label}</h2>
+        <h2>{rich("ProcessFleetView.82bf9de762", { label: group.label })}</h2>
         {group.groups.map(renderGroup)}
       </section>)}
       {snapshot?.available && !sessionGroups.length && <p class="process-empty">
-        {projectScope ? 'Nothing running in this Project.' : 'No matching live sessions.'}
+        {projectScope ? t("ProcessFleetView.94c70170ad") : t("ProcessFleetView.cd353b3aed")}
       </p>}
     </div>
   </div>

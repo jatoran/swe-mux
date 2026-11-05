@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { useCallback, useEffect, useState } from 'preact/hooks'
 import { UpdateDialog } from './UpdateDialog'
 import {
@@ -56,24 +57,16 @@ export function UpdateBanner() {
   const latest = status.latest
   return (
     <div class="release-update-banner" role="status" aria-live="polite">
-      <strong>Update available</strong>
+      <strong>{t("UpdateBanner.ff8b555d81")}</strong>
       <span>{updateBannerText(status)}</span>
-      {latest?.changelog
-        ? <a href={latest.changelog} target="_blank" rel="noreferrer">Release notes</a>
-        : null}
-      <button class="primary" onClick={() => setInstalling(true)} aria-label={`Install swe-mux ${latest?.version}`}>
-        Update
-      </button>
-      <button onClick={decline} aria-label={`Dismiss the ${latest?.version} update notice`}>
-        Dismiss
-      </button>
-      {installing && latest?.version && (
-        <UpdateDialog
+      {latest?.changelog ? <a href={latest.changelog} target="_blank" rel="noreferrer">{t("UpdateBanner.1254829bd9")}</a> : null}
+      <button class="primary" onClick={() => setInstalling(true)} aria-label={t("UpdateBanner.0413c989d0", { version: latest?.version })}>{t("UpdateBanner.c1c1009d3f")}</button>
+      <button onClick={decline} aria-label={t("UpdateBanner.9a02779961", { version: latest?.version })}>{t("UpdateBanner.48845bff33")}</button>
+      {installing && latest?.version && (<UpdateDialog
           version={latest.version}
           changelog={latest.changelog}
           onClose={() => setInstalling(false)}
-        />
-      )}
+        />)}
     </div>
   )
 }

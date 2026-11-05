@@ -46,6 +46,7 @@ from . import budget
 from .budget import coerce_budget
 from .config import BUDGET_FIELDS
 from .deterministic_consumers import build_doc_ownership, normalize_target
+from .ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -174,9 +175,7 @@ class ProjectCard:
         lines = ["# Project card", "", self.summary]
         if self.subsystems:
             lines.extend(["", "## Subsystems"])
-            lines.extend(
-                f"- {item.name}: {item.purpose}" for item in self.subsystems
-            )
+            lines.extend(f"- {item.name}: {item.purpose}" for item in self.subsystems)
         if self.areas:
             lines.extend(["", "## File → area map"])
             shown_files = 0
@@ -337,9 +336,7 @@ def gather_sources(project_root: str, *, model: str) -> CardSources:
     for file_path, owners in ownership.items():
         for owner in owners:
             by_area.setdefault(owner, []).append(file_path)
-    areas = tuple(
-        (area, tuple(sorted(files))) for area, files in sorted(by_area.items())
-    )
+    areas = tuple((area, tuple(sorted(files))) for area, files in sorted(by_area.items()))
     basis = json.dumps(
         {
             "schema": CARD_SCHEMA_VERSION,
@@ -533,7 +530,7 @@ class ProjectCardService:
             fallback=BUDGET_FIELDS["project_card_daily_budget"].default,
         )
         spend = await self.store.spend(rule_id=PROJECT_CARD_RULE_ID)
-        verdict = budget.spent_out(cap, spend, label="the daily project-card")
+        verdict = budget.spent_out(cap, spend, label=ui_message("project_card.077f023213"))
         if verdict.exhausted:
             raise ProjectCardError(verdict.reason)
         max_input_tokens = int(getattr(self.config, "project_card_max_input_tokens", 6000))

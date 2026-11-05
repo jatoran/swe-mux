@@ -44,6 +44,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .harness import agent_harnesses, descriptor
+from .ui_messages import error_text, ui_message
 
 logger = logging.getLogger(__name__)
 
@@ -161,9 +162,7 @@ class SkillWrite:
 
 def plan(targets: list[SkillTarget]) -> list[SkillWrite]:
     """What an install would touch, stated without touching it."""
-    return [
-        SkillWrite(str(target.skill_path()), "planned", target.readers) for target in targets
-    ]
+    return [SkillWrite(str(target.skill_path()), "planned", target.readers) for target in targets]
 
 
 def install(targets: list[SkillTarget], text: str) -> list[SkillWrite]:
@@ -228,7 +227,7 @@ def materialize_project_skill(project: Path) -> SkillWrite:
 #: stamped version would rewrite the file on every release for no reader.
 _PLUGIN_MANIFEST: dict[str, object] = {
     "name": SKILL_DIR_NAME,
-    "description": "How agents inside swe-mux see and coordinate with their fleet.",
+    "description": ui_message("skill_install.7daa672c4e"),
     "author": {"name": "swe-mux", "url": "https://github.com/jatoran/swe-mux"},
 }
 
@@ -266,7 +265,7 @@ def materialize_claude_plugin(base: Path) -> Path | None:
         except OSError as exc:
             logger.warning(
                 "claude skill plugin write refused",
-                extra={"path": str(path), "reason": str(exc)},
+                extra={"path": str(path), "reason": error_text(exc)},
             )
             return None
     if changed:
@@ -298,7 +297,7 @@ def remove(targets: list[SkillTarget]) -> list[SkillWrite]:
                     str(path),
                     "refused",
                     target.readers,
-                    reason="not written by swe-mux (no managed-by marker); left in place",
+                    reason=ui_message("skill_install.a25faad895"),
                 )
             )
             continue

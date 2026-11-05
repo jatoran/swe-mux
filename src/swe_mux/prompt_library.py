@@ -14,6 +14,7 @@ from typing import Any, Literal
 from .harness import AGENT_BACKENDS, agent_harnesses
 from .models import ProjectRecord
 from .project_files import parse_project_config
+from .ui_messages import ui_message
 
 PROMPT_SCHEMA_VERSION = 1
 PROMPT_BODY_LIMIT = 64 * 1024
@@ -36,10 +37,10 @@ def _atomic_write(path: Path, data: bytes) -> None:
 
 def _string_array(value: Any, field: str, *, maximum: int, item_limit: int) -> list[str]:
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise ValueError(f"{field} must be an array of strings")
+        raise ValueError(ui_message("prompt_library.09c5d05b71", value1=field))
     normalized = list(dict.fromkeys(item.strip() for item in value if item.strip()))
     if len(normalized) > maximum or any(len(item) > item_limit for item in normalized):
-        raise ValueError(f"{field} exceeds its bounded size")
+        raise ValueError(ui_message("prompt_library.0f7bea7c9e", value1=field))
     return normalized
 
 
@@ -52,11 +53,11 @@ def _template_values(
     # A stray trailing newline would submit the prompt on insertion.
     body = str(values.get("body") or "").replace("\r\n", "\n").replace("\r", "\n").rstrip()
     if not title or len(title) > 120:
-        raise ValueError("prompt title must be 1–120 characters")
+        raise ValueError(ui_message("prompt_library.c4aaefa4c3"))
     if not body.strip() or len(body.encode("utf-8")) > PROMPT_BODY_LIMIT:
-        raise ValueError("prompt body must be non-empty and at most 64 KiB")
+        raise ValueError(ui_message("prompt_library.a37e4ff7e9"))
     if PROMPT_CONTROL.search(body):
-        raise ValueError("prompt body contains terminal control characters")
+        raise ValueError(ui_message("prompt_library.2f24b64d69"))
     tags = _string_array(values.get("tags", []), "tags", maximum=20, item_limit=40)
     backends = _string_array(
         values.get("backends", ["shell", *agent_harnesses()]),
@@ -65,7 +66,7 @@ def _template_values(
         item_limit=10,
     )
     if not backends or not set(backends) <= {"shell", *AGENT_BACKENDS}:
-        raise ValueError("backends must contain shell and/or registered agents")
+        raise ValueError(ui_message("prompt_library.59cbb0d98c"))
     now = time.time()
     return {
         "schema_version": PROMPT_SCHEMA_VERSION,
@@ -100,13 +101,13 @@ def serialize_template(template: dict[str, Any]) -> bytes:
 def parse_template(data: bytes) -> dict[str, Any]:
     text = data.decode("utf-8")
     if not text.startswith(PROMPT_FRONTMATTER):
-        raise ValueError("prompt template is missing TOML frontmatter")
+        raise ValueError(ui_message("prompt_library.7bb0f8b0b8"))
     boundary = text.find("\n+++\n", len(PROMPT_FRONTMATTER))
     if boundary < 0:
-        raise ValueError("prompt template frontmatter is not closed")
+        raise ValueError(ui_message("prompt_library.30a9e2b374"))
     metadata = tomllib.loads(text[len(PROMPT_FRONTMATTER) : boundary])
     if metadata.get("schema_version") != PROMPT_SCHEMA_VERSION:
-        raise ValueError(f"prompt schema_version must be {PROMPT_SCHEMA_VERSION}")
+        raise ValueError(ui_message("prompt_library.9c07712d5b", value1=PROMPT_SCHEMA_VERSION))
     required = {
         "id",
         "title",
@@ -117,7 +118,7 @@ def parse_template(data: bytes) -> dict[str, Any]:
         "updated_at",
     }
     if set(metadata) != required | {"schema_version"}:
-        raise ValueError("prompt template metadata fields are invalid")
+        raise ValueError(ui_message("prompt_library.de0c42fa9e"))
     body = text[boundary + 5 :]
     normalized = _template_values({**metadata, "body": body})
     normalized["id"] = str(metadata["id"])
@@ -125,7 +126,7 @@ def parse_template(data: bytes) -> dict[str, Any]:
     normalized["updated_at"] = float(metadata["updated_at"])
     declared = _string_array(metadata["variables"], "variables", maximum=64, item_limit=64)
     if sorted(declared) != normalized["variables"]:
-        raise ValueError("declared variables do not match prompt placeholders")
+        raise ValueError(ui_message("prompt_library.25731b4eff"))
     return normalized
 
 
@@ -149,14 +150,14 @@ class PromptLibrary:
         if scope == "global":
             return self.global_dir
         if project is None:
-            raise ValueError("project_id is required for Project prompt templates")
+            raise ValueError(ui_message("prompt_library.a52e2c17e2"))
         return Path(project.root) / ".swe-mux" / "prompts"
 
     def _path(self, scope: PromptScope, template_id: str, project: ProjectRecord | None) -> Path:
         try:
             safe_id = str(uuid.UUID(template_id))
         except ValueError as exc:
-            raise ValueError("invalid prompt template id") from exc
+            raise ValueError(ui_message("prompt_library.ca7f53a977")) from exc
         return self._directory(scope, project) / f"{safe_id}.md"
 
     def _state(self) -> dict[str, dict[str, Any]]:
@@ -286,14 +287,14 @@ class PromptLibrary:
         self, scope: PromptScope, values: dict[str, Any], project: ProjectRecord | None = None
     ) -> dict[str, Any]:
         if scope not in {"global", "project"}:
-            raise ValueError("prompt scope must be global or project")
+            raise ValueError(ui_message("prompt_library.d5091266e7"))
         allowed = project_prompt_scope(project)
         if project is not None and allowed != "both" and scope != allowed:
-            raise ValueError(f"Project prompt library scope is {allowed}")
+            raise ValueError(ui_message("prompt_library.9ff24c256f", value1=allowed))
         template = _template_values(values)
         path = self._path(scope, template["id"], project)
         if path.exists():
-            raise ValueError("prompt template id already exists in this scope")
+            raise ValueError(ui_message("prompt_library.e8bfb4fc20"))
         data = serialize_template(template)
         _atomic_write(path, data)
         return {
@@ -315,10 +316,10 @@ class PromptLibrary:
     ) -> dict[str, Any]:
         path = self._path(scope, template_id, project)
         if not path.is_file():
-            raise ValueError("prompt template does not exist")
+            raise ValueError(ui_message("prompt_library.0d98d540b6"))
         current_data = path.read_bytes()
         if _revision(current_data) != expected_revision:
-            raise ValueError("prompt template changed externally; reload before saving")
+            raise ValueError(ui_message("prompt_library.ccccf6e97a"))
         current = parse_template(current_data)
         template = _template_values(values, existing=current)
         data = serialize_template(template)
@@ -341,14 +342,14 @@ class PromptLibrary:
     ) -> None:
         path = self._path(scope, template_id, project)
         if not path.is_file():
-            raise ValueError("prompt template does not exist")
+            raise ValueError(ui_message("prompt_library.0d98d540b6"))
         if _revision(path.read_bytes()) != expected_revision:
-            raise ValueError("prompt template changed externally; reload before deleting")
+            raise ValueError(ui_message("prompt_library.655b34f009"))
         path.unlink()
 
     def record_use(self, key: str) -> dict[str, Any]:
         if not re.fullmatch(r"(?:global|project):[0-9a-f-]{36}", key):
-            raise ValueError("invalid prompt template key")
+            raise ValueError(ui_message("prompt_library.e61535e6d1"))
         state = self._state()
         item = state.setdefault(key, {})
         item["last_used_at"] = time.time()
@@ -358,7 +359,7 @@ class PromptLibrary:
 
     def set_favorite(self, key: str, favorite: bool) -> dict[str, Any]:
         if not re.fullmatch(r"(?:global|project):[0-9a-f-]{36}", key):
-            raise ValueError("invalid prompt template key")
+            raise ValueError(ui_message("prompt_library.e61535e6d1"))
         state = self._state()
         item = state.setdefault(key, {})
         item["favorite"] = favorite

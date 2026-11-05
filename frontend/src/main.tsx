@@ -1,3 +1,4 @@
+import { startLocalizationDiagnostics } from './localization/diagnostics.ts'
 import { render } from 'preact'
 import { initialize } from '@continuity-editor/editor'
 import wasmUrl from '@continuity-editor/editor/wasm?url'
@@ -24,4 +25,5 @@ continuityInitialization.catch((error: unknown) => {
   reportContinuityFailure(error instanceof Error ? error.message : String(error))
 })
 
+startLocalizationDiagnostics()
 render(<App />, document.getElementById('app')!)

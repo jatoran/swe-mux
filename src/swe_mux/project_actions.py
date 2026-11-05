@@ -18,6 +18,7 @@ from .config import Config
 from .errors import NotFound
 from .profiles import resolve_profile
 from .spawn_contract import parse_spawn_env, resolve_contained_cwd
+from .ui_messages import error_text, ui_message
 
 ACTION_FILES = (Path(".vscode/tasks.json"), Path("package.json"), Path(".swe-mux/actions.toml"))
 MAX_ACTIONS = 128
@@ -339,9 +340,9 @@ def _resolve_value(value: str, root: Path, *, inputs: frozenset[str] = frozenset
         if name.startswith("input:"):
             identifier = name[6:]
             if identifier not in inputs:
-                raise ValueError(f"undeclared input: ${{{name}}}")
+                raise ValueError(ui_message("project_actions.f30a661527", value1=name))
             return match.group(0)
-        raise ValueError(f"unsupported variable: ${{{name}}}")
+        raise ValueError(ui_message("project_actions.6135b23cc7", value1=name))
 
     return _VARIABLE.sub(expand, value)
 
@@ -350,11 +351,16 @@ def _platforms(value: Any, label: str) -> tuple[str, ...]:
     if value is None:
         return ()
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise ValueError(f"{label} platforms must be an array of strings")
+        raise ValueError(ui_message("project_actions.93d64cac25", value1=label))
     unknown = sorted(set(value) - set(PLATFORMS))
     if unknown:
         raise ValueError(
-            f"{label} platforms must be drawn from {', '.join(PLATFORMS)}: {', '.join(unknown)}"
+            ui_message(
+                "project_actions.d416581bb2",
+                value1=label,
+                value2=", ".join(PLATFORMS),
+                value3=", ".join(unknown),
+            )
         )
     return tuple(dict.fromkeys(value))
 
@@ -363,11 +369,11 @@ def _timeout(value: Any, label: str) -> float | None:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"{label} timeout_seconds must be a number")
+        raise ValueError(ui_message("project_actions.c7a52a7bed", value1=label))
     seconds = float(value)
     if not 0 < seconds <= MAX_STEP_TIMEOUT_SECONDS:
         raise ValueError(
-            f"{label} timeout_seconds must be above 0 and at most {MAX_STEP_TIMEOUT_SECONDS}"
+            ui_message("project_actions.49c8417876", value1=label, value2=MAX_STEP_TIMEOUT_SECONDS)
         )
     return seconds
 
@@ -388,7 +394,7 @@ def _strings(value: Any, field_name: str) -> tuple[str, ...]:
     if value is None:
         return ()
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise ValueError(f"{field_name} must be an array of strings")
+        raise ValueError(ui_message("project_actions.09c5d05b71", value1=field_name))
     return tuple(value)
 
 
@@ -471,7 +477,7 @@ def _vscode_actions(path: Path, root: Path) -> tuple[list[ProjectAction], list[s
         return [], []
     document = loads_jsonc(path.read_text(encoding="utf-8"))
     if not isinstance(document, dict) or not isinstance(document.get("tasks", []), list):
-        raise ValueError(".vscode/tasks.json must contain a tasks array")
+        raise ValueError(ui_message("project_actions.6e5c259229"))
     raw_tasks = [item for item in document["tasks"] if isinstance(item, dict)]
     by_label = {str(item.get("label") or ""): item for item in raw_tasks if item.get("label")}
     diagnostics: list[str] = []
@@ -480,16 +486,18 @@ def _vscode_actions(path: Path, root: Path) -> tuple[list[ProjectAction], list[s
 
     def expand(label: str, trail: tuple[str, ...] = ()) -> tuple[tuple[ActionStep, ...], ...]:
         if label in trail:
-            raise ValueError(f"VS Code task dependency cycle: {' -> '.join((*trail, label))}")
+            raise ValueError(
+                ui_message("project_actions.1341285cd6", value1=" -> ".join((*trail, label)))
+            )
         raw = by_label.get(label)
         if raw is None:
-            raise ValueError(f"VS Code task dependency is missing: {label}")
+            raise ValueError(ui_message("project_actions.a18c8e51ac", value1=label))
         depends = raw.get("dependsOn", [])
         dependencies = [depends] if isinstance(depends, str) else depends
         if not isinstance(dependencies, list) or not all(
             isinstance(item, str) for item in dependencies
         ):
-            raise ValueError(f"VS Code task {label} has an invalid dependsOn")
+            raise ValueError(ui_message("project_actions.bf2db5f250", value1=label))
         batches: list[tuple[ActionStep, ...]] = []
         if dependencies:
             expanded = [expand(item, (*trail, label)) for item in dependencies]
@@ -532,9 +540,7 @@ def _vscode_actions(path: Path, root: Path) -> tuple[list[ProjectAction], list[s
             diagnostics.append(f"{label}: no step runs on {current_platform()}")
             continue
         try:
-            _reject_unquotable_inputs(
-                tuple(step for batch in batches for step in batch), label
-            )
+            _reject_unquotable_inputs(tuple(step for batch in batches for step in batch), label)
         except ValueError as exc:
             diagnostics.append(str(exc))
             continue
@@ -594,12 +600,7 @@ def _reject_unquotable_inputs(steps: tuple[ActionStep, ...], label: str) -> None
         if step.kind != "shell" or step.args:
             continue
         if _INPUT_REFERENCE.search(step.command):
-            raise ValueError(
-                f"{label}: a shell step with no args passes its command to the shell "
-                f"unquoted, so it cannot carry an input. Move the value into args "
-                f'(command = "git", args = ["checkout", "${{input:...}}"]) or use '
-                f'type = "process".'
-            )
+            raise ValueError(ui_message("project_actions.c8f0b55b72", value1=label))
 
 
 def _referenced_inputs(batches: tuple[tuple[ActionStep, ...], ...]) -> frozenset[str]:
@@ -622,7 +623,7 @@ def _package_actions(path: Path, root: Path) -> list[ProjectAction]:
     document = json.loads(path.read_text(encoding="utf-8"))
     scripts = document.get("scripts", {}) if isinstance(document, dict) else {}
     if not isinstance(scripts, dict):
-        raise ValueError("package.json scripts must be an object")
+        raise ValueError(ui_message("project_actions.7cc61e787a"))
     manager = (
         "pnpm"
         if (root / "pnpm-lock.yaml").is_file()
@@ -660,10 +661,10 @@ def _native_step(
 ) -> ActionStep:
     command = raw.get("command")
     if not isinstance(command, str) or not command.strip():
-        raise ValueError(f"native action {label} step requires command")
+        raise ValueError(ui_message("project_actions.eeadea1ecd", value1=label))
     kind = str(raw.get("type") or "shell")
     if kind not in {"shell", "process"}:
-        raise ValueError(f"native action {label} type must be shell or process")
+        raise ValueError(ui_message("project_actions.9a2f19b9c1", value1=label))
     return ActionStep(
         name=str(raw.get("name") or label),
         kind=kind,
@@ -683,26 +684,23 @@ def _native_inputs(raw: dict[str, Any], label: str) -> tuple[ActionInput, ...]:
     if declared is None:
         return ()
     if not isinstance(declared, list) or len(declared) > MAX_INPUTS:
-        raise ValueError(f"native action {label} inputs must be at most {MAX_INPUTS} tables")
+        raise ValueError(ui_message("project_actions.78b38f0026", value1=label, value2=MAX_INPUTS))
     parsed: list[ActionInput] = []
     for item in declared:
         if not isinstance(item, dict):
-            raise ValueError(f"native action {label} inputs must be tables")
+            raise ValueError(ui_message("project_actions.f2e00ae075", value1=label))
         identifier = str(item.get("id") or "").strip()
         if not re.fullmatch(r"[A-Za-z0-9_.-]+", identifier):
-            raise ValueError(
-                f"native action {label} input id must use letters, digits, dot, dash, "
-                f"or underscore"
-            )
+            raise ValueError(ui_message("project_actions.9916e7fcbe", value1=label))
         kind = str(item.get("kind") or "string")
         if kind not in {"string", "choice"}:
-            raise ValueError(f"native action {label} input kind must be string or choice")
+            raise ValueError(ui_message("project_actions.d7307dd3f6", value1=label))
         options = _strings(item.get("options"), f"native action {label} input options")
         if kind == "choice" and not options:
-            raise ValueError(f"native action {label} choice input requires options")
+            raise ValueError(ui_message("project_actions.6049548e55", value1=label))
         default = str(item.get("default") or "")
         if kind == "choice" and default and default not in options:
-            raise ValueError(f"native action {label} input default must be one of its options")
+            raise ValueError(ui_message("project_actions.f62ef0fb8d", value1=label))
         if kind == "choice" and not default:
             # A choice with no default is unrunnable as presented: the empty string
             # matches no option, so the select renders blank and submitting it fails
@@ -714,7 +712,7 @@ def _native_inputs(raw: dict[str, Any], label: str) -> tuple[ActionInput, ...]:
         )
     identifiers = [item.id for item in parsed]
     if len(set(identifiers)) != len(identifiers):
-        raise ValueError(f"native action {label} input ids must be unique")
+        raise ValueError(ui_message("project_actions.b9e32892b3", value1=label))
     return tuple(parsed)
 
 
@@ -734,7 +732,7 @@ def parse_native_actions(text: str, root: Path) -> tuple[list[ProjectAction], li
     """
     document = tomllib.loads(text)
     if int(document.get("version", 0)) != 1 or not isinstance(document.get("actions", []), list):
-        raise ValueError(".swe-mux/actions.toml requires version = 1 and [[actions]]")
+        raise ValueError(ui_message("project_actions.d3b0199bd1"))
     source_path = ACTION_FILES[2].as_posix()
     actions: list[ProjectAction] = []
     diagnostics: list[str] = []
@@ -744,11 +742,11 @@ def parse_native_actions(text: str, root: Path) -> tuple[list[ProjectAction], li
     # not KeyError, so that surfaced as a 500 rather than as an import diagnostic.
     for raw in document.get("actions", []):
         if not isinstance(raw, dict):
-            raise ValueError("native actions must be tables")
+            raise ValueError(ui_message("project_actions.3ec9963387"))
         action_id = str(raw.get("id") or "").strip()
         label = str(raw.get("label") or action_id).strip()
         if not action_id or not label or not re.fullmatch(r"[A-Za-z0-9_.-]+", action_id):
-            raise ValueError("native action id must use letters, digits, dot, dash, or underscore")
+            raise ValueError(ui_message("project_actions.526c06c672"))
         declared_inputs = _native_inputs(raw, label)
         input_ids = frozenset(item.id for item in declared_inputs)
         raw_steps = raw.get("steps")
@@ -762,9 +760,11 @@ def parse_native_actions(text: str, root: Path) -> tuple[list[ProjectAction], li
                 if isinstance(step, dict)
             )
             if len(steps) != len(raw_steps):
-                raise ValueError(f"native action {label} contains an invalid step")
+                raise ValueError(ui_message("project_actions.ca1c6aa180", value1=label))
         else:
-            raise ValueError(f"native action {label} steps must contain 1-{MAX_STEPS} tables")
+            raise ValueError(
+                ui_message("project_actions.63302a4dec", value1=label, value2=MAX_STEPS)
+            )
         batches: tuple[tuple[ActionStep, ...], ...] = (
             tuple((step,) for step in steps) if raw.get("sequential") else (steps,)
         )
@@ -907,9 +907,7 @@ class ProjectActionService:
         approved = self._entry(str(root), fingerprint, per_file)
         actions: list[ProjectAction] = []
         diagnostics: list[str] = []
-        readers: tuple[
-            tuple[str, Callable[[], tuple[list[ProjectAction], list[str]]]], ...
-        ] = (
+        readers: tuple[tuple[str, Callable[[], tuple[list[ProjectAction], list[str]]]], ...] = (
             ("VS Code tasks", lambda: _vscode_actions(root / ACTION_FILES[0], root)),
             ("package scripts", lambda: (_package_actions(root / ACTION_FILES[1], root), [])),
             ("native Project Actions", lambda: _native_actions(root / ACTION_FILES[2], root)),
@@ -967,13 +965,13 @@ class ProjectActionService:
         _, _, per_file = self._fingerprint(Path(project_root).resolve())
         if source is not None:
             if source not in per_file:
-                raise ValueError(f"no such Project task file: {source}")
+                raise ValueError(ui_message("project_actions.7a2925ff82", value1=source))
             if fingerprint != per_file[source]:
-                raise ValueError(f"{source} changed; review it again before trusting")
+                raise ValueError(ui_message("project_actions.de9bb3209f", value1=source))
             approving = {source: per_file[source]}
         else:
             if fingerprint != catalog.fingerprint:
-                raise ValueError("Project task files changed; review them again before trusting")
+                raise ValueError(ui_message("project_actions.813dce56fb"))
             approving = dict(per_file)
         store = self._store()
         existing = store.get(catalog.root)
@@ -1013,12 +1011,12 @@ class ProjectActionService:
         # the one that has to be approved.
         if action.source_path not in catalog.trusted_paths():
             raise PermissionError(
-                f"{action.source_path} is not trusted or changed since approval"
+                ui_message("project_actions.10c18dcd23", value1=action.source_path)
             )
         return catalog, action
 
 
-STARTER_ACTIONS_TOML = '''\
+STARTER_ACTIONS_TOML = """\
 # Project Actions for this repository. Every action appears in the Run menu.
 #
 # An action is a manifest entry, not a program: no conditionals, no loops. Put
@@ -1051,7 +1049,7 @@ args = ["hello from a Project Action"]
 # kind = "choice"
 # options = ["staging", "production"]
 # default = "staging"
-'''
+"""
 
 
 def read_actions_source(project_root: str) -> dict[str, Any]:
@@ -1093,18 +1091,18 @@ def write_actions_source(project_root: str, text: str, expected_revision: str) -
     root = Path(project_root).resolve()
     path = root / ACTION_FILES[2]
     if len(text.encode("utf-8")) > MAX_ACTIONS_SOURCE_BYTES:
-        raise ValueError(f"actions.toml exceeds {MAX_ACTIONS_SOURCE_BYTES} bytes")
+        raise ValueError(ui_message("project_actions.5240289fbe", value1=MAX_ACTIONS_SOURCE_BYTES))
     try:
         current = path.read_bytes()
         revision = hashlib.sha256(current).hexdigest()[:24]
     except OSError:
         revision = "missing"
     if expected_revision != revision:
-        raise ValueError("actions.toml changed elsewhere; reload before saving")
+        raise ValueError(ui_message("project_actions.a544c88c83"))
     try:
         _actions, diagnostics = parse_native_actions(text, root)
     except tomllib.TOMLDecodeError as exc:
-        raise ValueError(f"TOML syntax error: {exc}") from exc
+        raise ValueError(ui_message("project_actions.68e3142fcd", value1=exc)) from exc
     except (ValueError, TypeError) as exc:
         raise ValueError(str(exc)) from exc
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1143,30 +1141,37 @@ def preview_action_run(
     """
     needle = reference.strip().casefold()
     matches = [
-        item for item in catalog.actions
+        item
+        for item in catalog.actions
         if item.id.casefold() == needle or item.label.casefold() == needle
     ]
     if not matches and needle:
         matches = [
-            item for item in catalog.actions
+            item
+            for item in catalog.actions
             if needle in item.label.casefold() or needle in item.id.casefold()
         ]
     if not matches:
         return {
-            "error": f'{project_label} declares no action called "{reference}"',
+            "error": ui_message(
+                "project_actions.2d4ba70450", value1=project_label, value2=reference
+            ),
             "candidates": [item.label for item in catalog.actions][:6],
         }
     if len(matches) > 1:
         return {
-            "error": f'"{reference}" matches more than one action in {project_label}',
+            "error": ui_message(
+                "project_actions.aafd8012f9", value1=reference, value2=project_label
+            ),
             "candidates": [item.label for item in matches][:6],
         }
     action = matches[0]
     if action.source_path not in catalog.trusted_paths():
         return {
             "error": (
-                f'"{action.label}" cannot run: {action.source_path} is not approved, '
-                "or changed since it was approved"
+                ui_message(
+                    "project_actions.6889df1e3d", value1=action.label, value2=action.source_path
+                )
             ),
             "trust_required": True,
             "file": action.source_path,
@@ -1174,7 +1179,7 @@ def preview_action_run(
     try:
         substituted_action(action, dict(values), Path(catalog.root))
     except ValueError as exc:
-        return {"error": str(exc)}
+        return {"error": error_text(exc)}
     return {
         "action_id": action.id,
         "label": action.label,
@@ -1183,9 +1188,7 @@ def preview_action_run(
     }
 
 
-def substituted_action(
-    action: ProjectAction, values: dict[str, str], root: Path
-) -> ProjectAction:
+def substituted_action(action: ProjectAction, values: dict[str, str], root: Path) -> ProjectAction:
     """This action with its declared inputs filled in.
 
     Every declared input must be supplied or defaulted, and an unknown key is
@@ -1198,18 +1201,24 @@ def substituted_action(
     declared = {item.id: item for item in action.inputs}
     unknown = sorted(set(values) - set(declared))
     if unknown:
-        raise ValueError(f"unknown inputs for {action.id}: {', '.join(unknown)}")
+        raise ValueError(
+            ui_message("project_actions.fd7e752a90", value1=action.id, value2=", ".join(unknown))
+        )
     resolved: dict[str, str] = {}
     for identifier, item in declared.items():
         value = values.get(identifier, item.default)
         if len(value) > MAX_INPUT_VALUE:
-            raise ValueError(f"input {identifier} is longer than {MAX_INPUT_VALUE} characters")
+            raise ValueError(
+                ui_message("project_actions.ef55c22b61", value1=identifier, value2=MAX_INPUT_VALUE)
+            )
         if item.kind == "choice" and value not in item.options:
             raise ValueError(
-                f"input {identifier} must be one of: {', '.join(item.options)}"
+                ui_message(
+                    "project_actions.5386517415", value1=identifier, value2=", ".join(item.options)
+                )
             )
         if not value and item.kind == "string" and not item.default:
-            raise ValueError(f"input {identifier} is required")
+            raise ValueError(ui_message("project_actions.049d052cb9", value1=identifier))
         resolved[identifier] = value
     if not declared:
         return action

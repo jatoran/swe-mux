@@ -54,6 +54,7 @@ from .doctor import (
     _prerequisite_checks,
 )
 from .host_platform import IS_WINDOWS, platform_key
+from .ui_messages import ui_message
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .config import Config
@@ -300,14 +301,18 @@ def _install_location_check() -> dict[str, Any]:
     return _check(
         id="install.location",
         category="install",
-        title="Install location",
+        title=ui_message("doctor_local.af47896019"),
         status="ok",
         severity="info",
         detail=(
-            f"swe-mux {version or '(version metadata unavailable)'} installed by "
-            f"{location.label}; package at {location.package_dir}, launchers in "
-            f"{location.bin_dir}. Optional extras resolved: "
-            f"{', '.join(resolved) if resolved else 'none'}."
+            ui_message(
+                "doctor_local.ef5e6acad6",
+                value1=version or "(version metadata unavailable)",
+                value2=location.label,
+                value3=location.package_dir,
+                value4=location.bin_dir,
+                value5=", ".join(resolved) if resolved else "none",
+            )
         ),
     )
 
@@ -347,10 +352,12 @@ def _install_path_check() -> dict[str, Any]:
             return _check(
                 id="install.path",
                 category="install",
-                title="Commands on PATH",
+                title=ui_message("doctor_local.bd5aaa5770"),
                 status="ok",
                 severity="info",
-                detail=f"{client.name} resolves from PATH to {client.path}.",
+                detail=ui_message(
+                    "doctor_local.63f8f638dd", value1=client.name, value2=client.path
+                ),
             )
         # `client.path` is not None by construction - the comprehension above
         # selects on it - but the type does not carry that, and re-testing costs a
@@ -359,38 +366,31 @@ def _install_path_check() -> dict[str, Any]:
         return _check(
             id="install.path",
             category="install",
-            title="Commands on PATH",
+            title=ui_message("doctor_local.bd5aaa5770"),
             status="warn",
             severity="info",
-            detail=(
-                f"The swe-mux command-line client is installed in {where} but is "
-                "not reachable by name from this PATH. It still works when named "
-                "in full, which is how you are reading this."
-            ),
+            detail=(ui_message("doctor_local.8805f15e85", value1=where)),
             remedy=(
-                f"Add {where} to your PATH, or re-run the swe-mux installer and "
-                "tick the PATH task."
+                f"Add {where} to your PATH, or re-run the swe-mux installer and tick the PATH task."
             ),
         )
     if location.kind == INSTALL_FROZEN:
         return _check(
             id="install.path",
             category="install",
-            title="Commands on PATH",
+            title=ui_message("doctor_local.bd5aaa5770"),
             status="ok",
             severity="info",
-            detail="Frozen desktop app: it is launched from its own executable and "
-            "the tray, so no scripts directory needs to be on PATH.",
+            detail=ui_message("doctor_local.9ce4bfdee7"),
         )
     if not location.installed:
         return _check(
             id="install.path",
             category="install",
-            title="Commands on PATH",
+            title=ui_message("doctor_local.bd5aaa5770"),
             status="fail",
             severity="critical",
-            detail=f"None of the mux, muxd, or swe-mux launchers are present in "
-            f"{location.bin_dir}. This install shipped no commands at all.",
+            detail=ui_message("doctor_local.7ec22be476", value1=location.bin_dir),
             remedy="Reinstall swe-mux (`uv tool install swe-mux`, `pipx install "
             "swe-mux`, or `pip install swe-mux`).",
         )
@@ -399,10 +399,10 @@ def _install_path_check() -> dict[str, Any]:
         return _check(
             id="install.path",
             category="install",
-            title="Commands on PATH",
+            title=ui_message("doctor_local.bd5aaa5770"),
             status="ok",
             severity="info",
-            detail="mux, muxd, and swe-mux all resolve from PATH to this install.",
+            detail=ui_message("doctor_local.abb4df0c82"),
         )
     shadowed = [command for command in unreachable if command.resolved is not None]
     if shadowed:
@@ -413,12 +413,10 @@ def _install_path_check() -> dict[str, Any]:
         return _check(
             id="install.path",
             category="install",
-            title="Commands on PATH",
+            title=ui_message("doctor_local.bd5aaa5770"),
             status="warn",
             severity="critical",
-            detail=f"PATH resolves these names to a different install than this one "
-            f"({names}). Commands typed by name will not run the copy this report "
-            "describes.",
+            detail=ui_message("doctor_local.0d389dd5fb", value1=names),
             remedy=f"Put {location.bin_dir} ahead of the other entry on PATH, or "
             "remove the other install.",
         )
@@ -426,14 +424,11 @@ def _install_path_check() -> dict[str, Any]:
     return _check(
         id="install.path",
         category="install",
-        title="Commands on PATH",
+        title=ui_message("doctor_local.bd5aaa5770"),
         status="warn",
         severity="critical",
-        detail=f"{names} exist in {location.bin_dir}, but that directory is not on "
-        "PATH, so typing them does nothing. The install is complete; it is only "
-        "unreachable by name.",
-        remedy="; ".join(location.path_fix_lines())
-        + f". Until then: {location.module_fallback}",
+        detail=ui_message("doctor_local.194c9a3aae", value1=names, value2=location.bin_dir),
+        remedy="; ".join(location.path_fix_lines()) + f". Until then: {location.module_fallback}",
     )
 
 
@@ -470,30 +465,31 @@ def _python_check() -> dict[str, Any]:
         return _check(
             id="install.python",
             category="install",
-            title="Python runtime",
+            title=ui_message("doctor_local.4ccce141c7"),
             status="ok",
             severity="info",
-            detail=f"Bundled Python {version} on {where} (frozen desktop app).",
+            detail=ui_message("doctor_local.da3bd581b2", value1=version, value2=where),
         )
     if running[:2] < MINIMUM_PYTHON:
         floor = ".".join(str(part) for part in MINIMUM_PYTHON)
         return _check(
             id="install.python",
             category="install",
-            title="Python runtime",
+            title=ui_message("doctor_local.4ccce141c7"),
             status="fail",
             severity="critical",
-            detail=f"Python {version} on {where} is below the {floor} floor swe-mux "
-            "requires; the daemon cannot start on it.",
+            detail=ui_message(
+                "doctor_local.f258e993ae", value1=version, value2=where, value3=floor
+            ),
             remedy=f"Install Python {floor} or newer and reinstall swe-mux into it.",
         )
     return _check(
         id="install.python",
         category="install",
-        title="Python runtime",
+        title=ui_message("doctor_local.4ccce141c7"),
         status="ok",
         severity="info",
-        detail=f"Python {version} on {where}.",
+        detail=ui_message("doctor_local.c094e563fd", value1=version, value2=where),
     )
 
 
@@ -512,7 +508,7 @@ def _imports_check() -> dict[str, Any]:
         return _check(
             id="install.imports",
             category="install",
-            title="Package imports",
+            title=ui_message("doctor_local.200ef9897b"),
             status="unavailable",
             severity="critical",
             detail=absent,
@@ -523,21 +519,20 @@ def _imports_check() -> dict[str, Any]:
         return _check(
             id="install.imports",
             category="install",
-            title="Package imports",
+            title=ui_message("doctor_local.200ef9897b"),
             status="fail",
             severity="critical",
-            detail=f"Importing swe_mux.server failed: {type(exc).__name__}: {exc}. "
-            "The daemon cannot start until this resolves.",
+            detail=ui_message("doctor_local.74084a5499", value1=type(exc).__name__, value2=exc),
             remedy="Reinstall the package and its dependencies "
             "(`uv sync` in a checkout, or `pip install --force-reinstall swe-mux`).",
         )
     return _check(
         id="install.imports",
         category="install",
-        title="Package imports",
+        title=ui_message("doctor_local.200ef9897b"),
         status="ok",
         severity="critical",
-        detail="swe_mux.server and its dependency graph import cleanly.",
+        detail=ui_message("doctor_local.b850683144"),
     )
 
 
@@ -557,7 +552,7 @@ def _frontend_check() -> dict[str, Any]:
         return _check(
             id="install.frontend",
             category="install",
-            title="Frontend bundle",
+            title=ui_message("doctor_local.f7133d6c7a"),
             status="unavailable",
             severity="critical",
             detail=absent,
@@ -571,7 +566,7 @@ def _frontend_check() -> dict[str, Any]:
         return _check(
             id="install.frontend",
             category="install",
-            title="Frontend bundle",
+            title=ui_message("doctor_local.f7133d6c7a"),
             status="ok" if build_id else "warn",
             severity="critical",
             detail=(
@@ -588,23 +583,19 @@ def _frontend_check() -> dict[str, Any]:
         return _check(
             id="install.frontend",
             category="install",
-            title="Frontend bundle",
+            title=ui_message("doctor_local.f7133d6c7a"),
             status="warn",
             severity="critical",
-            detail=f"No frontend bundle at {static}. This is a source checkout, where "
-            "the bundle is gitignored build output, so a fresh clone serves no UI "
-            "until it is built once.",
+            detail=ui_message("doctor_local.c320e1cd77", value1=static),
             remedy="npm --prefix frontend ci && npm --prefix frontend run build",
         )
     return _check(
         id="install.frontend",
         category="install",
-        title="Frontend bundle",
+        title=ui_message("doctor_local.f7133d6c7a"),
         status="fail",
         severity="critical",
-        detail=f"No frontend bundle at {static}. This installed copy of swe-mux "
-        "shipped without its browser UI; the daemon will answer the API and serve "
-        "no interface.",
+        detail=ui_message("doctor_local.9d188812ff", value1=static),
         remedy="Reinstall swe-mux from a complete artifact; a wheel with no "
         "swe_mux/static/index.html is a packaging fault worth reporting.",
     )
@@ -644,19 +635,18 @@ def _data_dir_check(config: Config | None) -> dict[str, Any]:
             return _check(
                 id="install.data_dir",
                 category="install",
-                title="Data directory",
+                title=ui_message("doctor_local.5e6050c24c"),
                 status="ok",
                 severity="critical",
-                detail=f"{data_dir} exists and is writable.",
+                detail=ui_message("doctor_local.415413c3af", value1=data_dir),
             )
         return _check(
             id="install.data_dir",
             category="install",
-            title="Data directory",
+            title=ui_message("doctor_local.5e6050c24c"),
             status="fail",
             severity="critical",
-            detail=f"{data_dir} exists but cannot be written ({reason}); the daemon "
-            "cannot persist config, history, or logs.",
+            detail=ui_message("doctor_local.7413234b00", value1=data_dir, value2=reason),
             remedy="Grant this account write access to the data directory, or point "
             "MUX_DATA_DIR at one it owns.",
         )
@@ -667,21 +657,19 @@ def _data_dir_check(config: Config | None) -> dict[str, Any]:
         return _check(
             id="install.data_dir",
             category="install",
-            title="Data directory",
+            title=ui_message("doctor_local.5e6050c24c"),
             status="fail",
             severity="critical",
-            detail=f"{data_dir} does not exist and cannot be created; no existing "
-            "parent directory is writable.",
+            detail=ui_message("doctor_local.dec785c0e2", value1=data_dir),
             remedy="Point MUX_DATA_DIR at a directory this account can write.",
         )
     return _check(
         id="install.data_dir",
         category="install",
-        title="Data directory",
+        title=ui_message("doctor_local.5e6050c24c"),
         status="ok",
         severity="critical",
-        detail=f"{data_dir} does not exist yet; {parent} is writable, so the first "
-        "run will create it.",
+        detail=ui_message("doctor_local.912fb644e8", value1=data_dir, value2=parent),
     )
 
 
@@ -707,10 +695,10 @@ def _database_check(config: Config | None) -> dict[str, Any]:
         return _check(
             id="install.database",
             category="install",
-            title="SQLite store",
+            title=ui_message("doctor_local.90adf5b266"),
             status="ok",
             severity="critical",
-            detail=f"{path} does not exist yet; the first run will create it.",
+            detail=ui_message("doctor_local.ef56d5b649", value1=path),
         )
     try:
         connection = sqlite3.connect(f"file:{path}?mode=rw", uri=True, timeout=2.0)
@@ -722,21 +710,22 @@ def _database_check(config: Config | None) -> dict[str, Any]:
         return _check(
             id="install.database",
             category="install",
-            title="SQLite store",
+            title=ui_message("doctor_local.90adf5b266"),
             status="fail",
             severity="critical",
-            detail=f"{path} exists but did not open: {type(exc).__name__}: {exc}. "
-            "The daemon cannot start without its store.",
+            detail=ui_message(
+                "doctor_local.becb7df05a", value1=path, value2=type(exc).__name__, value3=exc
+            ),
             remedy="Move the file aside to start from an empty store (history and "
             "durable diagnostics are lost), or recover it with the sqlite3 CLI.",
         )
     return _check(
         id="install.database",
         category="install",
-        title="SQLite store",
+        title=ui_message("doctor_local.90adf5b266"),
         status="ok",
         severity="critical",
-        detail=f"{path} opens; {tables} object(s) in the schema.",
+        detail=ui_message("doctor_local.a6e6918d95", value1=path, value2=tables),
     )
 
 
@@ -770,11 +759,10 @@ def _port_check(config: Config | None, *, target_url: str) -> dict[str, Any]:
         return _check(
             id="install.port",
             category="install",
-            title="Configured port",
+            title=ui_message("doctor_local.3ec07db7c3"),
             status="ok",
             severity="critical",
-            detail=f"Nothing is listening on {host}:{port}; the port is free for the "
-            "daemon to bind.",
+            detail=ui_message("doctor_local.49d925a671", value1=host, value2=port),
         )
     if local_url != target_url:
         # A healthy local daemon is the likeliest explanation, and this report only
@@ -782,22 +770,20 @@ def _port_check(config: Config | None, *, target_url: str) -> dict[str, Any]:
         return _check(
             id="install.port",
             category="install",
-            title="Configured port",
+            title=ui_message("doctor_local.3ec07db7c3"),
             status="ok",
             severity="info",
-            detail=f"A process is listening on this machine's configured {host}:{port}. "
-            f"The report targeted {target_url} instead, so this row is not the cause "
-            "of that failure.",
+            detail=ui_message(
+                "doctor_local.36c6d9e14c", value1=host, value2=port, value3=target_url
+            ),
         )
     return _check(
         id="install.port",
         category="install",
-        title="Configured port",
+        title=ui_message("doctor_local.3ec07db7c3"),
         status="fail",
         severity="critical",
-        detail=f"Something is listening on {host}:{port} but did not answer the swe-mux "
-        "API. Either another program holds the port, or a daemon is running and "
-        "unhealthy; a fresh daemon cannot bind either way.",
+        detail=ui_message("doctor_local.dfda4f9c0c", value1=host, value2=port),
         remedy="Identify the owner (`netstat -ano | findstr :"
         f"{port}` on Windows, `ss -ltnp` on Linux) and stop it, or set a different "
         "port in the swe-mux config.",
@@ -826,7 +812,7 @@ def _pty_check() -> dict[str, Any]:
         return _check(
             id="install.pty",
             category="install",
-            title="Pseudoterminal backend",
+            title=ui_message("doctor_local.361c914085"),
             status="unavailable",
             severity="critical",
             detail=absent,
@@ -841,11 +827,16 @@ def _pty_check() -> dict[str, Any]:
         return _check(
             id="install.pty",
             category="install",
-            title="Pseudoterminal backend",
+            title=ui_message("doctor_local.361c914085"),
             status="fail",
             severity="critical",
-            detail=f"The {backend} backend ({module}) did not import: "
-            f"{type(exc).__name__}: {exc}. No session of any kind can be spawned.",
+            detail=ui_message(
+                "doctor_local.0cb04ec841",
+                value1=backend,
+                value2=module,
+                value3=type(exc).__name__,
+                value4=exc,
+            ),
             remedy=(
                 "Reinstall pywinpty (`uv sync`, or `pip install --force-reinstall "
                 "pywinpty`); a compiled-wheel or VC++ runtime mismatch is the usual "
@@ -857,10 +848,10 @@ def _pty_check() -> dict[str, Any]:
     return _check(
         id="install.pty",
         category="install",
-        title="Pseudoterminal backend",
+        title=ui_message("doctor_local.361c914085"),
         status="ok",
         severity="critical",
-        detail=f"The {backend} backend imports; sessions can be allocated.",
+        detail=ui_message("doctor_local.b3638a80b1", value1=backend),
     )
 
 
@@ -884,33 +875,30 @@ def _supervisor_bundle_check() -> dict[str, Any]:
         return _check(
             id="install.supervisor_bundle",
             category="install",
-            title="PTY supervisor bundle",
+            title=ui_message("doctor_local.586e48bfc8"),
             status="ok",
             severity="info",
-            detail="Source install: the supervisor is launched from source, so no "
-            "dedicated bundle applies.",
+            detail=ui_message("doctor_local.e1feacea6a"),
         )
     exe = dedicated_supervisor_exe()
     if exe is None:
         return _check(
             id="install.supervisor_bundle",
             category="install",
-            title="PTY supervisor bundle",
+            title=ui_message("doctor_local.586e48bfc8"),
             status="warn",
             severity="critical",
-            detail="No dedicated supervisor bundle beside this frozen app. Sessions "
-            "still run, hosted by the app image itself, so rebuilding the app "
-            "requires reaping every session first.",
+            detail=ui_message("doctor_local.498fc54975"),
             remedy="Rebuild it with `python packaging/build_desktop.py "
             "--supervisor-only` (this reaps live sessions; see CLAUDE.md).",
         )
     return _check(
         id="install.supervisor_bundle",
         category="install",
-        title="PTY supervisor bundle",
+        title=ui_message("doctor_local.586e48bfc8"),
         status="ok",
         severity="critical",
-        detail=f"Dedicated supervisor bundle present at {exe}.",
+        detail=ui_message("doctor_local.63c4e4a079", value1=exe),
     )
 
 
@@ -943,8 +931,7 @@ def _extras_checks() -> list[dict[str, Any]]:
                     title=f"{label} [{name}]",
                     status="unavailable",
                     severity="optional",
-                    detail="The desktop shell is Windows-only and does not apply "
-                    "to this host.",
+                    detail=ui_message("doctor_local.9911c8139b"),
                 )
             )
             continue
@@ -988,8 +975,7 @@ def _extras_checks() -> list[dict[str, Any]]:
                 # Extras are fixed at build time in the frozen app, so an install
                 # command there would be advice about a different installation.
                 remedy=(
-                    "Rebuild the desktop app with this extra installed in the build "
-                    "environment."
+                    "Rebuild the desktop app with this extra installed in the build environment."
                     if frozen
                     else location.reinstall_command()
                     if base
@@ -1076,12 +1062,10 @@ def _optional_asset_local_checks(config: Config | None) -> list[dict[str, Any]]:
             _check(
                 id="optional-assets.unchecked",
                 category="optional-assets",
-                title="First-use downloads",
+                title=ui_message("doctor_local.b6aea2f847"),
                 status="unchecked",
                 severity="info",
-                detail="Probing the first-use assets (Chromium, the speech models) "
-                f"raised {type(exc).__name__}: {exc}, so nothing is known about "
-                "them. The package-import check above names the underlying fault.",
+                detail=ui_message("doctor_local.1b4f42d104", value1=type(exc).__name__, value2=exc),
             )
         ]
 
@@ -1125,13 +1109,10 @@ def _config_check(config: Config | None, config_error: str | None) -> dict[str, 
         return _check(
             id="install.config",
             category="install",
-            title="Configuration file",
+            title=ui_message("doctor_local.f1c216ddf2"),
             status="fail",
             severity="critical",
-            detail=f"The swe-mux config did not load: {config_error}. The daemon "
-            "refuses to start on a config it cannot validate, and the CLI falls back "
-            "to the loopback default, so every command may be pointed at the wrong "
-            "daemon.",
+            detail=ui_message("doctor_local.393dfba171", value1=config_error),
             remedy="Fix or move aside config.toml in the data directory; a removed "
             "config is rewritten with defaults on the next start.",
         )
@@ -1140,10 +1121,10 @@ def _config_check(config: Config | None, config_error: str | None) -> dict[str, 
     return _check(
         id="install.config",
         category="install",
-        title="Configuration file",
+        title=ui_message("doctor_local.f1c216ddf2"),
         status="ok",
         severity="critical",
-        detail=f"{path} loads and validates (schema {config.schema_version}).",
+        detail=ui_message("doctor_local.b7d7edd31e", value1=path, value2=config.schema_version),
     )
 
 

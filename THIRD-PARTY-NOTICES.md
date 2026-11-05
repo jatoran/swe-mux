@@ -176,7 +176,7 @@ by immutable revision and verified per-file by SHA-256 before it loads.
 | wrapt | 2.3.0 | BSD-2-Clause |
 | yarl | 1.24.2 | Apache-2.0 |
 
-## Frontend packages (96)
+## Frontend packages (102)
 
 | Package | Version | License |
 |---|---|---|
@@ -203,6 +203,9 @@ by immutable revision and verified per-file by SHA-256 before it loads.
 | @codemirror/state | 6.7.1 | MIT |
 | @codemirror/view | 6.43.9 | MIT |
 | @continuity-editor/editor | 0.2.40 | MIT |
+| @formatjs/fast-memoize | 3.1.7 | MIT |
+| @formatjs/icu-messageformat-parser | 3.5.22 | MIT |
+| @formatjs/icu-skeleton-parser | 2.1.12 | MIT |
 | @lezer/common | 1.5.2 | MIT |
 | @lezer/cpp | 1.1.6 | MIT |
 | @lezer/css | 1.3.6 | MIT |
@@ -220,6 +223,8 @@ by immutable revision and verified per-file by SHA-256 before it loads.
 | @lezer/xml | 1.0.6 | MIT |
 | @lezer/yaml | 1.0.4 | MIT |
 | @marijn/find-cluster-break | 1.0.3 | MIT |
+| @preact/signals | 2.11.4 | MIT |
+| @preact/signals-core | 1.14.5 | MIT |
 | @protobufjs/aspromise | 1.1.2 | BSD-3-Clause |
 | @protobufjs/base64 | 1.1.2 | BSD-3-Clause |
 | @protobufjs/codegen | 2.0.5 | BSD-3-Clause |
@@ -254,6 +259,7 @@ by immutable revision and verified per-file by SHA-256 before it loads.
 | graphology-types | 0.24.8 | MIT |
 | graphology-utils | 2.5.2 | MIT |
 | guid-typescript | 1.0.9 | ISC |
+| intl-messageformat | 12.1.4 | BSD-3-Clause |
 | js-base64 | 3.8.1 | BSD-3-Clause |
 | js-tokens | 4.0.0 | MIT |
 | lodash | 4.18.1 | MIT |

@@ -1,3 +1,4 @@
+import { t, sourceText, type MessageId } from './localization/index.ts'
 /**
  * The Settings panel's navigation model: which tabs exist, how they group, how a
  * deep link names one, and which tabs expose separate pages.
@@ -14,25 +15,25 @@
  * one group must therefore stay contiguous - a group is its run, not its members.
  */
 export const settingsTabs = [
-  {id:'general',label:'General',group:'Workspace'},
-  {id:'projects',label:'Projects',group:'Workspace'},
-  {id:'terminals',label:'Terminals',group:'Workspace'},
-  {id:'git',label:'Git',group:'Workspace'},
-  {id:'processes',label:'Processes',group:'Workspace'},
-  {id:'harnesses',label:'Harnesses',group:'Agents'},
-  {id:'accounts',label:'Accounts',group:'Agents'},
-  {id:'queue',label:'Prompt queue',group:'Agents'},
-  {id:'automation',label:'Automation',group:'Agents'},
-  {id:'plugins',label:'Plugins',group:'Agents'},
-  {id:'usage',label:'Usage',group:'Agents'},
-  {id:'appearance',label:'Appearance',group:'Interface'},
-  {id:'actions',label:'Actions',group:'Interface'},
-  {id:'input',label:'Input',group:'Interface'},
-  {id:'notes',label:'Notes',group:'Interface'},
-  {id:'voice',label:'Voice',group:'Interface'},
-  {id:'notifications',label:'Alerts',group:'System'},
-  {id:'remote',label:'Remote',group:'System'},
-  {id:'maintenance',label:'Maintenance',group:'System'},
+  {id:'general',get label() { return t("settingsTabs.c910d474dc") },get group(){return t("settingsTabs.87bb59ba2f")}},
+  {id:'projects',get label() { return t("settingsTabs.04e2a9728a") },get group(){return t("settingsTabs.87bb59ba2f")}},
+  {id:'terminals',get label() { return t("settingsTabs.7482c40f80") },get group(){return t("settingsTabs.87bb59ba2f")}},
+  {id:'git',get label() { return t("settingsTabs.b949c922b6") },get group(){return t("settingsTabs.87bb59ba2f")}},
+  {id:'processes',get label() { return t("settingsTabs.4a81a7ba53") },get group(){return t("settingsTabs.87bb59ba2f")}},
+  {id:'harnesses',get label() { return t("settingsTabs.f817714a1a") },get group(){return t("settingsTabs.279b44d2ab")}},
+  {id:'accounts',get label() { return t("settingsTabs.8a7c8b67fe") },get group(){return t("settingsTabs.279b44d2ab")}},
+  {id:'queue',get label() { return t("settingsTabs.ac87afaf2f") },get group(){return t("settingsTabs.279b44d2ab")}},
+  {id:'automation',get label() { return t("settingsTabs.d909750b1b") },get group(){return t("settingsTabs.279b44d2ab")}},
+  {id:'plugins',get label() { return t("settingsTabs.9514b7ff48") },get group(){return t("settingsTabs.279b44d2ab")}},
+  {id:'usage',get label() { return t("settingsTabs.8d59829c1e") },get group(){return t("settingsTabs.279b44d2ab")}},
+  {id:'appearance',get label() { return t("settingsTabs.3907fa7f80") },get group(){return t("settingsTabs.c26b3ed4ce")}},
+  {id:'actions',get label() { return t("settingsTabs.ff8059dc67") },get group(){return t("settingsTabs.c26b3ed4ce")}},
+  {id:'input',get label() { return t("settingsTabs.36ecb4f866") },get group(){return t("settingsTabs.c26b3ed4ce")}},
+  {id:'notes',get label() { return t("settingsTabs.8a7525b149") },get group(){return t("settingsTabs.c26b3ed4ce")}},
+  {id:'voice',get label() { return t("settingsTabs.87bf2bc085") },get group(){return t("settingsTabs.c26b3ed4ce")}},
+  {id:'notifications',get label() { return t("settingsTabs.f62e9267d1") },get group(){return t("settingsTabs.6725e7bbcd")}},
+  {id:'remote',get label() { return t("settingsTabs.ffa98e02f7") },get group(){return t("settingsTabs.6725e7bbcd")}},
+  {id:'maintenance',get label() { return t("settingsTabs.17ccfa5b68") },get group(){return t("settingsTabs.6725e7bbcd")}},
 ] as const
 
 export type SettingsTab = typeof settingsTabs[number]['id']
@@ -55,49 +56,54 @@ export type SettingsSubpage = { id:string; label:string }
 function subpageSlug(label:string):string {
   return label.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'')||'section'
 }
-const subpages = (...labels:string[]):SettingsSubpage[] => labels.map(label=>({id:subpageSlug(label),label}))
+const subpages = (...ids:MessageId[]):SettingsSubpage[] => ids.map(id=>({id:subpageSlug(sourceText(id)),get label(){return t(id)}}))
 
 export const settingsSubpages:Partial<Record<SettingsTab,SettingsSubpage[]>> = {
-  accounts:subpages('Provider accounts','Model provider','Models'),
-  queue:subpages('Overview','Auto-delivery','Approvals','Agent messaging','Agent actuation','Queue history'),
-  appearance:subpages('Interface','Session rows','Session top bars'),
-  input:subpages('Pointer','Mobile terminal','Clipboard history','Touch gestures','Keyboard shortcuts'),
-  voice:subpages('Read aloud','Talk & dictation','Voice commands','Mux assistant','Diagnostics'),
+  accounts:subpages("settingsTabs.a701acdcc0","settingsTabs.ea70384c46","settingsTabs.d17d2d78d7"),
+  queue:subpages("settingsTabs.d4b1ea5708","settingsTabs.a5c30a1abf","settingsTabs.2bfc347157","settingsTabs.be19f68d0c","settingsTabs.14be9614c7","settingsTabs.4a7178cdec"),
+  appearance:subpages("settingsTabs.c26b3ed4ce","heading.30921545c4","heading.363df1ed9e"),
+  input:subpages("settingsTabs.d00f1e4dc0","settingsTabs.114b9bbcf1","settingsTabs.7ca62c6a45","settingsTabs.f3e334b454","heading.e9bef0b0f3"),
+  voice:subpages("heading.0791ec6847","heading.116fe62640","heading.7fca441bba","heading.0fe741492b","settingsTabs.268f14bbfe"),
 }
 
 const groupedHeadings:Partial<Record<SettingsTab,Record<string,string>>> = {
   appearance:{
-    'Device mode':'interface','Theme':'interface','Terminal font':'interface','Right sidebar':'interface','Interface scale':'interface',
-    'Session rows':'session-rows',
-    'Session top bars':'session-top-bars',
+    "heading.f51cb60111":'interface',"heading.efb52e7172":'interface',"heading.c70da52b01":'interface',"heading.14721e2ef2":'interface',"heading.6ba5218d81":'interface',
+    "heading.30921545c4":'session-rows',
+    "heading.363df1ed9e":'session-top-bars',
   },
   // The OpenRouter block (the API key, and the catalogue it fetches) is a second
   // section on the Model provider page, rendered only while that provider is
   // selected. Undeclared it matched no page, so it was hidden on every one of
   // them and the key could not be reached from Settings at all.
-  accounts:{'OpenRouter':'model-provider'},
+  accounts:{"heading.eb70c3bc14":'model-provider'},
   // The shortcuts page is three headings deep - the preset picker, the shortcut
   // tree, and the browser probe - and only the middle one is the page's name.
   // Without these its section resolved to `what-this-browser-gives-the-app`,
   // which is not a declared page, so selecting "Keyboard shortcuts" matched no
   // section, hid all of them, and drew a blank pane.
   input:{
-    'Keyboard preset':'keyboard-shortcuts',
-    'Keyboard shortcuts':'keyboard-shortcuts',
-    'What this browser gives the app':'keyboard-shortcuts',
+    "heading.f5281d5e03":'keyboard-shortcuts',
+    "heading.e9bef0b0f3":'keyboard-shortcuts',
+    "heading.8b07606865":'keyboard-shortcuts',
   },
   voice:{
-    'Read aloud (TTS)':'read-aloud','Read aloud':'read-aloud','Voice and engine':'read-aloud','TTS provider':'read-aloud',Pronunciation:'read-aloud','Spoken summary':'read-aloud','Clip storage':'read-aloud',
-    'Microphone and wake words':'talk-dictation','Talk & dictation':'talk-dictation',
-    'Command phrases':'voice-commands','Voice commands':'voice-commands','Command reference':'voice-commands',
-    'Mux assistant':'mux-assistant',
-    'Testing and latency':'diagnostics','Mobile voice':'diagnostics',
+    "heading.927af3f8ff":'read-aloud',"heading.0791ec6847":'read-aloud',"heading.8439d96892":'read-aloud',"heading.6491c8fb07":'read-aloud',"heading.75cb1e131c":'read-aloud',"heading.aeba66a52f":'read-aloud',"heading.af71af7319":'read-aloud',
+    "heading.c0e191a156":'talk-dictation',"heading.116fe62640":'talk-dictation',
+    "heading.c75483c85c":'voice-commands',"heading.7fca441bba":'voice-commands',"heading.64a0c611be":'voice-commands',
+    "heading.0fe741492b":'mux-assistant',
+    "heading.cfc1c5858d":'diagnostics',"heading.732d8524f8":'diagnostics',
   },
 }
 
 /** The declared page that owns one rendered heading. */
 export function settingsSubpageId(tab:SettingsTab,heading:string):string {
-  return groupedHeadings[tab]?.[heading.trim()]||subpageSlug(heading)
+  const value=heading.trim()
+  const group=groupedHeadings[tab]
+  if(group)for(const [id,page] of Object.entries(group)){
+    if(sourceText(id)===value||t(id as MessageId)===value)return page
+  }
+  return settingsSubpages[tab]?.find(page=>page.label===value)?.id||subpageSlug(value)
 }
 
 /**
@@ -143,7 +149,7 @@ export const SETTINGS_NAV_CLOSE = 'settingsNav.close'
  * keep in step, and a tab that drifts away from its group shows up as a repeated
  * heading rather than as a silently miscategorised tab.
  */
-export const settingsTabGroups: {group:string;tabs:SettingsTabEntry[]}[] =
+export const settingsTabGroups = (): {group:string;tabs:SettingsTabEntry[]}[] =>
   settingsTabs.reduce<{group:string;tabs:SettingsTabEntry[]}[]>((groups,tab)=>{
     const last=groups[groups.length-1]
     if(last&&last.group===tab.group)last.tabs.push(tab)
@@ -180,7 +186,7 @@ export const SECTION_ALIASES:Record<string,SettingsTab> = {
 /** Which tab a deep link's section name opens. Unknown names land on General. */
 export const tabForSection = (section:string):SettingsTab => {
   const key=section.trim().toLowerCase()
-  const byLabel=settingsTabs.find(tab=>tab.label.toLowerCase()===key)
+  const byLabel=settingsTabs.find(tab=>tab.label.toLowerCase()===key||tab.id===key)
   return byLabel?byLabel.id:(SECTION_ALIASES[key]||'general')
 }
 
@@ -255,13 +261,13 @@ export const sectionSlug = (label:string):string =>
  * survive a reload, so two headings that slug the same must not both answer to
  * the same id.
  */
-export const railSectionIds = (labels:string[]):SettingsRailSection[] => {
+export const railSectionIds = (labels:string[],sources:readonly string[]=labels):SettingsRailSection[] => {
   const used=new Map<string,number>()
   const out:SettingsRailSection[]=[]
-  for(const raw of labels){
+  for(const [index,raw] of labels.entries()){
     const label=raw.trim()
     if(!label)continue
-    const base=sectionSlug(label)
+    const base=sectionSlug(sources[index]||label)
     const seen=(used.get(base)||0)+1
     used.set(base,seen)
     out.push({id:seen>1?`${base}-${seen}`:base,label})

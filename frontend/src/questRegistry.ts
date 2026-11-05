@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // The quest log: three multi-step setups worth pointing at, and nothing else.
 //
 // The cap is the feature. A quest log that grows into a general todo list is an
@@ -25,21 +26,21 @@ export type Quest = {
 export const QUESTS: readonly Quest[] = [
   {
     id: 'voice',
-    title: 'Set up voice',
-    blurb: 'Read replies aloud and talk to your agents. A guided walk covers the engine, the download, and the microphone.',
-    action: 'Guided setup',
+    get title() { return t("questRegistry.35caa7c79c") },
+    get blurb() { return t("questRegistry.0ca0400577") },
+    get action() { return t("questRegistry.8ef7823ca8") },
   },
   {
     id: 'worktrees',
-    title: 'Try an isolated worktree',
-    blurb: 'Run an agent on a branch in its own checkout - parallel work that cannot touch your main tree. Start one from Run → Isolated checkout.',
-    action: 'Open Git',
+    get title() { return t("questRegistry.ea6b05aeec") },
+    get blurb() { return t("questRegistry.1bd34d8c81") },
+    get action() { return t("questRegistry.339ccf5fcc") },
   },
   {
     id: 'phone',
-    title: 'Connect your phone',
-    blurb: 'The whole fleet from your pocket: watch sessions, answer prompts, and talk hands-free over your tailnet.',
-    action: 'Open Remote',
+    get title() { return t("questRegistry.1d3326aa87") },
+    get blurb() { return t("questRegistry.deed22ff69") },
+    get action() { return t("questRegistry.c8363b9bc0") },
   },
 ]
 

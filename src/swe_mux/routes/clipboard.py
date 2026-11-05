@@ -12,6 +12,7 @@ from .. import (
 from ..clipboard_store import ClipboardStore
 from ..errors import NotFound
 from ..http_support import json_response
+from ..ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -81,7 +82,7 @@ async def get_clipboard_entry(request: web.Request) -> web.Response:
 async def patch_clipboard_entry(request: web.Request) -> web.Response:
     body = await request.json() if request.can_read_body else {}
     if "pinned" not in body:
-        raise ValueError("pinned is required")
+        raise ValueError(ui_message("clipboard.0f6d687a46"))
     entry = await _clipboard_store(request).set_pinned(
         request.match_info["entry_id"], bool(body["pinned"])
     )

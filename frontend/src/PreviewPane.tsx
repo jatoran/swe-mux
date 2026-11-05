@@ -1,3 +1,4 @@
+import { rich, t } from './localization/index.ts'
 import { touchInput } from './deviceMode'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from './api'
@@ -102,10 +103,10 @@ export function PreviewPane({ preview, onClose }: { preview: Preview; onClose: (
 
   const copyReference = async (text: string) => {
     if (await copyPreparedText(text, manualRef.current)) {
-      setPrepared(''); setManual(false); setNote('Screenshot reference copied to clipboard.')
+      setPrepared(''); setManual(false); setNote(t("PreviewPane.f146f23866"))
       return
     }
-    setPrepared(text); setManual(mobileClipboardFallback()); setNote('Clipboard blocked — copy the prepared text.')
+    setPrepared(text); setManual(mobileClipboardFallback()); setNote(t("PreviewPane.2b0016f07b"))
     requestAnimationFrame(() => { manualRef.current?.focus(); manualRef.current?.select() })
   }
   const retryCopy = async () => {
@@ -117,14 +118,14 @@ export function PreviewPane({ preview, onClose }: { preview: Preview; onClose: (
 
   const capture = async (opts?: { clip: Clip; width: number; height: number }) => {
     const width = opts?.width ?? fallbackWidth
-    setBusy(true); setNote(opts ? 'Capturing region…' : 'Capturing preview…')
+    setBusy(true); setNote(opts ? t("PreviewPane.822b92d564") : t("PreviewPane.b1c293dc57"))
     try {
       const result = await api<CaptureResult>('POST', `/api/previews/${encodeURIComponent(preview.id)}/capture`,
         { viewport, width, path: shown.current.path, ...(opts ? { height: opts.height, clip: opts.clip } : {}) })
       if (!result.available) { setNote(captureUnavailableNote(result)); return }
-      if (result.error || !result.path) { setNote(result.error || 'Capture failed.'); return }
-      const scope = result.region ? 'selected region of the' : 'current'
-      await copyReference(`Here is the ${scope} ${isStatic?label:`${preview.host}:${preview.port}`} preview at ${width}px width — screenshot saved at ${result.path}. Please read that image file.`)
+      if (result.error || !result.path) { setNote(result.error || t("PreviewPane.92547cf99b")); return }
+      const scope = result.region ? t("PreviewPane.cf2346ae06") : 'current'
+      await copyReference(t("PreviewPane.de47ae5023", { value1: scope, value2: isStatic?label:`${preview.host}:${preview.port}`, value3: width, value4: result.path }))
     } catch (err) { setNote(err instanceof Error ? err.message : String(err)) }
     finally { setBusy(false) }
   }
@@ -159,7 +160,7 @@ export function PreviewPane({ preview, onClose }: { preview: Preview; onClose: (
     const ov = overlayRef.current?.getBoundingClientRect()
     const frame = iframeRef.current?.getBoundingClientRect()
     dragStart.current = null; setRect(null); setSelecting(false)
-    if (!box || !ov || !frame || box.w < 4 || box.h < 4) { setNote('Selection too small — try again.'); return }
+    if (!box || !ov || !frame || box.w < 4 || box.h < 4) { setNote(t("PreviewPane.f7e4ce827a")); return }
     // Overlay-relative display coords → iframe-relative page coords for the clip.
     const dx = frame.left - ov.left, dy = frame.top - ov.top
     void capture({
@@ -244,45 +245,43 @@ export function PreviewPane({ preview, onClose }: { preview: Preview; onClose: (
   }, [isStatic, live, paused, preview.id])
 
   return <section class={`preview-pane viewport-${viewport}${conflict?' has-port-conflict':''}`}>
-    <header><div><span>[PREVIEW]</span><strong title={preview.url}>{label}</strong><small>{preview.source}</small></div><nav><button onClick={()=>setViewport('mobile')}>mobile</button><button onClick={()=>setViewport('tablet')}>tablet</button><button onClick={()=>setViewport('responsive')}>fit</button><button onClick={reloadShown}>refresh</button><button class={live?'active':''} aria-pressed={live} title={live?(isStatic?'Reloading when the served files change':'Reloading when the page or its assets change on the server'):'Not following file changes'} onClick={()=>setLive(value=>!value)}>live</button><button onClick={()=>void navigator.clipboard.writeText(new URL(shownUrl,location.href).toString())}>copy</button><button onClick={()=>window.open(shownUrl,'_blank','noopener,noreferrer')}>external</button><button aria-label="Close preview" onClick={onClose}>×</button></nav></header>
+    <header><div><span>{t("PreviewPane.1c6fe2a657")}</span><strong title={preview.url}>{label}</strong><small>{preview.source}</small></div><nav><button onClick={()=>setViewport('mobile')}>{t("PreviewPane.d524c1a081")}</button><button onClick={()=>setViewport('tablet')}>{t("PreviewPane.5bed85bd69")}</button><button onClick={()=>setViewport('responsive')}>{t("PreviewPane.da4270e373")}</button><button onClick={reloadShown}>{t("PreviewPane.d6cc0a088c")}</button><button class={live?'active':''} aria-pressed={live} title={live ? (isStatic ? t("PreviewPane.3cd585265c") : t("PreviewPane.85a5717281")) : t("PreviewPane.3f716fbc09")} onClick={()=>setLive(value=>!value)}>{t("PreviewPane.247610f4de")}</button><button onClick={()=>void navigator.clipboard.writeText(new URL(shownUrl,location.href).toString())}>{t("PreviewPane.6f5a6034e7")}</button><button onClick={()=>window.open(shownUrl,'_blank','noopener,noreferrer')}>{t("PreviewPane.3c4623849a")}</button><button aria-label={t("PreviewPane.7d8ab36821")} onClick={onClose}>×</button></nav></header>
     {conflict && <div class={`preview-port-conflict ${conflict.severity}`} role="alert" data-testid="preview-port-conflict">
       <div class="preview-port-conflict-headline">
         <strong>{conflict.headline}</strong>
-        <button type="button" aria-expanded={conflictOpen} onClick={()=>setConflictOpen(value=>!value)}>{conflictOpen?'hide':'details'}</button>
+        <button type="button" aria-expanded={conflictOpen} onClick={()=>setConflictOpen(value=>!value)}>{conflictOpen ? t("PreviewPane.1f5bb9791a") : t("PreviewPane.41ffd8b76a")}</button>
       </div>
       {conflictOpen && <>
         <ul>{conflict.listeners.map(item => <li key={item.pid} class={item.answering?'answering':''}>
-          <span class="preview-port-conflict-pid">PID {item.pid}</span>
+          <span class="preview-port-conflict-pid">{rich("PreviewPane.4a52d42108", { pid: item.pid })}</span>
           <code title={item.label}>{item.label}</code>
-          <small>{item.detail}{item.answering?' · answering':''}</small>
-          <button type="button" onClick={()=>void navigator.clipboard.writeText(String(item.pid))}>copy PID</button>
+          <small>{item.detail}{item.answering ? t("PreviewPane.c98dabad70") : ''}</small>
+          <button type="button" onClick={()=>void navigator.clipboard.writeText(String(item.pid))}>{t("PreviewPane.840f371664")}</button>
         </li>)}</ul>
         <small>{conflict.remedy}</small>
       </>}
     </div>}
     <div class="preview-frame">
-      {paused
-        ? <div class="preview-paused" role="status" data-testid="preview-paused">
-            <strong>Preview paused</strong>
-            <span>swe-mux reloaded this window after the page stopped working, and holds previews until you ask for one.</span>
-            <button type="button" onClick={()=>rendererRecovery.resume(preview.id)}>Load preview</button>
-          </div>
-        : <iframe ref={iframeRef} key={refresh} title={`Preview ${preview.url}`} src={proxyUrl} sandbox="allow-forms allow-modals allow-pointer-lock allow-popups allow-scripts" />}
+      {paused ? <div class="preview-paused" role="status" data-testid="preview-paused">
+            <strong>{t("PreviewPane.580511c353")}</strong>
+            <span>{t("PreviewPane.39ce41bee0")}</span>
+            <button type="button" onClick={()=>rendererRecovery.resume(preview.id)}>{t("PreviewPane.a66fb2d83b")}</button>
+          </div> : <iframe ref={iframeRef} key={refresh} title={t("PreviewPane.9c5a75619b", { url: preview.url })} src={proxyUrl} sandbox="allow-forms allow-modals allow-pointer-lock allow-popups allow-scripts" />}
       {selecting && <div ref={overlayRef} class="preview-select-overlay" onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={endDrag}>
         {rect && <div class="preview-select-rect" style={`left:${rect.x}px;top:${rect.y}px;width:${rect.w}px;height:${rect.h}px;border:2px solid #00e5ff;background:rgba(0,229,255,.28);box-shadow:0 0 0 1px #000,0 0 8px #00e5ff`} />}
-        <span class="preview-select-hint">drag to select a region · Esc to cancel</span>
+        <span class="preview-select-hint">{t("PreviewPane.edc8454bff")}</span>
       </div>}
       {prepared && <div class="prepared-clipboard" role="status">
-        <span>Copy the screenshot reference.</span>
-        <button onClick={()=>void retryCopy()}>Copy</button>
-        <button aria-label="Dismiss" onClick={()=>{setPrepared('');setManual(false)}}>×</button>
-        <textarea ref={manualRef} class={manual?'manual':''} readOnly value={prepared} aria-label="Screenshot reference text" onFocus={e=>e.currentTarget.select()} />
+        <span>{t("PreviewPane.3ea1f836bb")}</span>
+        <button onClick={()=>void retryCopy()}>{t("PreviewPane.e21f935f11")}</button>
+        <button aria-label={t("PreviewPane.48845bff33")} onClick={()=>{setPrepared('');setManual(false)}}>×</button>
+        <textarea ref={manualRef} class={manual?'manual':''} readOnly value={prepared} aria-label={t("PreviewPane.fd8a7d1fec")} onFocus={e=>e.currentTarget.select()} />
       </div>}
     </div>
     <footer class="preview-rail">
-      <button class="rail-send" disabled={busy} onClick={()=>void capture()}>⧉ capture</button>
-      <button class={`rail-region ${selecting?'active':''}`} disabled={busy} onClick={()=>{ if(selecting){cancelSelect()}else{setSelecting(true);setNote('Drag over the preview to select a region.')} }}>▢ region</button>
-      <small>{note||(isStatic?`served from ${preview.doc_root_relative||'the project root'} · copies a screenshot reference`:'session-owned loopback bridge · copies a screenshot reference')}</small>
+      <button class="rail-send" disabled={busy} onClick={()=>void capture()}>{t("PreviewPane.ca1bde183a")}</button>
+      <button class={`rail-region ${selecting?'active':''}`} disabled={busy} onClick={()=>{ if(selecting){cancelSelect()}else{setSelecting(true);setNote(t("PreviewPane.1306b51f76"))} }}>{t("PreviewPane.96fb749caa")}</button>
+      <small>{note || (isStatic ? t("PreviewPane.2ddabc7c2f", { value1: preview.doc_root_relative||t("PreviewPane.3a8b8cd881") }) : t("PreviewPane.5a8873731b"))}</small>
     </footer>
   </section>
 }

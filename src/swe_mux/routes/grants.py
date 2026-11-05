@@ -34,6 +34,7 @@ from ..project_files import (
     write_project_config,
 )
 from ..runtime_config import apply_runtime_config
+from ..ui_messages import error_text, ui_message
 from . import automation
 from .support import _registered_identity
 
@@ -114,19 +115,19 @@ async def apply_grants(request: web.Request) -> web.Response:
     """
     body = await request.json()
     if not isinstance(body, dict):
-        raise ValueError("grant request body must be an object")
+        raise ValueError(ui_message("grants.6ad29c7d4d"))
     config: Config = request.app[keys.CONFIG]
     install_request = body.get("install") or {}
     if not isinstance(install_request, dict):
-        raise ValueError("install must be a table of switches")
+        raise ValueError(ui_message("grants.ca7d5c9bd2"))
     automations_request = body.get("automations") or []
     if not isinstance(automations_request, list) or not all(
         isinstance(item, str) for item in automations_request
     ):
-        raise ValueError("automations must be a list of automation ids")
+        raise ValueError(ui_message("grants.bfa981dfcb"))
     values_request = body.get("values") or {}
     if not isinstance(values_request, dict):
-        raise ValueError("values must be a table of Project fields")
+        raise ValueError(ui_message("grants.35df31faeb"))
 
     project = None
     project_config: dict[str, Any] | None = None
@@ -136,14 +137,14 @@ async def apply_grants(request: web.Request) -> web.Response:
         project_id = str(body.get("project_id") or "")
         project = request.app[keys.PROJECTS].projects.get(project_id)
         if project is None:
-            raise ValueError("a Project grant needs a known project_id")
+            raise ValueError(ui_message("grants.6ec40b8cc3"))
         project_config = await read_project_config(
             project.root, project=_registered_identity(project)
         )
         if project_config["status"] == "malformed":
             return json_response(
                 {
-                    "error": "this Project's .swe-mux/config.toml could not be parsed",
+                    "error": ui_message("grants.6297d56332"),
                     "code": "project_config_malformed",
                 },
                 409,
@@ -151,7 +152,7 @@ async def apply_grants(request: web.Request) -> web.Response:
         if project_config["status"] == "read-only":
             return json_response(
                 {
-                    "error": "this Project's .swe-mux/config.toml is read-only",
+                    "error": ui_message("grants.1f4e878eb6"),
                     "code": "project_config_read_only",
                 },
                 409,
@@ -168,9 +169,7 @@ async def apply_grants(request: web.Request) -> web.Response:
             install=install_request,
             automations=automations_request,
             values=values_request,
-            current_install={
-                key: getattr(config, key, None) for key in GRANTABLE_INSTALL_KEYS
-            },
+            current_install={key: getattr(config, key, None) for key in GRANTABLE_INSTALL_KEYS},
             current_automations=current_automations,
             current_values=current_values,
             global_allow=automation._global_allow(config),
@@ -200,7 +199,7 @@ async def apply_grants(request: web.Request) -> web.Response:
             )
         except ValueError as exc:
             if "changed externally" in str(exc):
-                return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+                return json_response({"error": error_text(exc), "code": "revision_conflict"}, 409)
             raise
         if gate_cache := request.app.get(keys.AUTOMATION_GATE_CACHE):
             gate_cache.clear()
@@ -213,9 +212,7 @@ async def apply_grants(request: web.Request) -> web.Response:
                 request.app[keys.PROJECT_CONTEXTS].ensure,
                 ProjectContext(project_id=project.id, project_root=project.root),
             )
-        await request.app[keys.EVENTS].emit(
-            "project_configuration_changed", project_id=project.id
-        )
+        await request.app[keys.EVENTS].emit("project_configuration_changed", project_id=project.id)
         land_queue = request.app.get(keys.LAND_QUEUE)
         if "land_verify_grant" in plan.values and land_queue is not None:
             # Raising this clears every verification block whose bytes this machine

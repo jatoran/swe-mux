@@ -3,36 +3,42 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from tests.support.frontend_source import localized_source, source_contains
+
 
 def test_recursive_layout_and_command_surfaces_are_wired() -> None:
     root = Path(__file__).parents[1]
-    app = (root / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
-    layout = (root / "frontend" / "src" / "layout.ts").read_text(encoding="utf-8")
+    app = localized_source((root / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8"))
+    layout = localized_source((root / "frontend" / "src" / "layout.ts").read_text(encoding="utf-8"))
 
-    assert "type PaneSplit" in layout
-    assert "setSplitRatio" in layout
-    assert "swapTerminals" in layout
-    assert 'role="separator"' in app
-    assert "paneNeighborIds" in app
+    assert source_contains(layout, "type PaneSplit")
+    assert source_contains(layout, "setSplitRatio")
+    assert source_contains(layout, "swapTerminals")
+    assert source_contains(app, 'role="separator"')
+    assert source_contains(app, "paneNeighborIds")
     # This used to assert `pane.swapNext` was ABSENT from App, which was true and was
     # the bug: the id was registered in `keybindings.py` the whole time, so it was
     # bindable, appeared in the shortcut editor, and did nothing when pressed.
     # Registered ids and implemented commands are now checked against each other in
     # `test_keybinding_registry.py`; what belongs here is that it is implemented.
-    assert "id: 'pane.swapNext'" in app
+    assert source_contains(app, "id: 'pane.swapNext'")
     # Scoring is gated on the palette being open, and the gate lives in `commands.ts`
     # so the renderer harness exercises the same function the app does.
     # `commands` became `scopedCommands` and `paletteQuery` became `paletteTerm` when
     # the palette gained its `@`/`#`/`:`/`>` scopes; the gate itself is unchanged and
     # still the thing being asserted.
-    assert "paletteResults(paletteOpen, scopedCommands, paletteTerm)" in app
-    commands = (root / "frontend" / "src" / "commands.ts").read_text(encoding="utf-8")
-    assert "return open ? searchCommands(commands, query) : NO_COMMANDS" in commands
+    assert source_contains(app, "paletteResults(paletteOpen, scopedCommands, paletteTerm)")
+    commands = localized_source(
+        (root / "frontend" / "src" / "commands.ts").read_text(encoding="utf-8")
+    )
+    assert source_contains(commands, "return open ? searchCommands(commands, query) : NO_COMMANDS")
 
 
 def test_normal_ui_flows_do_not_use_browser_native_dialogs() -> None:
     root = Path(__file__).parents[1] / "frontend" / "src"
-    source = "\n".join(path.read_text(encoding="utf-8") for path in root.glob("*.ts*"))
+    source = "\n".join(
+        localized_source(path.read_text(encoding="utf-8")) for path in root.glob("*.ts*")
+    )
 
     assert "alert(" not in source
     assert "confirm(" not in source
@@ -42,58 +48,66 @@ def test_normal_ui_flows_do_not_use_browser_native_dialogs() -> None:
     # fallback for the same contexts in the other direction. Any third native
     # dialog is a regression — normal flows use in-app surfaces.
     assert source.count("prompt(") == 2
-    editor = (root / "ProjectNoteEditor.tsx").read_text(encoding="utf-8")
+    editor = localized_source((root / "ProjectNoteEditor.tsx").read_text(encoding="utf-8"))
     assert editor.count("prompt(") == 2
-    assert "window.prompt('Copy the text below:'" in editor
-    assert "window.prompt('Paste text:')" in editor
-    assert "Access token required" not in source
-    assert "mux.token" not in source
-    assert "Create project" in source
-    assert "Select project folder" in source
-    assert "/api/fs/roots" in source
-    assert "/api/fs/list" in source
-    assert "folderNameFromPath(root)" in source
-    assert 'aria-label="Manage Projects"' in source
-    assert "project_files_changed" in source
-    assert "Select this folder" in source
-    assert "Create worktree + terminal" not in source
+    assert source_contains(editor, "window.prompt('Copy the text below:'")
+    assert source_contains(editor, "window.prompt('Paste text:')")
+    assert not source_contains(source, "Access token required")
+    assert not source_contains(source, "mux.token")
+    assert source_contains(source, "Create project")
+    assert source_contains(source, "Select project folder")
+    assert source_contains(source, "/api/fs/roots")
+    assert source_contains(source, "/api/fs/list")
+    assert source_contains(source, "folderNameFromPath(root)")
+    assert source_contains(source, 'aria-label="Manage Projects"')
+    assert source_contains(source, "project_files_changed")
+    assert source_contains(source, "Select this folder")
+    assert not source_contains(source, "Create worktree + terminal")
 
 
 def test_daemon_and_ui_reload_controls_are_wired() -> None:
     root = Path(__file__).parents[1] / "frontend" / "src"
-    app = (root / "App.tsx").read_text(encoding="utf-8")
-    css = (root / "style.css").read_text(encoding="utf-8")
+    app = localized_source((root / "App.tsx").read_text(encoding="utf-8"))
+    css = localized_source((root / "style.css").read_text(encoding="utf-8"))
 
     # Session-preserving reload surfaces: palette commands, main-menu entries,
     # the restart endpoint, and the blocking wait overlay.
-    assert "id: 'daemon.reload'" in app and "id: 'ui.reload'" in app
+    assert source_contains(app, "id: 'daemon.reload'") and source_contains(app, "id: 'ui.reload'")
     assert app.count("Reload daemon (keep sessions)") >= 2  # main menu + sidebar menu
-    assert "'/api/daemon/restart'" in app
-    assert "location.reload()" in app
-    assert "daemonReloading" in app and "daemon-reload-layer" in app
-    assert ".daemon-reload-modal" in css
+    assert source_contains(app, "'/api/daemon/restart'")
+    assert source_contains(app, "location.reload()")
+    assert source_contains(app, "daemonReloading") and source_contains(app, "daemon-reload-layer")
+    assert source_contains(css, ".daemon-reload-modal")
 
 
 def test_terminal_find_is_inline_and_feature_complete() -> None:
     root = Path(__file__).parents[1]
-    pane = (root / "frontend" / "src" / "TerminalPane.tsx").read_text(encoding="utf-8")
+    pane = localized_source(
+        (root / "frontend" / "src" / "TerminalPane.tsx").read_text(encoding="utf-8")
+    )
 
-    assert "terminal-find" in pane
-    assert "findNext" in pane
-    assert "findPrevious" in pane
-    assert "caseSensitive" in pane
-    assert "setFindResult(found ? 'match' : 'no match')" in pane
+    assert source_contains(pane, "terminal-find")
+    assert source_contains(pane, "findNext")
+    assert source_contains(pane, "findPrevious")
+    assert source_contains(pane, "caseSensitive")
+    assert source_contains(pane, "setFindResult(found ? 'match' : 'missing')")
+    assert source_contains(pane, "findResult === 'missing' ? 'missing' : ''")
+    assert source_contains(pane, "findResult === 'missing' ? 'no match'")
 
 
 def test_terminal_clipboard_rail_and_selection_autocopy_are_wired() -> None:
     root = Path(__file__).parents[1]
-    pane = (root / "frontend" / "src" / "TerminalPane.tsx").read_text(encoding="utf-8")
-    rail = (root / "frontend" / "src" / "commandRail.ts").read_text(encoding="utf-8")
-    css = (root / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
+    pane = localized_source(
+        (root / "frontend" / "src" / "TerminalPane.tsx").read_text(encoding="utf-8")
+    )
+    rail = localized_source(
+        (root / "frontend" / "src" / "commandRail.ts").read_text(encoding="utf-8")
+    )
+    css = localized_source((root / "frontend" / "src" / "style.css").read_text(encoding="utf-8"))
 
-    assert "terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}" in pane
-    assert "Copy reply" in pane and "manual-terminal-paste" in pane
-    assert "/last-reply" in pane
+    assert source_contains(pane, "terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}")
+    assert source_contains(pane, "Copy reply") and source_contains(pane, "manual-terminal-paste")
+    assert source_contains(pane, "/last-reply")
     # Selection auto-copy runs a frame after the gesture ends, never inline: the platform
     # makes its own focus and selection decision as the tap resolves. The deferral is the
     # invariant, and it has survived two refactors of where the call sits - first into an
@@ -102,127 +116,152 @@ def test_terminal_clipboard_rail_and_selection_autocopy_are_wired() -> None:
     # `pointerCancel`. Assert the two halves that carry the invariant rather than any one
     # spelling of the call site: the pointer path hands the copy to the gesture-end
     # sequence, and that sequence runs it inside a frame, ahead of the keyboard repair.
-    assert "const autoCopySelection=" in pane
-    assert "endTouchGesture(gesture," in pane and ",autoCopySelection)" in pane
-    assert "requestAnimationFrame(()=>{\n        beforeRestore?.()\n" in pane
+    assert source_contains(pane, "const autoCopySelection=")
+    assert source_contains(pane, "endTouchGesture(gesture,") and source_contains(
+        pane, ",autoCopySelection)"
+    )
+    assert source_contains(pane, "requestAnimationFrame(()=>{\n        beforeRestore?.()\n")
     assert pane.index("beforeRestore?.()") < pane.index("restoreSoftKeyboard(restoreKeyboard,")
-    assert ".terminal-action-rail" in css
+    assert source_contains(css, ".terminal-action-rail")
     # The rail also sends terminal keys and toggles the on-screen keyboard for read/select
     # mode; it overflows and scrolls horizontally rather than wrapping. The key/item
     # definitions themselves live in commandRail.ts (user-configurable rail).
-    assert "sendKey" in pane and "toggleKeyboard" in pane
-    assert "\\x03" in rail and "\\x1b[A" in rail and "kbd-toggle" in rail
-    assert "kbd-toggle" in pane
-    assert "overflow-x:auto" in css and ".terminal-action-rail .kbd-toggle" in css
+    assert source_contains(pane, "sendKey") and source_contains(pane, "toggleKeyboard")
+    assert (
+        source_contains(rail, "\\x03")
+        and source_contains(rail, "\\x1b[A")
+        and source_contains(rail, "kbd-toggle")
+    )
+    assert source_contains(pane, "kbd-toggle")
+    assert source_contains(css, "overflow-x:auto") and source_contains(
+        css, ".terminal-action-rail .kbd-toggle"
+    )
 
 
 def test_successful_clipboard_writes_use_the_shared_interaction_hud() -> None:
     root = Path(__file__).parents[1]
-    app = (root / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
-    hud = (root / "frontend" / "src" / "InteractionHud.tsx").read_text(encoding="utf-8")
-    clipboard = (root / "frontend" / "src" / "clipboardHistory.ts").read_text(encoding="utf-8")
-    pane = (root / "frontend" / "src" / "TerminalPane.tsx").read_text(encoding="utf-8")
-    css = (root / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
+    app = localized_source((root / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8"))
+    hud = localized_source(
+        (root / "frontend" / "src" / "InteractionHud.tsx").read_text(encoding="utf-8")
+    )
+    clipboard = localized_source(
+        (root / "frontend" / "src" / "clipboardHistory.ts").read_text(encoding="utf-8")
+    )
+    pane = localized_source(
+        (root / "frontend" / "src" / "TerminalPane.tsx").read_text(encoding="utf-8")
+    )
+    css = localized_source((root / "frontend" / "src" / "style.css").read_text(encoding="utf-8"))
 
-    assert "CLIPBOARD_COPIED_EVENT = 'mux:clipboard-copied'" in clipboard
-    assert "write.then(() => announceClipboardCopy(text, 'copy')" in clipboard
-    assert "if (!event.defaultPrevented || suppliedText)" in clipboard
-    assert "window.addEventListener(CLIPBOARD_COPIED_EVENT, onClipboardCopied)" in hud
-    assert "Copied to clipboard" in hud
-    assert 'class="interaction-hud"' in hud
-    assert "<InteractionHud />" in app
+    assert source_contains(clipboard, "CLIPBOARD_COPIED_EVENT = 'mux:clipboard-copied'")
+    assert source_contains(clipboard, "write.then(() => announceClipboardCopy(text, 'copy')")
+    assert source_contains(clipboard, "if (!event.defaultPrevented || suppliedText)")
+    assert source_contains(
+        hud, "window.addEventListener(CLIPBOARD_COPIED_EVENT, onClipboardCopied)"
+    )
+    assert source_contains(hud, "Copied to clipboard")
+    assert source_contains(hud, 'class="interaction-hud"')
+    assert source_contains(app, "<InteractionHud />")
     # Clipboard acknowledgement owns state below App. A copy or cut must not
     # re-render terminals, agent chats, or Continuity editors through the root.
-    assert "setInteractionHud" not in app
-    assert "CLIPBOARD_COPIED_EVENT" not in app
-    assert ".interaction-hud" in css and "pointer-events:none" in css
-    assert "right:max(16px,calc(env(safe-area-inset-right) + 12px))" in css
+    assert not source_contains(app, "setInteractionHud")
+    assert not source_contains(app, "CLIPBOARD_COPIED_EVENT")
+    assert source_contains(css, ".interaction-hud") and source_contains(css, "pointer-events:none")
+    assert source_contains(css, "right:max(16px,calc(env(safe-area-inset-right) + 12px))")
     # The bottom-right corner it is pinned to is also where a maximised window puts the
     # terminal's command rail, so the offset carries the measured rail clearance.
-    assert (
-        "bottom:calc(max(16px,env(safe-area-inset-bottom) + 12px) + var(--rail-clearance))"
-        in css
+    assert source_contains(
+        css, "bottom:calc(max(16px,env(safe-area-inset-bottom) + 12px) + var(--rail-clearance))"
     )
     # Copy success has one visible owner. The rail keeps selection, paste, upload,
     # and recovery state but no longer duplicates the app-level confirmation.
-    assert "showClipboardStatus('Selection copied')" not in pane
-    assert "showClipboardStatus('Reply copied')" not in pane
+    assert not source_contains(pane, "showClipboardStatus('Selection copied')")
+    assert not source_contains(pane, "showClipboardStatus('Reply copied')")
 
 
 def test_mobile_terminal_ime_streams_composition_without_xterm_overlay() -> None:
     root = Path(__file__).parents[1]
-    pane = (root / "frontend" / "src" / "TerminalPane.tsx").read_text(encoding="utf-8")
-    ime = (root / "frontend" / "src" / "mobileTerminalIme.ts").read_text(encoding="utf-8")
-    css = (root / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
+    pane = localized_source(
+        (root / "frontend" / "src" / "TerminalPane.tsx").read_text(encoding="utf-8")
+    )
+    ime = localized_source(
+        (root / "frontend" / "src" / "mobileTerminalIme.ts").read_text(encoding="utf-8")
+    )
+    css = localized_source((root / "frontend" / "src" / "style.css").read_text(encoding="utf-8"))
 
-    assert 'class="mobile-terminal-live-input"' in pane
-    assert "mobileImeDelta(mobileInputValue,next,mobileLineBreak())" in pane
-    assert "term.input(data,true)" in pane
-    assert "TERMINAL_DELETE.repeat" in ime
-    assert ".terminal-surface .xterm .composition-view{display:none!important}" in css
+    assert source_contains(pane, 'class="mobile-terminal-live-input"')
+    assert source_contains(pane, "mobileImeDelta(mobileInputValue,next,mobileLineBreak())")
+    assert source_contains(pane, "term.input(data,true)")
+    assert source_contains(ime, "TERMINAL_DELETE.repeat")
+    assert source_contains(
+        css, ".terminal-surface .xterm .composition-view{display:none!important}"
+    )
 
 
 def test_drag_reorder_keeps_native_source_mounted_and_commits_latest_preview() -> None:
     root = Path(__file__).parents[1] / "frontend" / "src"
-    app = (root / "App.tsx").read_text(encoding="utf-8")
-    css = (root / "style.css").read_text(encoding="utf-8")
+    app = localized_source((root / "App.tsx").read_text(encoding="utf-8"))
+    css = localized_source((root / "style.css").read_text(encoding="utf-8"))
 
-    assert "{node.children.map(child=>" in app
-    assert "dragProjectRef.current" in app
-    assert "dragStackTabRef.current" in app
-    assert "reorderTargetFromContainer(list,current.id,'vertical',pointer.clientY)" in app
-    assert (
-        "reorderTargetFromContainer(tabStrip,current.childId,'horizontal',pointer.clientX)" in app
+    assert source_contains(app, "{node.children.map(child=>")
+    assert source_contains(app, "dragProjectRef.current")
+    assert source_contains(app, "dragStackTabRef.current")
+    assert source_contains(
+        app, "reorderTargetFromContainer(list,current.id,'vertical',pointer.clientY)"
+    )
+    assert source_contains(
+        app, "reorderTargetFromContainer(tabStrip,current.childId,'horizontal',pointer.clientX)"
     )
     # A Project drag resolves its target list from the pointer, across the whole tree,
     # rather than being confined to the list it started in: the same gesture reorders
     # within a Group and moves a Project between Groups. Which list it landed in is read
     # off `data-group-id`, and the drop commits the Group change and the order together.
-    assert "beginProjectPointerDrag(event,project)" in app
-    assert "const list=projectListAt(tree,pointer.clientY)" in app
-    assert "const groupId=list.dataset.groupId||null" in app
-    assert "':scope > [data-group-id]'" in app
-    assert "commitProjectDrop(project,current)" in app
-    assert "'PATCH',`/api/projects/${project.id}`,{group_id:drop.groupId}" in app
-    assert "await commitProjectOrder(drop.previewIds)" in app
+    assert source_contains(app, "beginProjectPointerDrag(event,project)")
+    assert source_contains(app, "const list=projectListAt(tree,pointer.clientY)")
+    assert source_contains(app, "const groupId=list.dataset.groupId||null")
+    assert source_contains(app, "':scope > [data-group-id]'")
+    assert source_contains(app, "commitProjectDrop(project,current)")
+    assert source_contains(app, "'PATCH',`/api/projects/${project.id}`,{group_id:drop.groupId}")
+    assert source_contains(app, "await commitProjectOrder(drop.previewIds)")
     # A list with no rows to sit beside — an empty Group, or a folded one — is a target in
     # its own right, outlined whole because there is no gap to draw a line in.
-    assert "showPointerDropIndicator(list,'drop-into')" in app
-    assert '.sidebar-project-list[data-pointer-drop-indicator="drop-into"]' in css
-    assert "showPointerDropIndicator(targetElement,`insert-${target.side}`)" in app
-    assert "data-reorder-id={project.id}" in app
-    assert "data-reorder-id={child.id}" in app
-    assert "moveLeafToStack" in app
-    assert "moveLeafToSplit" in app
-    assert "targetStackId" in app
-    assert "class={`project-group" in app
-    assert ".project-group.project-drop-target" in css
-    assert ".drop-before:after" in css
-    assert ".drop-after:after" in css
-    assert ".drop-zone-left" in css
-    assert ".drop-zone-tabs" in css
+    assert source_contains(app, "showPointerDropIndicator(list,'drop-into')")
+    assert source_contains(css, '.sidebar-project-list[data-pointer-drop-indicator="drop-into"]')
+    assert source_contains(app, "showPointerDropIndicator(targetElement,`insert-${target.side}`)")
+    assert source_contains(app, "data-reorder-id={project.id}")
+    assert source_contains(app, "data-reorder-id={child.id}")
+    assert source_contains(app, "moveLeafToStack")
+    assert source_contains(app, "moveLeafToSplit")
+    assert source_contains(app, "targetStackId")
+    assert source_contains(app, "class={`project-group")
+    assert source_contains(css, ".project-group.project-drop-target")
+    assert source_contains(css, ".drop-before:after")
+    assert source_contains(css, ".drop-after:after")
+    assert source_contains(css, ".drop-zone-left")
+    assert source_contains(css, ".drop-zone-tabs")
 
     # Both sidebar lists preview the landing position as a labelled outline of the dragged
     # row over the gap it would take, not as a line at the pointer.
-    assert "dropSlotForRow(targetSection,target.side,rowHeight,project.name)" in app
-    assert "dropSlotForRow(element,target.side,rowHeight,label)" in app
-    assert ".mux-drop-slot{" in css
+    assert source_contains(app, "dropSlotForRow(targetSection,target.side,rowHeight,project.name)")
+    assert source_contains(app, "dropSlotForRow(element,target.side,rowHeight,label)")
+    assert source_contains(css, ".mux-drop-slot{")
 
     # A session drop resolves to a slot between rows or to grouping with one, and lands
     # exactly there rather than being appended to the target's pane.
-    assert "listDropTargetForPoint(" in app
-    assert "moveTerminalBeside(current,session.id,target.id,target.side)" in app
-    assert "groupTerminalsInStack(current,target.id,session.id)" in app
+    assert source_contains(app, "listDropTargetForPoint(")
+    assert source_contains(app, "moveTerminalBeside(current,session.id,target.id,target.side)")
+    assert source_contains(app, "groupTerminalsInStack(current,target.id,session.id)")
 
     # The gesture never leaves the Project it started in: only that Project's own session
     # list is consulted, and a release outside it commits nothing.
-    assert "querySelector<HTMLElement>(':scope > .session-list')" in app
-    assert "DROP_LIST_MARGIN" in app
-    assert 'data-pointer-drop-indicator="invalid"' not in css
+    assert source_contains(app, "querySelector<HTMLElement>(':scope > .session-list')")
+    assert source_contains(app, "DROP_LIST_MARGIN")
+    assert not source_contains(css, 'data-pointer-drop-indicator="invalid"')
 
     # Touch drags cancel touchmove themselves; without it a scrolling sidebar cancels the
     # pointer and a picked-up row goes nowhere.
-    assert "window.addEventListener('touchmove',blockTouchScroll,{passive:false})" in app
+    assert source_contains(
+        app, "window.addEventListener('touchmove',blockTouchScroll,{passive:false})"
+    )
 
 
 def test_the_projects_header_owns_sort_and_fold_for_the_whole_tree() -> None:
@@ -234,62 +273,75 @@ def test_the_projects_header_owns_sort_and_fold_for_the_whole_tree() -> None:
     used to mean clicking every Project and every Group in turn.
     """
     root = Path(__file__).parents[1] / "frontend" / "src"
-    app = (root / "App.tsx").read_text(encoding="utf-8")
-    css = (root / "style.css").read_text(encoding="utf-8")
-    sort = (root / "projectSort.ts").read_text(encoding="utf-8")
+    app = localized_source((root / "App.tsx").read_text(encoding="utf-8"))
+    css = localized_source((root / "style.css").read_text(encoding="utf-8"))
+    sort = localized_source((root / "projectSort.ts").read_text(encoding="utf-8"))
 
     # One mode for every bucket, read straight off the prefs.
-    assert "sortProjects(items,sidebarOrder.projectSort,recentProjectRanks)" in app
-    assert "setSidebarOrder(setProjectSortMode(sidebarOrder,option.id))" in app
-    assert "bucketSortMode" not in app and "setBucketSortMode" not in app
-    assert "bucketSortMode" not in sort
+    assert source_contains(app, "sortProjects(items,sidebarOrder.projectSort,recentProjectRanks)")
+    assert source_contains(app, "setSidebarOrder(setProjectSortMode(sidebarOrder,option.id))")
+    assert not source_contains(app, "bucketSortMode") and not source_contains(
+        app, "setBucketSortMode"
+    )
+    assert not source_contains(sort, "bucketSortMode")
     # Placing a Project by hand is what returns Projects to Manual order.
-    assert "setSidebarOrder(setProjectSortMode(sidebarOrder,'custom'))" in app
+    assert source_contains(app, "setSidebarOrder(setProjectSortMode(sidebarOrder,'custom'))")
     # PROJECTS names the whole tree and owns its controls; it is not a Group header.
-    assert 'class="sidebar-tools sidebar-projects-header"' in app
-    assert '<strong>PROJECTS</strong>' in app
+    assert source_contains(app, 'class="sidebar-tools sidebar-projects-header"')
+    assert source_contains(app, "<strong>PROJECTS</strong>")
     assert app.index('class="sidebar-tools sidebar-projects-header"') < app.index(
         'class="project-tree"'
     )
-    assert 'class="sidebar-project-list sidebar-ungrouped-projects" data-group-id=""' in app
+    assert source_contains(
+        app, 'class="sidebar-project-list sidebar-ungrouped-projects" data-group-id=""'
+    )
     # One control now, not two: Group placement rides the same mode, so there is no second
     # label to put in the button's title and no second mode to read for its active state.
     # `sectionSort` survives in projectSort.ts only as the migration that reads the retired
     # key off disk once — the type and its option list are gone.
-    assert "sectionSort" not in app
-    assert "SectionSortMode" not in sort and "SECTION_SORT_OPTIONS" not in sort
-    assert "migrateSectionSort" in sort
-    assert "${projectSortLabel(sidebarOrder.projectSort)}`}" in app
-    assert "setAllFolded(!allFolded)" in app
-    assert "setAllCollapsed(displayProjects.map(project=>project.id),folded)" in app
-    assert (
-        "setAllBucketsCollapsed(sidebarOrder,displayBuckets.map(bucket=>bucket.id),folded)"
-        in app
+    assert not source_contains(app, "sectionSort")
+    assert not source_contains(sort, "SectionSortMode") and not source_contains(
+        sort, "SECTION_SORT_OPTIONS"
+    )
+    assert source_contains(sort, "migrateSectionSort")
+    assert source_contains(app, "${projectSortLabel(sidebarOrder.projectSort)}`}")
+    assert source_contains(app, "setAllFolded(!allFolded)")
+    assert source_contains(app, "setAllCollapsed(displayProjects.map(project=>project.id),folded)")
+    assert source_contains(
+        app, "setAllBucketsCollapsed(sidebarOrder,displayBuckets.map(bucket=>bucket.id),folded)"
     )
     # Fold-all flips to Expand only once nothing on screen is left to collapse.
-    assert "displayProjects.every(project=>collapsedProjects.has(project.id))" in app
-    assert "displayBuckets.every(bucket=>isBucketCollapsed(sidebarOrder,bucket.id))" in app
+    assert source_contains(app, "displayProjects.every(project=>collapsedProjects.has(project.id))")
+    assert source_contains(
+        app, "displayBuckets.every(bucket=>isBucketCollapsed(sidebarOrder,bucket.id))"
+    )
     # Every Group renders, empty ones included: a Group nobody has filled yet is the one
     # that most needs to be on screen, because dragging a Project in is how it gets filled.
-    assert "displayBuckets.filter(" not in app
-    assert "projectBuckets" not in app
+    assert not source_contains(app, "displayBuckets.filter(")
+    assert not source_contains(app, "projectBuckets")
     # Fold and add/manage are icons, not glyphs. `⊞`/`⊟` is the box-drawing pair for a
     # tree *node*, which nobody reads as a bulk expand/collapse control.
-    assert "{allFolded?<UnfoldMoreIcon/>:<UnfoldLessIcon/>}" in app
-    assert "⊞" not in app and "⊟" not in app
-    assert 'title="Manage Projects" onClick={()=>openProjectsManager()}><CogIcon/>' in app
-    assert "onClick={()=>{openProjectsManager();void createProject()}}><PlusIcon/>" in app
+    assert source_contains(app, "{allFolded?<UnfoldMoreIcon/>:<UnfoldLessIcon/>}")
+    assert not source_contains(app, "⊞") and not source_contains(app, "⊟")
+    assert source_contains(
+        app, 'title="Manage Projects" onClick={()=>openProjectsManager()}><CogIcon/>'
+    )
+    assert source_contains(
+        app, "onClick={()=>{openProjectsManager();void createProject()}}><PlusIcon/>"
+    )
     # Four controls over content the user is reading: revealed on hover where there is a
     # hover to give, always visible on touch, and never `display`, which would reflow the row.
-    assert "@media (hover:hover) and (pointer:fine){" in css
-    assert ".sidebar-projects-header .sidebar-tool{opacity:0" in css
-    assert ".sidebar-projects-header:hover .sidebar-tool," in css
+    assert source_contains(css, "@media (hover:hover) and (pointer:fine){")
+    assert source_contains(css, ".sidebar-projects-header .sidebar-tool{opacity:0")
+    assert source_contains(css, ".sidebar-projects-header:hover .sidebar-tool,")
     # The header doubles as the section's drag handle; its buttons keep the pointer.
-    assert "beginBucketPointerDrag(event,bucket.id,bucket.name)" in app
-    assert "data-reorder-id={bucket.id}" in app
-    assert "'PUT','/api/project-groups/order'" in app
-    assert ".sidebar-tools .sidebar-sort.active" in css
-    assert '.sidebar-project-bucket[data-pointer-drop-indicator="insert-before"]' in css
+    assert source_contains(app, "beginBucketPointerDrag(event,bucket.id,bucket.name)")
+    assert source_contains(app, "data-reorder-id={bucket.id}")
+    assert source_contains(app, "'PUT','/api/project-groups/order'")
+    assert source_contains(css, ".sidebar-tools .sidebar-sort.active")
+    assert source_contains(
+        css, '.sidebar-project-bucket[data-pointer-drop-indicator="insert-before"]'
+    )
     for mode in ("custom", "activity", "name", "name-desc", "created-desc", "created"):
         assert f"id: '{mode}'" in sort
 
@@ -304,235 +356,252 @@ def test_a_group_is_renamed_folded_and_deleted_from_its_own_context_menu() -> No
     Rename and fold are mirrored there too; both still work from the header.
     """
     root = Path(__file__).parents[1] / "frontend" / "src"
-    app = (root / "App.tsx").read_text(encoding="utf-8")
+    app = localized_source((root / "App.tsx").read_text(encoding="utf-8"))
 
     # Right-click anywhere in the section that is not a row of its own, and hold on mobile,
     # which has no right-click to give.
-    assert "openGroupMenu(bucket.id,event.clientX,event.clientY)" in app
-    assert (
-        "beginLongPress(event,(x,y)=>{groupHeldRef.current=true;openGroupMenu(bucket.id,x,y)})"
-        in app
+    assert source_contains(app, "openGroupMenu(bucket.id,event.clientX,event.clientY)")
+    assert source_contains(
+        app, "beginLongPress(event,(x,y)=>{groupHeldRef.current=true;openGroupMenu(bucket.id,x,y)})"
     )
-    assert "if((event.target as Element).closest('.project-row,.session-row'))return" in app
+    assert source_contains(
+        app, "if((event.target as Element).closest('.project-row,.session-row'))return"
+    )
     # The hold fires under the finger, so the click it ends with must not fold the Group.
-    assert "if(groupHeldRef.current){groupHeldRef.current=false;return}" in app
+    assert source_contains(app, "if(groupHeldRef.current){groupHeldRef.current=false;return}")
     # Rename stays on the header as well; sort never comes back to it.
-    assert 'class="bucket-rename" title="Rename group"' in app
-    assert 'class="bucket-sort"' not in app
+    assert source_contains(app, 'class="bucket-rename" title="Rename group"')
+    assert not source_contains(app, 'class="bucket-sort"')
 
     # Delete is two clicks, and the second one is the only caller of the handler.
-    assert "const deleteGroup=" in app
-    assert "onClick={()=>setConfirmGroupDeleteId(group.id)}>Delete group…" in app
-    assert "onClick={()=>void deleteGroup(group)}" in app
-    assert "'DELETE',`/api/project-groups/${group.id}`" in app
+    assert source_contains(app, "const deleteGroup=")
+    assert source_contains(app, "onClick={()=>setConfirmGroupDeleteId(group.id)}>Delete group…")
+    assert source_contains(app, "onClick={()=>void deleteGroup(group)}")
+    assert source_contains(app, "'DELETE',`/api/project-groups/${group.id}`")
     # Opening the menu clears any armed confirm, so it cannot be inherited by the next Group.
-    assert "setConfirmGroupDeleteId(null)\n    setGroupMenu({groupId,x,y})" in app
+    assert source_contains(app, "setConfirmGroupDeleteId(null)\n    setGroupMenu({groupId,x,y})")
     # The Projects are what a user fears losing, so the confirm says they do not go.
-    assert "return to the root list." in app
-    assert "No folder, session, layout, or history is touched." in app
+    assert source_contains(app, "return to the root list.")
+    assert source_contains(app, "No folder, session, layout, or history is touched.")
     # Menus are dismiss levels, not a special case of the sidebar's own menu.
-    assert "useDismissLevel(() => setGroupMenu(null), !!groupMenu, 'group-menu')" in app
+    assert source_contains(
+        app, "useDismissLevel(() => setGroupMenu(null), !!groupMenu, 'group-menu')"
+    )
 
 
 def test_groups_sort_in_among_root_projects_and_collapse_from_their_header() -> None:
     root = Path(__file__).parents[1] / "frontend" / "src"
-    app = (root / "App.tsx").read_text(encoding="utf-8")
-    css = (root / "style.css").read_text(encoding="utf-8")
-    sort = (root / "projectSort.ts").read_text(encoding="utf-8")
+    app = localized_source((root / "App.tsx").read_text(encoding="utf-8"))
+    css = localized_source((root / "style.css").read_text(encoding="utf-8"))
+    sort = localized_source((root / "projectSort.ts").read_text(encoding="utf-8"))
 
     # Group placement rides the one PROJECTS sort, as a peer of a root Project. As its own
     # setting it could only order Groups among Groups below the whole ungrouped pile, so no
     # mode could lift a Group for the work inside it — the bug this replaced.
-    assert (
-        "sortRootEntries(ungroupedProjects,allBuckets,sidebarOrder.projectSort,recentProjectRanks)"
-        in app
+    assert source_contains(
+        app,
+        "sortRootEntries(ungroupedProjects,allBuckets,sidebarOrder.projectSort,recentProjectRanks)",
     )
-    assert "const rootRows=sidebarRootRows(rootEntries)" in app
-    assert "rootEntries.flatMap(entry=>entry.kind==='group'?[entry.bucket]:[])" in app
+    assert source_contains(app, "const rootRows=sidebarRootRows(rootEntries)")
+    assert source_contains(
+        app, "rootEntries.flatMap(entry=>entry.kind==='group'?[entry.bucket]:[])"
+    )
     # Reading order interleaves too, or the rail and the numbered shortcuts would disagree
     # with the tree they are drawn from.
-    assert (
-        "displayProjects=rootEntries.flatMap(entry=>entry.kind==='group'?entry.bucket.items:[entry.project])"
-        in app
+    assert source_contains(
+        app,
+        "displayProjects=rootEntries.flatMap(entry=>entry.kind==='group'?entry.bucket.items:[entry.project])",
     )
     # Each run of root Projects between Groups is its own droppable list.
-    assert "rootRows.map(row=>{" in app
-    assert "if(row.kind==='root'){" in app
-    assert 'class="sidebar-project-list sidebar-ungrouped-projects" data-group-id=""' in app
-    assert "key={row.key}" in app
+    assert source_contains(app, "rootRows.map(row=>{")
+    assert source_contains(app, "if(row.kind==='root'){")
+    assert source_contains(
+        app, 'class="sidebar-project-list sidebar-ungrouped-projects" data-group-id=""'
+    )
+    assert source_contains(app, "key={row.key}")
     # Dragging a Group header returns the one sort to Manual, which is the two-tier tree.
     assert app.count("setSidebarOrder(setProjectSortMode(sidebarOrder,'custom'))") == 2
     # Click folds, drag reorders; the drag swallows the click it ends with.
-    assert "suppressDragClickRef.current===`bucket:${bucket.id}`" in app
-    assert "setSidebarOrder(toggleBucketCollapsed(sidebarOrder,bucket.id))" in app
-    assert "{!bucketCollapsed&&bucketItems.map(project=>sidebarProjectRow(project))}" in app
-    assert (
+    assert source_contains(app, "suppressDragClickRef.current===`bucket:${bucket.id}`")
+    assert source_contains(app, "setSidebarOrder(toggleBucketCollapsed(sidebarOrder,bucket.id))")
+    assert source_contains(
+        app, "{!bucketCollapsed&&bucketItems.map(project=>sidebarProjectRow(project))}"
+    )
+    assert source_contains(
+        app,
         "const bucketItems=bucket.items.filter(project=>!sidebarFilter"
-        "||sidebarFilter.projects.has(project.id))" in app
+        "||sidebarFilter.projects.has(project.id))",
     )
     # An emptied Group keeps its section and says what to do with it — that hint is also
     # the drop target, since a header alone is too thin a strip to aim a dragged row at.
     # The hint is suppressed while a filter is up: it is also the drop target, and every
     # sidebar drag is inert against a tree that is missing rows.
-    assert (
-        "{!bucketCollapsed&&!bucketItems.length&&!sidebarFilter&&<p class=\"project-list-empty\">"
-        "Drag a Project here</p>}" in app
+    assert source_contains(
+        app,
+        '{!bucketCollapsed&&!bucketItems.length&&!sidebarFilter&&<p class="project-list-empty">'
+        "Drag a Project here</p>}",
     )
-    assert ".project-list-empty{" in css
+    assert source_contains(css, ".project-list-empty{")
     # A folded Group reports live count *and* the strongest agent state, or an
     # approval waiting inside it would be invisible.
-    assert "projectSetRailStatus(sessions,peerIds,ackedTurns)" in app
-    assert ".bucket-collapsed-badge.activity-attention" in css
-    assert ".sidebar-project-bucket>header .bucket-chevron" in css
+    assert source_contains(app, "projectSetRailStatus(sessions,peerIds,ackedTurns)")
+    assert source_contains(css, ".bucket-collapsed-badge.activity-attention")
+    assert source_contains(css, ".sidebar-project-bucket>header .bucket-chevron")
     # A Group record is not dated, so the date modes have to borrow a key from the member
     # that leads it rather than being refused, which is what kept Groups out of them before.
-    assert "export function bucketStamp(" in sort
-    assert "const oldestFirst = mode === 'created'" in sort
+    assert source_contains(sort, "export function bucketStamp(")
+    assert source_contains(sort, "const oldestFirst = mode === 'created'")
 
 
 def test_pane_local_tab_rails_and_resizable_collapsible_sidebar_are_wired() -> None:
     root = Path(__file__).parents[1] / "frontend" / "src"
-    app = (root / "App.tsx").read_text(encoding="utf-8")
-    css = (root / "style.css").read_text(encoding="utf-8")
-    sidebar_resize = (root / "sidebarResize.ts").read_text(encoding="utf-8")
+    app = localized_source((root / "App.tsx").read_text(encoding="utf-8"))
+    css = localized_source((root / "style.css").read_text(encoding="utf-8"))
+    sidebar_resize = localized_source((root / "sidebarResize.ts").read_text(encoding="utf-8"))
 
-    assert 'class="app-topbar"' in app
-    assert 'class="app-identity"' in app
+    assert source_contains(app, 'class="app-topbar"')
+    assert source_contains(app, 'class="app-identity"')
     workspace_at = app.index("<div class={`workspace")
     assert workspace_at < app.index('<header class="app-topbar">', workspace_at)
-    assert 'class="top-workspace-tabs"' not in app
-    assert 'className="stack-tabs" wrapperClassName="stack-tabs-rail"' in app
-    assert "role:'tablist','aria-label':'Workspace tabs'" in app
-    assert "node.children.map(child=>" in app
-    assert "SIDEBAR_WIDTH_KEY = 'mux.sidebar.width.v1'" in sidebar_resize
-    assert "localStorage.getItem(SIDEBAR_WIDTH_KEY)" in app
-    assert "localStorage.setItem(SIDEBAR_WIDTH_KEY" in app
-    assert "mux.sidebar.collapsed.v1" in app
-    assert 'class="sidebar-resizer"' in app
-    assert ".workspace.sidebar-collapsed" in css
-    assert ".pane-stack>.stack-tabs-rail>.stack-tabs{display:flex" in css
+    assert not source_contains(app, 'class="top-workspace-tabs"')
+    assert source_contains(app, 'className="stack-tabs" wrapperClassName="stack-tabs-rail"')
+    assert source_contains(app, "role:'tablist','aria-label':'Workspace tabs'")
+    assert source_contains(app, "node.children.map(child=>")
+    assert source_contains(sidebar_resize, "SIDEBAR_WIDTH_KEY = 'mux.sidebar.width.v1'")
+    assert source_contains(app, "localStorage.getItem(SIDEBAR_WIDTH_KEY)")
+    assert source_contains(app, "localStorage.setItem(SIDEBAR_WIDTH_KEY")
+    assert source_contains(app, "mux.sidebar.collapsed.v1")
+    assert source_contains(app, 'class="sidebar-resizer"')
+    assert source_contains(css, ".workspace.sidebar-collapsed")
+    assert source_contains(css, ".pane-stack>.stack-tabs-rail>.stack-tabs{display:flex")
     # 34px at chrome scale 1; the row follows `--ui-scale` so the tab strip grows
     # with the tab titles in it (`features/ui.md`, Appearance → chrome scale).
-    assert "grid-template-rows:calc(34px*var(--ui-scale)) minmax(0,1fr)" in css
+    assert source_contains(css, "grid-template-rows:calc(34px*var(--ui-scale)) minmax(0,1fr)")
 
 
 def test_mobile_sidebars_use_the_full_selection_and_width_contract() -> None:
     root = Path(__file__).parents[1] / "frontend" / "src"
-    app = (root / "App.tsx").read_text(encoding="utf-8")
-    css = (root / "style.css").read_text(encoding="utf-8")
+    app = localized_source((root / "App.tsx").read_text(encoding="utf-8"))
+    css = localized_source((root / "style.css").read_text(encoding="utf-8"))
 
-    select_project = app[
-        app.index("const selectProject =") : app.index("const selectSession =")
-    ]
-    assert "setSidebarOpen(false)" in select_project
+    select_project = app[app.index("const selectProject =") : app.index("const selectSession =")]
+    assert source_contains(select_project, "setSidebarOpen(false)")
     assert select_project.index("setSidebarOpen(false)") < select_project.index("if(!remembered")
     # A fixed pixel cap made the drawer look closer to 80% on wide phones and small tablets.
-    assert ".utility-drawer.overlay{" in css
+    assert source_contains(css, ".utility-drawer.overlay{")
     overlay_start = css.index(".utility-drawer.overlay{")
     overlay = css[overlay_start : css.index("}", overlay_start)]
-    assert "width:90vw" in overlay
-    assert "min(" not in overlay
+    assert source_contains(overlay, "width:90vw")
+    assert not source_contains(overlay, "min(")
 
 
 def test_project_rows_reserve_empty_fold_and_hover_run_cells() -> None:
     root = Path(__file__).parents[1] / "frontend" / "src"
-    app = (root / "App.tsx").read_text(encoding="utf-8")
-    css = (root / "style.css").read_text(encoding="utf-8")
+    app = localized_source((root / "App.tsx").read_text(encoding="utf-8"))
+    css = localized_source((root / "style.css").read_text(encoding="utf-8"))
 
-    assert "const hasSessions=children.length>0" in app
-    assert 'class="project-chevron project-collapse-spacer"' in app
-    assert ".project-row .project-collapse-spacer{" in css
-    assert ".project-row-run{opacity:0;visibility:hidden;pointer-events:none" in css
-    assert ".project-group:hover>.project-row .project-row-run" in css
-    assert ".project-group:focus-within>.project-row .project-row-run" in css
+    assert source_contains(app, "const hasSessions=children.length>0")
+    assert source_contains(app, 'class="project-chevron project-collapse-spacer"')
+    assert source_contains(css, ".project-row .project-collapse-spacer{")
+    assert source_contains(css, ".project-row-run{opacity:0;visibility:hidden;pointer-events:none")
+    assert source_contains(css, ".project-group:hover>.project-row .project-row-run")
+    assert source_contains(css, ".project-group:focus-within>.project-row .project-row-run")
 
 
 def test_collapsed_sidebar_rail_keeps_sidebar_controls_reachable() -> None:
     root = Path(__file__).parents[1] / "frontend" / "src"
-    app = (root / "App.tsx").read_text(encoding="utf-8")
-    css = (root / "style.css").read_text(encoding="utf-8")
-    accounts = (root / "ProviderAccounts.tsx").read_text(encoding="utf-8")
-    resources = (root / "ResourceUsage.tsx").read_text(encoding="utf-8")
+    app = localized_source((root / "App.tsx").read_text(encoding="utf-8"))
+    css = localized_source((root / "style.css").read_text(encoding="utf-8"))
+    accounts = localized_source((root / "ProviderAccounts.tsx").read_text(encoding="utf-8"))
+    resources = localized_source((root / "ResourceUsage.tsx").read_text(encoding="utf-8"))
 
-    assert 'sidebarCollapsed&&<nav class="sidebar-rail"' in app
-    assert 'title="Menu"' in app and 'title="Projects"' in app
-    assert "<ResourceUsageSummary compact" in app
-    assert '<AccountSwitcher variant="rail" placement="up"' in app
-    assert ".sidebar-rail{" in css
-    assert ".rail-status{" in css
+    assert source_contains(app, 'sidebarCollapsed&&<nav class="sidebar-rail"')
+    assert source_contains(app, 'title="Menu"') and source_contains(app, 'title="Projects"')
+    assert source_contains(app, "<ResourceUsageSummary compact")
+    assert source_contains(app, '<AccountSwitcher variant="rail" placement="up"')
+    assert source_contains(css, ".sidebar-rail{")
+    assert source_contains(css, ".rail-status{")
 
     # Status sits above the actions, which stay pinned at the very bottom.
     assert app.index('<div class="rail-status">') < app.index('title="Menu"')
     assert app.index('title="Menu"') < app.index('title="Projects"')
-    assert ".rail-status{margin-top:auto" in css
+    assert source_contains(css, ".rail-status{margin-top:auto")
 
     # The rail resets the mobile trigger's 42px floor, or it overflows the strip.
-    assert "min-width:28px" in css
+    assert source_contains(css, "min-width:28px")
     # Popover direction is independent of the condensed trigger so the rail, which
     # sits at the bottom of the window, still opens upward.
-    assert "const opensDown=placement?placement==='down':compact" in accounts
+    assert source_contains(accounts, "const opensDown=placement?placement==='down':compact")
     # One chip per provider, each identified by its own mark, narrowed to the weekly window
     # because a square has room for one number. The expanded sidebar keeps the full grid.
-    assert "providerQuotaWindows" in accounts
-    assert "const weekly=quotas[provider]?.weekly||null" in accounts
-    assert "quotaGridSegments(quotas[provider])" in accounts
+    assert source_contains(accounts, "providerQuotaWindows")
+    assert source_contains(accounts, "const weekly=quotas[provider]?.weekly||null")
+    assert source_contains(accounts, "quotaGridSegments(quotas[provider])")
     # One chip builder shared by the collapsed rail and the mobile toolbar, so the
     # two surfaces cannot drift apart. Only the tooltip differs: the toolbar names every
     # window there, since a phone has no hover and draws only one of them.
-    assert "const quotaChip=(provider:ProviderName,title:string)=>" in accounts
-    assert "quotaChip(provider,weeklyTitle(provider))" in accounts
-    assert "quotaChip(provider,toolbarTitle(provider))" in accounts
-    assert "toolbar-quota" not in accounts and "toolbar-quota" not in css
-    assert "harnessMark(provider)" in accounts
-    assert ".rail-quota .provider-glyph" in css
+    assert source_contains(accounts, "const quotaChip=(provider:ProviderName,title:string)=>")
+    assert source_contains(accounts, "quotaChip(provider,weeklyTitle(provider))")
+    assert source_contains(accounts, "quotaChip(provider,toolbarTitle(provider))")
+    assert not source_contains(accounts, "toolbar-quota") and not source_contains(
+        css, "toolbar-quota"
+    )
+    assert source_contains(accounts, "harnessMark(provider)")
+    assert source_contains(css, ".rail-quota .provider-glyph")
     # RAM, not CPU: a fluctuating percentage is not worth a permanent glance.
-    assert "compactMemoryLabel(combined.memory_bytes)" in resources
-    assert "resource-usage-compact" in resources
+    assert source_contains(resources, "compactMemoryLabel(combined.memory_bytes)")
+    assert source_contains(resources, "resource-usage-compact")
 
 
 def test_workspace_tabs_have_inline_close_controls_with_terminal_confirmation() -> None:
     root = Path(__file__).parents[1] / "frontend" / "src"
-    app = (root / "App.tsx").read_text(encoding="utf-8")
-    css = (root / "style.css").read_text(encoding="utf-8")
+    app = localized_source((root / "App.tsx").read_text(encoding="utf-8"))
+    css = localized_source((root / "style.css").read_text(encoding="utf-8"))
 
-    assert "const closeTab=(child:PaneLeaf,label:string,session?:Session)=>" in app
-    assert "if(terminal){if(session&&!session.pending)requestKill(session);return}" in app
-    assert "if(child.kind==='note'){void removeWorkspaceNote(projectId,child.id);return}" in app
-    assert "removeLeaf(latest,child.kind,child.id)" in app
-    assert "{confirming?'✓':'×'}</button>" in app
-    assert "terminal&&(!session||!!session.pending)" in app
+    assert source_contains(app, "const closeTab=(child:PaneLeaf,label:string,session?:Session)=>")
+    assert source_contains(
+        app, "if(terminal){if(session&&!session.pending)requestKill(session);return}"
+    )
+    assert source_contains(
+        app, "if(child.kind==='note'){void removeWorkspaceNote(projectId,child.id);return}"
+    )
+    assert source_contains(app, "removeLeaf(latest,child.kind,child.id)")
+    assert source_contains(app, "{confirming?'✓':'×'}</button>")
+    assert source_contains(app, "terminal&&(!session||!!session.pending)")
     # The close control floats over the tab's right edge rather than holding a
     # column, so showing it never changes tab width.
-    assert ".stack-tab-shell>.tab-close{position:absolute" in css
-    assert "@media(hover:hover){.stack-tab-shell:hover>.tab-close" in css
-    assert ".stack-tab-shell>.tab-close.confirming" in css
+    assert source_contains(css, ".stack-tab-shell>.tab-close{position:absolute")
+    assert source_contains(css, "@media(hover:hover){.stack-tab-shell:hover>.tab-close")
+    assert source_contains(css, ".stack-tab-shell>.tab-close.confirming")
     # Touch never gets it: closing there is the tab's long-press menu, so the
     # mobile tab renders the tab button alone.
-    assert "@media(hover:none){.stack-tab-shell>.tab-close{display:none}}" in css
-    assert "class=\"stack-tab-shell mobile-unified-tab\"" in app
+    assert source_contains(css, "@media(hover:none){.stack-tab-shell>.tab-close{display:none}}")
+    assert source_contains(app, 'class="stack-tab-shell mobile-unified-tab"')
     mobile_tab_body = app.split("const mobileTab=")[1].split("const mobileUnifiedWorkspace=")[0]
-    assert "tab-close" not in mobile_tab_body
+    assert not source_contains(mobile_tab_body, "tab-close")
 
 
 def test_session_tab_context_menu_omits_redundant_focus_and_detach_actions() -> None:
-    app = (Path(__file__).parents[1] / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
+    app = localized_source(
+        (Path(__file__).parents[1] / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
+    )
 
-    assert "source: 'sidebar'|'tab'|'pane'" in app
-    assert "openSessionMenu(session,event.clientX,event.clientY,'tab')" in app
+    assert source_contains(app, "source: 'sidebar'|'tab'|'pane'")
+    assert source_contains(app, "openSessionMenu(session,event.clientX,event.clientY,'tab')")
     # `Open in focused pane` is gone from the menu on every source, sidebar included.
     # It was the sidebar's own compensation for a menu opened *instead of* clicking the
     # row - but clicking the row is what opens the session, from the same list the menu
     # was opened on, so the row only said so a second time. The palette keeps
     # `session.open`, which is what makes it bindable.
     session_menu = app[app.index("{contextMenu &&") : app.index("{projectMenu &&")]
-    assert "runNamedCommand('session.open')" not in session_menu
-    assert "{ id: 'session.open'" in app
+    assert not source_contains(session_menu, "runNamedCommand('session.open')")
+    assert source_contains(app, "{ id: 'session.open'")
     # Scoped to the menu rather than to the whole file. `pane.detach` staying out of
     # this menu is the contract; the command existing is not only allowed but
     # required - `TerminalPane` has a "Detach pane" button that calls it, and for as
     # long as nothing implemented it that button silently did nothing.
-    assert "runNamedCommand('pane.detach')" not in session_menu
-    assert "id: 'pane.detach'" in app
+    assert not source_contains(session_menu, "runNamedCommand('pane.detach')")
+    assert source_contains(app, "id: 'pane.detach'")
 
 
 def test_no_context_menu_reorders_or_reshapes_anything() -> None:
@@ -545,27 +614,27 @@ def test_no_context_menu_reorders_or_reshapes_anything() -> None:
     manipulation) or the command palette, and the mobile rail is simply the projection's
     order.
     """
-    app = (Path(__file__).parents[1] / "frontend" / "src" / "App.tsx").read_text(
-        encoding="utf-8"
+    app = localized_source(
+        (Path(__file__).parents[1] / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
     )
     session_menu = app[app.index("{contextMenu &&") : app.index("{projectMenu &&")]
-    tab_menu = app[app.index("{tabMenu&&") : app.index("Close tab</button>")]
+    tab_menu = app[app.index("{tabMenu &&") : app.index("Close tab</button>")]
 
     for menu in (session_menu, tab_menu):
-        assert "Open in split:" not in menu
-        assert "New terminal in split:" not in menu
-        assert "Stack with focused terminal" not in menu
-        assert "Dissolve tab stack into splits" not in menu
-        assert "New terminal custom in split" not in menu
-        assert "directionRow('Move tab:'" not in menu
-        assert "mobileMoveRow" not in menu
-        assert "runNamedCommand('session.groupStack')" not in menu
-        assert "runNamedCommand('stack.dissolve')" not in menu
-        assert "runNamedCommand('session.customSplit')" not in menu
+        assert not source_contains(menu, "Open in split:")
+        assert not source_contains(menu, "New terminal in split:")
+        assert not source_contains(menu, "Stack with focused terminal")
+        assert not source_contains(menu, "Dissolve tab stack into splits")
+        assert not source_contains(menu, "New terminal custom in split")
+        assert not source_contains(menu, "directionRow('Move tab:'")
+        assert not source_contains(menu, "mobileMoveRow")
+        assert not source_contains(menu, "runNamedCommand('session.groupStack')")
+        assert not source_contains(menu, "runNamedCommand('stack.dissolve')")
+        assert not source_contains(menu, "runNamedCommand('session.customSplit')")
     # These existed only to serve those rows; nothing may reintroduce a caller without
     # also reintroducing the menu entry this test forbids.
-    assert "splitExistingLeaf" not in app
-    assert "moveMobileTabSlot" not in app
+    assert not source_contains(app, "splitExistingLeaf")
+    assert not source_contains(app, "moveMobileTabSlot")
     assert app.count("moveTabDirection") == 2  # the definition, and the palette command
     # Removed from the menus, not from the app: these are the routes that keep them
     # usable, and each is bindable because it is a registry entry. pane.moveTab* was
@@ -580,45 +649,53 @@ def test_no_context_menu_reorders_or_reshapes_anything() -> None:
         "session.customSplit",
     ):
         assert f"id: '{command}'" in app or f"id:'{command}'" in app
-    assert "id: `pane.moveTab${option.id[0].toUpperCase()}${option.id.slice(1)}`" in app
+    assert source_contains(
+        app, "id: `pane.moveTab${option.id[0].toUpperCase()}${option.id.slice(1)}`"
+    )
 
 
 def test_projects_manager_and_shared_directional_tab_actions_are_wired() -> None:
     root = Path(__file__).parents[1]
-    app = (root / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
-    manager = (root / "frontend" / "src" / "ProjectsManager.tsx").read_text(encoding="utf-8")
-    creator = (root / "frontend" / "src" / "ProjectCreateDialog.tsx").read_text(encoding="utf-8")
-    layout = (root / "frontend" / "src" / "layout.ts").read_text(encoding="utf-8")
+    app = localized_source((root / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8"))
+    manager = localized_source(
+        (root / "frontend" / "src" / "ProjectsManager.tsx").read_text(encoding="utf-8")
+    )
+    creator = localized_source(
+        (root / "frontend" / "src" / "ProjectCreateDialog.tsx").read_text(encoding="utf-8")
+    )
+    layout = localized_source((root / "frontend" / "src" / "layout.ts").read_text(encoding="utf-8"))
 
-    assert "sidebar_visible" in manager
-    assert "Configured Projects keep their notes, files, settings, and history" in manager
+    assert source_contains(manager, "sidebar_visible")
+    assert source_contains(
+        manager, "Configured Projects keep their notes, files, settings, and history"
+    )
     # The editor header names the Project once. The opaque short id it used to lead
     # with named nothing a human can act on: every selector a person or an agent uses
     # (sidebar, pickers, the MCP `project` argument) takes the name.
-    assert "<span>PROJECT</span><h3>{selected.name}</h3>" in manager
-    assert "selected.id.slice(0,8)" not in manager
-    assert (
-        "visibleProjects = orderedProjects.filter(project => project.sidebar_visible !== false)"
-        in app
+    assert source_contains(manager, "<span>PROJECT</span><h3>{selected.name}</h3>")
+    assert not source_contains(manager, "selected.id.slice(0,8)")
+    assert source_contains(
+        app,
+        "visibleProjects = orderedProjects.filter(project => project.sidebar_visible !== false)",
     )
     # Project creation owns its dialog; Group creation still lives in App.
-    assert "projectCreateOpen&&<ProjectCreateDialog" in app
+    assert source_contains(app, "projectCreateOpen&&<ProjectCreateDialog")
     assert app.count('class="modal-layer project-registry-dialog-layer"') == 1
     assert creator.count('class="modal-layer project-registry-dialog-layer"') == 1
     # Adding a Project is reachable in one step from the empty-sidebar menu, above
     # the registry entry, rather than only through the registry.
-    assert "id: 'project.add'" in app
+    assert source_contains(app, "id: 'project.add'")
     # Each sidebar-menu row is an icon plus its own label element, so the label is
     # asserted apart from the handler rather than as one contiguous string.
-    assert "runNamedCommand('project.add')}}><span class=\"menu-row-icon\"" in app
-    assert '<span class="menu-row-label">Add project…</span>' in app
+    assert source_contains(app, "runNamedCommand('project.add')}}><span class=\"menu-row-icon\"")
+    assert source_contains(app, '<span class="menu-row-label">Add project…</span>')
     assert app.index("runNamedCommand('project.add')") < app.index(
         "runNamedCommand('project.create')}}>"
     )
     # Ordering, not literal depths: the exact values must stay free to move above
     # persistent chrome. test_dialog_layers_stack_above_persistent_chrome owns the
     # full invariant.
-    style = (root / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
+    style = localized_source((root / "frontend" / "src" / "style.css").read_text(encoding="utf-8"))
     depths = {
         name: int(value)
         for name, value in re.findall(r"\.([a-z-]+)\s*\{[^}]*?z-index:(\d+)", style)
@@ -626,22 +703,22 @@ def test_projects_manager_and_shared_directional_tab_actions_are_wired() -> None
     assert depths["project-registry-dialog-layer"] > depths["projects-manager-layer"]
     # openProjectsManager takes an optional focus (which Project, which tab), so
     # every plain trigger must call it rather than hand it the click event.
-    assert 'title="Manage Projects" onClick={()=>openProjectsManager()}' in app
-    assert 'title="Projects" onClick={()=>openProjectsManager()}' in app
+    assert source_contains(app, 'title="Manage Projects" onClick={()=>openProjectsManager()}')
+    assert source_contains(app, 'title="Projects" onClick={()=>openProjectsManager()}')
     # Only the resource menu still drives layout from a menu — a Project note or an
     # opened file has no tab to drag until it is already in a pane, so removing it there
     # would leave no way in. The session/tab menus lost theirs, Move tab included; see
     # test_no_desktop_context_menu_touches_the_pane_tree.
-    assert "directionRow('Open in split:'" in app
-    assert "directionRow('Move tab:'" not in app
-    assert "splitNoteResource(noteMenu.resourceId" in app
+    assert source_contains(app, "directionRow('Open in split:'")
+    assert not source_contains(app, "directionRow('Move tab:'")
+    assert source_contains(app, "splitNoteResource(noteMenu.resourceId")
     # Still the availability oracle for the direction rows and now for pane.moveTab*.
-    assert "export function paneNeighborIds" in layout
-    assert "paneNeighborIds(activeLayout, leaf.id)[option.id]" in app
-    assert "Swap pane with next" not in app
-    assert (
-        "Open project note…</button>"
-        not in app[app.index("{contextMenu &&") : app.index("{projectMenu &&")]
+    assert source_contains(layout, "export function paneNeighborIds")
+    assert source_contains(app, "paneNeighborIds(activeLayout, leaf.id)[option.id]")
+    assert not source_contains(app, "Swap pane with next")
+    assert not source_contains(
+        app[app.index("{contextMenu &&") : app.index("{projectMenu &&")],
+        "Open project note…</button>",
     )
 
 
@@ -652,16 +729,16 @@ def test_event_stream_resumes_from_the_last_seen_sequence() -> None:
     default served the oldest retained page — history the client already had, and
     none of the gap.
     """
-    app = (
-        Path(__file__).parents[1] / "frontend" / "src" / "App.tsx"
-    ).read_text(encoding="utf-8")
+    app = localized_source(
+        (Path(__file__).parents[1] / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
+    )
 
-    assert "lastEventSeq" in app
-    assert "?after_seq=${lastEventSeq.current}" in app
-    assert "openWebSocket(`/events${resume}`)" in app
+    assert source_contains(app, "lastEventSeq")
+    assert source_contains(app, "?after_seq=${lastEventSeq.current}")
+    assert source_contains(app, "openWebSocket(`/events${resume}`)")
     # A gap wider than the replay window must trigger a full refresh, not be
     # mistaken for "caught up".
-    assert "'events_gap'" in app
+    assert source_contains(app, "'events_gap'")
 
 
 def test_layout_refresh_defers_to_an_in_flight_layout_write() -> None:
@@ -676,13 +753,13 @@ def test_layout_refresh_defers_to_an_in_flight_layout_write() -> None:
     (the planner's `hasPendingLayoutWrite`).
     """
     frontend = Path(__file__).parents[1] / "frontend" / "src"
-    app = (frontend / "App.tsx").read_text(encoding="utf-8")
-    writer = (frontend / "layoutWriter.ts").read_text(encoding="utf-8")
+    app = localized_source((frontend / "App.tsx").read_text(encoding="utf-8"))
+    writer = localized_source((frontend / "layoutWriter.ts").read_text(encoding="utf-8"))
 
-    assert "layoutWriter.adoptRevisions(nextProjects)" in app
-    assert "hasPendingLayoutWrite: layoutWriter.hasPendingWrite" in app
-    assert "if (chains[project.id] !== undefined) continue" in writer
-    assert "hasPendingWrite: projectId => chains[projectId] !== undefined" in writer
+    assert source_contains(app, "layoutWriter.adoptRevisions(nextProjects)")
+    assert source_contains(app, "hasPendingLayoutWrite: layoutWriter.hasPendingWrite")
+    assert source_contains(writer, "if (chains[project.id] !== undefined) continue")
+    assert source_contains(writer, "hasPendingWrite: projectId => chains[projectId] !== undefined")
 
 
 def test_terminal_pane_clears_per_session_state_on_a_session_switch() -> None:
@@ -691,9 +768,11 @@ def test_terminal_pane_clears_per_session_state_on_a_session_switch() -> None:
     Without an explicit reset, "Copy reply" copies (and records into clipboard
     history) the previous session's reply.
     """
-    pane = (
-        Path(__file__).parents[1] / "frontend" / "src" / "TerminalPane.tsx"
-    ).read_text(encoding="utf-8")
+    pane = localized_source(
+        (Path(__file__).parents[1] / "frontend" / "src" / "TerminalPane.tsx").read_text(
+            encoding="utf-8"
+        )
+    )
 
     reset = pane[pane.index("    exitArrange()") : pane.index("},[session.id])")]
     for setter in (
@@ -707,19 +786,21 @@ def test_terminal_pane_clears_per_session_state_on_a_session_switch() -> None:
     # The toast carries the selection readout as well as the copy and paste confirmations,
     # so its pending dismissal is part of the reset: left running, the outgoing session's
     # timer blanks a message the incoming one has just put up.
-    assert "clipboardStatusTimerRef.current=null" in reset
-    assert "clipboardStatusKindRef.current='clipboard'" in reset
+    assert source_contains(reset, "clipboardStatusTimerRef.current=null")
+    assert source_contains(reset, "clipboardStatusKindRef.current='clipboard'")
     # Copy has no text cache now. Its request guard sees identity changes on
     # render, before the session-switch effect runs; async races are tested in
     # frontend/test/replyCopy.test.ts.
-    assert "replyCopyRef.current.observe(session)" in pane
-    assert "replyCopyRef.current.load(session" in pane
-    assert "setLastReply" not in pane
+    assert source_contains(pane, "replyCopyRef.current.observe(session)")
+    assert source_contains(pane, "replyCopyRef.current.load(session")
+    assert not source_contains(pane, "setLastReply")
     # A renderer change has to reach panes whose other props are stable. The memo moved
     # to its own module so its rules could be unit-tested rather than only grepped
     # (`frontend/test/terminalPaneInputBackend.test.ts`); the wiring assertion follows it.
-    memo = (
-        Path(__file__).parents[1] / "frontend" / "src" / "terminalPaneMemo.ts"
-    ).read_text(encoding="utf-8")
-    assert "a.rendererPreference === b.rendererPreference" in memo
-    assert "memo(TerminalPaneImpl, terminalPanePropsEqual)" in pane
+    memo = localized_source(
+        (Path(__file__).parents[1] / "frontend" / "src" / "terminalPaneMemo.ts").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert source_contains(memo, "a.rendererPreference === b.rendererPreference")
+    assert source_contains(pane, "memo(TerminalPaneImpl, terminalPanePropsEqual)")

@@ -38,6 +38,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from .ui_messages import ui_message
+
 # --------------------------------------------------------------------------- hosts
 
 #: Where the frontend is running. The Windows desktop shell disables browser
@@ -155,27 +157,24 @@ def normalize_chord(text: object, *, require_modifier: bool) -> str:
     """One canonical chord, or ValueError naming what is wrong with it."""
     raw = str(text).strip().lower().replace(" ", "")
     if not raw:
-        raise ValueError("empty chord")
+        raise ValueError(ui_message("keychords.5308013c5c"))
     # Chords name physical keys, so there is no `+` token: the key a US layout
     # prints `+` on is `=`, which is what `token_for_code` returns for `Equal`.
     parts = raw.split("+")
     key = parts[-1]
     modifiers = parts[:-1]
     if key in MODIFIERS:
-        raise ValueError("a chord must end in a key, not a modifier")
+        raise ValueError(ui_message("keychords.401ada82a1"))
     if key not in KEY_TOKENS:
-        raise ValueError(f"unknown key {key!r}")
+        raise ValueError(ui_message("keychords.890c8c7b8f", value1=repr(key)))
     seen = set(modifiers)
     if len(seen) != len(modifiers):
-        raise ValueError("duplicate modifier")
+        raise ValueError(ui_message("keychords.a3b1adfaac"))
     unknown = seen - set(MODIFIERS)
     if unknown:
-        raise ValueError(f"unknown modifier {sorted(unknown)[0]!r}")
+        raise ValueError(ui_message("keychords.542a77b5a9", value1=repr(sorted(unknown)[0])))
     if require_modifier and not seen & INTERCEPT_MODIFIERS and key not in FUNCTION_KEYS:
-        raise ValueError(
-            "the first chord needs Ctrl, Alt, or Meta, or a function key; "
-            "Shift alone shadows typing"
-        )
+        raise ValueError(ui_message("keychords.433e5524ee"))
     ordered = [name for name in MODIFIERS if name in seen]
     return "+".join([*ordered, key])
 
@@ -189,10 +188,10 @@ def normalize_sequence(text: object) -> str:
     """
     raw = str(text).strip()
     if not raw:
-        raise ValueError("empty binding")
+        raise ValueError(ui_message("keychords.709271a683"))
     chords = [chunk for chunk in _CHORD_SPLIT.split(raw) if chunk]
     if len(chords) > MAX_SEQUENCE:
-        raise ValueError(f"a binding may chain at most {MAX_SEQUENCE} chords")
+        raise ValueError(ui_message("keychords.3ca28933e1", value1=MAX_SEQUENCE))
     normalized = [
         normalize_chord(chord, require_modifier=index == 0) for index, chord in enumerate(chords)
     ]
@@ -201,7 +200,7 @@ def normalize_sequence(text: object) -> str:
     # the second half of a sequence still competes with a fixed application control.
     reserved = next((chord for chord in normalized if chord in APPLICATION_RESERVED), None)
     if reserved is not None:
-        raise ValueError(f"{reserved} is a fixed UI-scale control and cannot be rebound")
+        raise ValueError(ui_message("keychords.f2f2d8f6f7", value1=reserved))
     return " ".join(normalized)
 
 
@@ -452,9 +451,7 @@ def chord_warnings(
         found.append(ChordWarning("blocked", "platform", f"the desktop takes this: {wm[chord]}"))
     if host == "browser" and chord in BROWSER_CONTESTED:
         found.append(
-            ChordWarning(
-                "contested", "browser", f"also the browser's {BROWSER_CONTESTED[chord]}"
-            )
+            ChordWarning("contested", "browser", f"also the browser's {BROWSER_CONTESTED[chord]}")
         )
     if chord in TERMINAL_RESERVED:
         found.append(

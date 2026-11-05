@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 /** Client half of terminal input ownership.
  *
  * The daemon lets exactly one connection write to a session (see the backend's
@@ -178,5 +179,5 @@ const VISIBLE_REFUSALS = new Set(['claimed_elsewhere', 'input_rejected'])
 export function inputOwnerNotice(view: OwnershipView): string | null {
   if (view.owns || !view.ownerDevice) return null
   if (view.denied === null || !VISIBLE_REFUSALS.has(view.denied)) return null
-  return `Input active on ${view.ownerDevice}`
+  return t("inputOwnership.687531a5e7", { value1: view.ownerDevice })
 }

@@ -50,6 +50,7 @@ from ..shortcuts import (
     apply_shortcuts,
     resolve_folders,
 )
+from ..ui_messages import error_text, ui_message
 
 
 def _status(config: Config) -> dict[str, object]:
@@ -65,6 +66,7 @@ def _status(config: Config) -> dict[str, object]:
         slots[slot] = {"path": str(path), "present": path.is_file()}
     missing = missing_shell_modules()
     from ..desktop import _run_key_enabled
+
     return {
         "supported": True,
         "shortcuts": {"slots": slots},
@@ -110,7 +112,7 @@ def _requested_slots(body: dict[str, object]) -> tuple[str, ...] | None:
 async def post_shortcuts(request: web.Request) -> web.Response:
     if not IS_WINDOWS:
         return json_response(
-            {"error": "shortcuts exist only on Windows; there is nothing to write here"},
+            {"error": ui_message("desktop_integration.00c6d5588f")},
             400,
         )
     config: Config = request.app[keys.CONFIG]
@@ -119,7 +121,7 @@ async def post_shortcuts(request: web.Request) -> web.Response:
     try:
         slots = _requested_slots(body)
     except ShortcutError as exc:
-        return json_response({"error": str(exc)}, 400)
+        return json_response({"error": error_text(exc)}, 400)
     # `apply_shortcuts` addresses every slot on removal by design, so passing the
     # request's selection there would narrow a cleanup that must not be narrowed -
     # and an absent `slots` must fall through to that function's own default
@@ -128,9 +130,7 @@ async def post_shortcuts(request: web.Request) -> web.Response:
     if slots is None or remove:
         report = await asyncio.to_thread(apply_shortcuts, config=config, remove=remove)
     else:
-        report = await asyncio.to_thread(
-            apply_shortcuts, config=config, remove=remove, slots=slots
-        )
+        report = await asyncio.to_thread(apply_shortcuts, config=config, remove=remove, slots=slots)
     return json_response(report.as_dict())
 
 

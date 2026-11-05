@@ -1,3 +1,4 @@
+import { rich, t } from './localization/index.ts'
 import { openQuests, type Quest, type QuestId, type QuestSignals } from './questRegistry.ts'
 
 /**
@@ -13,12 +14,12 @@ export function QuestLog(
 ) {
   const quests = openQuests(signals)
   if (!quests.length) return null
-  return <div class="quest-log" aria-label="First steps">
-    <h2>First steps <small>optional, dismiss for good</small></h2>
+  return <div class="quest-log" aria-label={t("QuestLog.ba8770cfc0")}>
+    <h2>{rich("QuestLog.96c6973f6f", { value1: <small>{t("QuestLog.0413d8a4c3")}</small> })}</h2>
     {quests.map((quest: Quest) => <div class="quest-log-row" key={quest.id}>
       <div class="quest-log-text"><strong>{quest.title}</strong><small>{quest.blurb}</small></div>
       <button type="button" class="primary" onClick={() => onAction(quest.id)}>{quest.action}</button>
-      <button type="button" title="Dismiss for good - this never comes back" aria-label={`Dismiss ${quest.title}`} onClick={() => onDismiss(quest.id)}>✕</button>
+      <button type="button" title={t("QuestLog.0d41d4fa60")} aria-label={t("QuestLog.d4d093af8c", { title: quest.title })} onClick={() => onDismiss(quest.id)}>✕</button>
     </div>)}
   </div>
 }

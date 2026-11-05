@@ -41,6 +41,7 @@ from typing import Any, assert_never
 from .adapters.claude import claude_data_home
 from .adapters.codex import codex_data_home
 from .harness import Backend, descriptor, is_agent_harness
+from .ui_messages import ui_message
 
 # Enough to cover any real frontmatter block without reading a whole skill body.
 FRONTMATTER_BYTES = 16 * 1024
@@ -267,7 +268,9 @@ def _scan_skill_root(
     try:
         entries = sorted(directory.iterdir(), key=lambda item: item.name.lower())
     except OSError as exc:
-        errors.append({"path": str(directory), "message": f"could not be read: {exc}"})
+        errors.append(
+            {"path": str(directory), "message": ui_message("agent_skills.7c30277300", value1=exc)}
+        )
         return found
     for entry in entries:
         # A leading dot is how Codex hides its own bundled tree inside the user
@@ -276,19 +279,24 @@ def _scan_skill_root(
             continue
         manifest = entry / "SKILL.md"
         if not manifest.is_file():
-            errors.append({"path": str(entry), "message": "directory has no SKILL.md"})
+            errors.append({"path": str(entry), "message": ui_message("agent_skills.bc51232416")})
             continue
         try:
             head = _read_head(manifest)
             mtime = manifest.stat().st_mtime
         except OSError as exc:
-            errors.append({"path": str(manifest), "message": f"could not be read: {exc}"})
+            errors.append(
+                {
+                    "path": str(manifest),
+                    "message": ui_message("agent_skills.7c30277300", value1=exc),
+                }
+            )
             continue
         meta = parse_frontmatter(head)
         name = entry.name if vendor == "claude" else (meta.get("name") or entry.name)
         description = meta.get("description") or _body_summary(head)
         if not description:
-            errors.append({"path": str(manifest), "message": "no description and no body text"})
+            errors.append({"path": str(manifest), "message": ui_message("agent_skills.e15943a57e")})
         sidecar = _codex_agent_meta(entry) if vendor == "codex" else {}
         found.append(
             DiscoveredSkill(
@@ -328,7 +336,9 @@ def _scan_command_root(
     try:
         files = sorted(directory.rglob("*.md"), key=lambda item: str(item).lower())
     except OSError as exc:
-        errors.append({"path": str(directory), "message": f"could not be read: {exc}"})
+        errors.append(
+            {"path": str(directory), "message": ui_message("agent_skills.7c30277300", value1=exc)}
+        )
         return found
     for path in files:
         try:
@@ -341,7 +351,9 @@ def _scan_command_root(
             head = _read_head(path)
             mtime = path.stat().st_mtime
         except OSError as exc:
-            errors.append({"path": str(path), "message": f"could not be read: {exc}"})
+            errors.append(
+                {"path": str(path), "message": ui_message("agent_skills.7c30277300", value1=exc)}
+            )
             continue
         meta = parse_frontmatter(head)
         name = ":".join([*parts[:-1], path.stem])
@@ -545,9 +557,7 @@ def _omp_inventory(cwd: Path, omp_home: Path, now: float) -> SkillInventory:
         seen.add(identity)
         exists = directory.is_dir()
         found = (
-            _scan_skill_root(directory, scope, origin, "omp", inventory.errors)
-            if exists
-            else []
+            _scan_skill_root(directory, scope, origin, "omp", inventory.errors) if exists else []
         )
         inventory.roots.append(
             SkillRoot(str(directory), scope, "skill", origin, exists, len(found))
@@ -620,9 +630,7 @@ def _collect_skill_roots(
         seen.add(identity)
         exists = directory.is_dir()
         found = (
-            _scan_skill_root(directory, scope, origin, vendor, inventory.errors)
-            if exists
-            else []
+            _scan_skill_root(directory, scope, origin, vendor, inventory.errors) if exists else []
         )
         inventory.roots.append(
             SkillRoot(str(directory), scope, "skill", origin, exists, len(found))
@@ -669,7 +677,7 @@ def discover_skills(
     the click that follows it.
     """
     if not is_agent_harness(backend):
-        raise ValueError("skills are discoverable only for registered agent sessions")
+        raise ValueError(ui_message("agent_skills.ccbcbe3eb3"))
     moment = time.time() if now is None else now
     root = Path(cwd)
     if backend == "claude":
@@ -683,7 +691,7 @@ def discover_skills(
     elif backend == "opencode":
         home = descriptor("opencode").data_home()
     elif backend == "shell":
-        raise ValueError("shell sessions do not have agent skills")
+        raise ValueError(ui_message("agent_skills.eafb4c4c68"))
     else:
         assert_never(backend)
     key = (backend, str(root), str(home))

@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // The command rail's pad chip: the element, its pointer listeners, the dial it draws while
 // pressed, and the haptics. The rules it obeys live in `railPadGesture.ts`.
 //
@@ -492,7 +493,7 @@ export function RailPad({ controller, item, slots, className, content, modifierP
     data-rail-slot={slot}
     data-reorder-id={reorderId}
     class={`${className || 'term-key'} rail-pad rail-pad-w${wedges} rail-pad-r${rings}${dial ? ' rail-pad-pressed' : ''}`}
-    title={item.title || 'Drag a wedge, or tap to open'}
+    title={item.title || t("RailPad.e57613ad8c")}
     aria-label={accessible}
     aria-haspopup="menu"
     aria-expanded={!!dial?.standing}

@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // Where a conversation can be forked, as the browser sees it.
 //
 // Pure: everything here is the daemon's answer reshaped for a picker, with no fetch
@@ -94,37 +95,37 @@ export const branchPointEligible = (point: BranchPoint, mode: BranchMode): boole
 
 /** The action offered on this point, in the words of what it will do. */
 export function branchActionLabel(mode: BranchMode): string {
-  return mode === 'before' ? 'Branch before this' : 'Branch after this'
+  return mode === 'before' ? t("branchPoints.cf8f920374") : t("branchPoints.4d9a1caa26")
 }
 
 /** What the branch will contain, said once so the reader is never guessing. */
 export function branchOutcomeSummary(mode: BranchMode): string {
   return mode === 'before'
-    ? 'The new session carries everything up to the message before this one, and this prompt comes back for you to edit.'
-    : 'The new session carries everything up to and including this reply.'
+    ? t("branchPoints.77ac3ef39e")
+    : t("branchPoints.c8a4164020")
 }
 
 /** Why this point cannot be branched at, in the words of the cause. */
 export function branchIneligibilityMessage(reason: BranchIneligibility | null): string {
   if (reason === 'unanswered_tool_calls') {
-    return 'This reply asked for a tool whose result had not arrived yet. A conversation cut here would not load.'
+    return t("branchPoints.d5e7a4485e")
   }
-  if (reason === 'outside_window') return 'Nothing loaded before this message to branch from.'
-  return reason ? `Unavailable: ${reason}` : ''
+  if (reason === 'outside_window') return t("branchPoints.46b93be6a0")
+  return reason ? t("branchPoints.277465567a", { value1: reason }) : ''
 }
 
 /** Why there is nothing to pick, in the words of the cause. */
 export function branchPointsEmptyMessage(reason: BranchPointsReason, backend: string): string {
-  if (reason === 'not_agent') return 'This session has no agent conversation to branch.'
-  if (reason === 'no_transcript') return 'This agent has not written its first message yet.'
-  if (reason === 'unreadable') return 'The conversation could not be read just now. Try again.'
+  if (reason === 'not_agent') return t("branchPoints.025611e970")
+  if (reason === 'no_transcript') return t("branchPoints.a400917c65")
+  if (reason === 'unreadable') return t("branchPoints.ec9c2942e3")
   if (reason === 'dialect_unsupported') {
-    return `swemux cannot yet fork a ${backend} conversation at a chosen point.`
+    return t("branchPoints.6f30271265", { backend: backend })
   }
   if (reason === 'strategy_has_no_points') {
-    return `${backend} branches from where the conversation stands now, not from a chosen point.`
+    return t("branchPoints.ed3ef76ac8", { backend: backend })
   }
-  return 'Nothing has been said in this conversation yet.'
+  return t("branchPoints.c2da52d0f0")
 }
 
 /** The points a picker should show, newest first: a branch is normally a recent regret. */

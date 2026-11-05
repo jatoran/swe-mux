@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 /**
  * Reports missed health probes without inferring whether the daemon is stalled,
  * starting, disconnected, or dead. Reconnection is attempted when it answers.
@@ -84,13 +85,13 @@ export function stallSeconds(since: number, now: number): number {
 
 /** What is happening. Rendered on its own so the ticking clock beside it can be
  *  kept out of what a screen reader re-announces every second. */
-export const DAEMON_STALL_HEADING = 'swe-mux daemon is not responding'
+export const daemonStallHeading = () => (t("daemonLiveness.d79407b633"))
 /** Recovery is conditional; a missed probe cannot prove sessions are protected. */
-export const DAEMON_STALL_PROMISE = 'Reconnecting. If this persists, use the desktop tray to restart the daemon.'
+export const daemonStallPromise = () => (t("daemonLiveness.b05a7d2d41"))
 
 /** The whole sentence, as the banner's tooltip and as one string to test. */
 export function daemonStallText(since: number, now: number): string {
-  return `${DAEMON_STALL_HEADING} (${stallSeconds(since, now)}s). ${DAEMON_STALL_PROMISE}`
+  return t("daemonLiveness.c712fcc75f", { value1: daemonStallHeading(), value2: stallSeconds(since, now), value3: daemonStallPromise() })
 }
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<{ ok: boolean; json?: () => Promise<unknown> }>

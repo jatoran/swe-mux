@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 /** Browser-owned layout model for configurable session pane top bars. */
 
 import { DRAWER_TABS, type DrawerTabId } from './drawerTabs.ts'
@@ -50,7 +51,7 @@ export type SessionTopbarCatalogItem = {
 }
 
 export const SESSION_TOPBAR_ACTIONS: Array<{id:SessionTopbarActionId;label:string;description:string}> = [
-  {id:'approvals',label:'Approvals',description:'Current approval mode and its chooser.'},
+  {id:'approvals',get label() { return t("sessionTopbarConfig.2bfc347157") },get description() { return t("sessionTopbarConfig.3f4d4617a0") }},
   ...DRAWER_TABS.map(tab=>({
     id:`drawer:${tab.id}` as SessionTopbarActionId,
     label:tab.label,

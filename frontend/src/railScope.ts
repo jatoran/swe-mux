@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // Scope-aware editing over the Action configuration blob.
 //
 // The Settings Actions editor works on the *effective* config a project actually renders:
@@ -333,7 +334,7 @@ export function addScopedRailItem(
   for (const device of RAIL_DEVICES) {
     const deviceRows = { ...(layouts[device] || {}) }
     const rows = [...(deviceRows[surface] || [])]
-    if (!rows.length) rows.push({ id: newRailRowId(), label: 'Project', items: [] })
+    if (!rows.length) rows.push({ id: newRailRowId(), get label() { return t("railScope.9859597853") }, items: [] })
     const last = rows.length - 1
     rows[last] = { ...rows[last], items: [...rows[last].items, item.id] }
     deviceRows[surface] = rows
@@ -423,7 +424,7 @@ export function toggleScopedPlacement(
     if (present) {
       deviceRows[surface] = rows.map(row => ({ ...row, items: row.items.filter(id => id !== itemId) }))
     } else {
-      if (!rows.length) rows.push({ id: newRailRowId(), label: 'Project', items: [] })
+      if (!rows.length) rows.push({ id: newRailRowId(), get label() { return t("railScope.9859597853") }, items: [] })
       const last = rows.length - 1
       rows[last] = { ...rows[last], items: [...rows[last].items, itemId] }
       deviceRows[surface] = rows

@@ -20,12 +20,13 @@ import re
 from pathlib import Path
 
 from swe_mux.config import CLAUDE_MAX_COLUMNS, Config
+from tests.support.frontend_source import localized_source, source_contains
 
 SRC = Path(__file__).parents[1] / "frontend" / "src"
 
 
 def test_browser_offers_exactly_the_caps_the_daemon_accepts() -> None:
-    source = (SRC / "terminalViewport.ts").read_text(encoding="utf-8")
+    source = localized_source((SRC / "terminalViewport.ts").read_text(encoding="utf-8"))
     steps = re.search(r"CLAUDE_MAX_COLUMN_STEPS\s*=\s*\[([^\]]+)\]", source)
     assert steps, "terminalViewport.ts must export a literal CLAUDE_MAX_COLUMN_STEPS array"
     assert {int(value) for value in steps.group(1).split(",")} == CLAUDE_MAX_COLUMNS
@@ -36,10 +37,8 @@ def test_the_default_is_todays_behaviour() -> None:
     config = Config()
     assert config.claude_max_columns == 120
     assert 120 in CLAUDE_MAX_COLUMNS
-    source = (SRC / "terminalViewport.ts").read_text(encoding="utf-8")
-    assert re.search(
-        r"DEFAULT_CLAUDE_MAX_COLUMNS\s*:\s*ClaudeMaxColumns\s*=\s*120", source
-    )
+    source = localized_source((SRC / "terminalViewport.ts").read_text(encoding="utf-8"))
+    assert re.search(r"DEFAULT_CLAUDE_MAX_COLUMNS\s*:\s*ClaudeMaxColumns\s*=\s*120", source)
 
 
 def test_zero_is_the_spelling_for_no_cap() -> None:
@@ -51,8 +50,8 @@ def test_zero_is_the_spelling_for_no_cap() -> None:
     `test_config_service.py`, with the rest of the validation.
     """
     assert 0 in CLAUDE_MAX_COLUMNS
-    source = (SRC / "terminalViewport.ts").read_text(encoding="utf-8")
-    assert "CLAUDE_MAX_COLUMNS_OFF = 0" in source
+    source = localized_source((SRC / "terminalViewport.ts").read_text(encoding="utf-8"))
+    assert source_contains(source, "CLAUDE_MAX_COLUMNS_OFF = 0")
 
 
 def test_only_declared_panes_carry_the_envelope() -> None:
@@ -69,14 +68,14 @@ def test_only_declared_panes_carry_the_envelope() -> None:
     """
     from swe_mux.harness import HARNESSES
 
-    source = (SRC / "terminalViewport.ts").read_text(encoding="utf-8")
+    source = localized_source((SRC / "terminalViewport.ts").read_text(encoding="utf-8"))
     policy = re.search(r"export function claudeWidthCap\((.*?)\n\}", source, re.DOTALL)
     assert policy, "claudeWidthCap must stay the single decision point for the envelope"
     assert "appliesWidthEnvelope(backend)" in policy.group(1)
     assert "compactLayout" in policy.group(1)
-    assert {
-        name for name, harness in HARNESSES.items() if harness.applies_width_envelope
-    } == {"claude"}
+    assert {name for name, harness in HARNESSES.items() if harness.applies_width_envelope} == {
+        "claude"
+    }
 
 
 def test_the_setting_is_reachable_from_the_terminals_tab() -> None:
@@ -85,16 +84,18 @@ def test_the_setting_is_reachable_from_the_terminals_tab() -> None:
     Settings search indexes the rendered tab, so the prose is what makes "width" and
     "columns" find this control - and the pane's own notice sends the user here.
     """
-    settings = (SRC / "Settings.tsx").read_text(encoding="utf-8")
-    pane = (SRC / "TerminalPane.tsx").read_text(encoding="utf-8")
-    app = (SRC / "App.tsx").read_text(encoding="utf-8")
-    assert "draft.claude_max_columns" in settings
-    assert "CLAUDE_MAX_COLUMN_STEPS.map" in settings
+    settings = localized_source((SRC / "Settings.tsx").read_text(encoding="utf-8"))
+    pane = localized_source((SRC / "TerminalPane.tsx").read_text(encoding="utf-8"))
+    app = localized_source((SRC / "App.tsx").read_text(encoding="utf-8"))
+    assert source_contains(settings, "draft.claude_max_columns")
+    assert source_contains(settings, "CLAUDE_MAX_COLUMN_STEPS.map")
     for word in ("width", "columns", "No limit"):
         assert word in settings, f"the Claude width control has no {word!r} to search for"
     # The pane's notice links to the control itself, not to the Terminals tab: a setting
     # link scrolls to it and flashes it on arrival (`design/features/setting-links.md`).
-    assert 'target="terminals.claudeWidth"' in pane
-    assert "'terminals.claudeWidth':" in (SRC / "settingTargets.ts").read_text(encoding="utf-8")
-    assert 'data-setting="claude_max_columns"' in settings
-    assert "onConfigureWidth" not in app
+    assert source_contains(pane, 'target="terminals.claudeWidth"')
+    assert "'terminals.claudeWidth':" in localized_source(
+        (SRC / "settingTargets.ts").read_text(encoding="utf-8")
+    )
+    assert source_contains(settings, 'data-setting="claude_max_columns"')
+    assert not source_contains(app, "onConfigureWidth")

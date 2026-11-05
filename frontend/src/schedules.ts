@@ -1,3 +1,5 @@
+import { locale as uiLocale } from './localization/index.ts'
+import { t } from './localization/index.ts'
 import { serverNow } from './serverClock.ts'
 
 // Types and pure presentation helpers for the Schedule tab.
@@ -154,39 +156,39 @@ export type CronPreset = { label: string; cron: string; teaches: string }
 
 export const CRON_PRESETS: CronPreset[] = [
   {
-    label: 'Every day at 09:00',
+    get label() { return t("schedules.b197114114") },
     cron: '0 9 * * *',
-    teaches: 'The five fields are minute, hour, day-of-month, month, day-of-week. Fix the first two, leave the rest as * for "every".',
+    get teaches() { return t("schedules.73dd29e19f") },
   },
   {
-    label: 'Every weekday at 09:00',
+    get label() { return t("schedules.3378bdf2d0") },
     cron: '0 9 * * mon-fri',
-    teaches: 'The last field is the weekday, and it takes names and ranges: mon-fri is Monday through Friday.',
+    get teaches() { return t("schedules.8b1213c219") },
   },
   {
-    label: 'Every Monday at 09:00',
+    get label() { return t("schedules.50d9d0daf5") },
     cron: '0 9 * * mon',
-    teaches: 'Weekly is just one weekday. Pin the day-of-week field and leave day-of-month as *.',
+    get teaches() { return t("schedules.df2b3ea4e1") },
   },
   {
-    label: 'Every Wednesday at 13:00',
+    get label() { return t("schedules.0e0a21cc23") },
     cron: '0 13 * * wed',
-    teaches: 'Cron counts days and months, never weeks, so there is no "every other Wednesday". For a fortnightly rhythm use the 1st and 15th below, or an interval trigger.',
+    get teaches() { return t("schedules.47c8ba91c6") },
   },
   {
-    label: 'The 1st and 15th at 13:00',
+    get label() { return t("schedules.4de22ed297") },
     cron: '0 13 1,15 * *',
-    teaches: 'A comma is a list: 1,15 is the first and fifteenth of the month. This is the closest cron gets to every other week.',
+    get teaches() { return t("schedules.5d578caf6a") },
   },
   {
-    label: 'Every 30 minutes',
+    get label() { return t("schedules.81c3c81990") },
     cron: '*/30 * * * *',
-    teaches: 'A slash is a step: */30 in the minute field means every 30th minute, and the same works in any field.',
+    get teaches() { return t("schedules.d8aa1f5f70") },
   },
   {
-    label: 'First of the month at 03:00',
+    get label() { return t("schedules.ab290dae5c") },
     cron: '0 3 1 * *',
-    teaches: 'The third field is the day of the month. With a weekday of * this fires on that date whatever day it lands on.',
+    get teaches() { return t("schedules.48f19d9cc4") },
   },
 ]
 
@@ -205,31 +207,31 @@ export function presetForCron(cron: string): CronPreset | undefined {
  *  only one a recurring trigger repeats without run N+1 inheriting run N. */
 export const TARGET_KIND_COPY: Record<ScheduleTargetKind, { label: string; detail: string }> = {
   run: {
-    label: 'This exact conversation',
-    detail: 'Reopens the conversation as it is now. Nothing drifts. Best for a one-off.',
+    get label() { return t("schedules.4e2f4255db") },
+    get detail() { return t("schedules.c4dd16f041") },
   },
   latest_of_session: {
-    label: 'Wherever this work has got to',
-    detail: 'Follows the conversation through rollovers and earlier resumes, so each run continues the last. It keeps growing: every resume replays the whole conversation, and past the ceiling below its early context has already been compacted into a summary.',
+    get label() { return t("schedules.f2a83b116c") },
+    get detail() { return t("schedules.e723a800b1") },
   },
   fork_point: {
-    label: 'From a fixed point, every time',
-    detail: 'Forks the conversation at a message you pick and resumes the copy, leaving the original untouched. Every run starts from identical context, which is what makes a repeating trigger repeatable. Claude only.',
+    get label() { return t("schedules.f8dbb8e013") },
+    get detail() { return t("schedules.0a490b3488") },
   },
 }
 
 export const BLOCKED_LABELS: Record<string, string> = {
-  project_missing: 'this Project is no longer registered',
-  automation_disabled: 'Scheduled runs is off for this Project',
-  install_disabled: 'scheduled runs are switched off for this install',
+  get project_missing() { return t("schedules.7211f79522") },
+  get automation_disabled() { return t("schedules.bedf1e6863") },
+  get install_disabled() { return t("schedules.c38bc66ebf") },
 }
 
 export const OUTCOME_LABELS: Record<string, string> = {
-  started: 'starting',
-  spawned: 'ran',
-  skipped: 'skipped',
-  failed: 'failed',
-  missed: 'missed',
+  get started() { return t("schedules.59dbf36d99") },
+  get spawned() { return t("schedules.c8fc6bf296") },
+  get skipped() { return t("schedules.389595a44d") },
+  get failed() { return t("schedules.5d28a90f44") },
+  get missed() { return t("schedules.1c33629a93") },
 }
 
 export const emptyDraft = (): ScheduleDraft => ({
@@ -372,16 +374,16 @@ export function draftToBody(draft: ScheduleDraft): Record<string, unknown> {
 
 /** What a row does, in one phrase: the half of a schedule the cadence does not say. */
 export function actionLabel(schedule: Schedule): string {
-  if (schedule.action !== 'resume') return 'starts a new session'
+  if (schedule.action !== 'resume') return t("schedules.2edb5380a8")
   const target = schedule.target
-  if (!target || target.missing) return 'resumes a conversation that is gone'
-  if (schedule.target_kind === 'fork_point') return `forks ${target.name || 'a conversation'}`
+  if (!target || target.missing) return t("schedules.19fcb1e1d0")
+  if (schedule.target_kind === 'fork_point') return t("schedules.c166c10d2c", { value1: target.name || 'a conversation' })
   if (schedule.target_kind === 'latest_of_session') {
     // Names where the conversation actually is, not where it was pinned. That is the
     // one thing about a rolling target a reader cannot work out from the row.
-    return `continues ${target.resolved_name || target.name || 'a conversation'}`
+    return t("schedules.46551c6312", { value1: target.resolved_name || target.name || 'a conversation' })
   }
-  return `resumes ${target.name || 'a conversation'}`
+  return t("schedules.76119080f5", { value1: target.name || 'a conversation' })
 }
 
 /** Whether this schedule needs a conversation to exist, and it does not. */
@@ -394,52 +396,52 @@ export function cadenceLabel(schedule: Schedule | ScheduleDraft): string {
   if (kind === 'cron') {
     const expression = 'cron' in schedule ? schedule.cron : ''
     const zone = schedule.timezone ? ` (${schedule.timezone})` : ''
-    return `cron ${expression}${zone}`
+    return t("schedules.ba94172e7a", { expression: expression, zone: zone })
   }
   if (kind === 'interval') {
     const seconds = 'interval_seconds' in schedule
       ? Number(schedule.interval_seconds || 0)
       : Math.round(schedule.interval_minutes * 60)
-    return `every ${durationLabel(seconds)}`
+    return t("schedules.917f8cddb8", { value1: durationLabel(seconds) })
   }
   const at = 'run_at' in schedule ? schedule.run_at : null
-  return at ? `once, ${absoluteLabel(at)}` : 'once'
+  return at ? t("schedules.6a06931ba3", { value1: absoluteLabel(at) }) : t("schedules.200651a8b2")
 }
 
 export function durationLabel(seconds: number): string {
   if (!seconds || seconds < 0) return '—'
-  if (seconds < 3600) return `${Math.round(seconds / 60)} min`
+  if (seconds < 3600) return t("schedules.ef4135f675", { value1: Math.round(seconds / 60) })
   if (seconds < 86_400) {
     const hours = seconds / 3600
-    return `${Number.isInteger(hours) ? hours : hours.toFixed(1)} h`
+    return t("schedules.b30c713499", { value1: Number.isInteger(hours) ? hours : hours.toFixed(1) })
   }
   const days = seconds / 86_400
-  return `${Number.isInteger(days) ? days : days.toFixed(1)} d`
+  return t("schedules.0e28352d24", { value1: Number.isInteger(days) ? days : days.toFixed(1) })
 }
 
 /** "in 4h" / "in 3d" / "now" for a future instant, using the daemon's clock. */
 export function untilLabel(epochSeconds: number | null, now: number = serverNow()): string {
-  if (!epochSeconds) return 'not scheduled'
+  if (!epochSeconds) return t("schedules.a497cf81d9")
   const delta = epochSeconds - now
-  if (delta <= 0) return 'due'
-  if (delta < 90) return 'in under a minute'
-  if (delta < 3600) return `in ${Math.round(delta / 60)}m`
-  if (delta < 86_400) return `in ${Math.round(delta / 3600)}h`
-  return `in ${Math.round(delta / 86_400)}d`
+  if (delta <= 0) return t("schedules.458a4770df")
+  if (delta < 90) return t("schedules.5ac462fcf9")
+  if (delta < 3600) return t("schedules.7618f5958a", { value1: Math.round(delta / 60) })
+  if (delta < 86_400) return t("schedules.4c9882b696", { value1: Math.round(delta / 3600) })
+  return t("schedules.ca2efafdf7", { value1: Math.round(delta / 86_400) })
 }
 
 export function absoluteLabel(epochSeconds: number | null): string {
   if (!epochSeconds) return '—'
-  return new Date(epochSeconds * 1000).toLocaleString([], {
+  return new Date(epochSeconds * 1000).toLocaleString(uiLocale.value, {
     month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
   })
 }
 
 /** The one-line verdict a row leads with. */
 export function outcomeLabel(schedule: Schedule): string {
-  if (!schedule.last_outcome) return 'never run'
+  if (!schedule.last_outcome) return t("schedules.de5f9d00b8")
   const label = OUTCOME_LABELS[schedule.last_outcome] || schedule.last_outcome
-  return `${label} ${absoluteLabel(schedule.last_fire_at)}`
+  return t("schedules.e2d7978faa", { label: label, value2: absoluteLabel(schedule.last_fire_at) })
 }
 
 /** Rows that need a human: a failure, or armed-but-cannot-fire.

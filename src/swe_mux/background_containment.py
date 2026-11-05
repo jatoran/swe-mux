@@ -55,6 +55,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from .ui_messages import ui_message
+
 try:
     import psutil
 except ImportError:  # pragma: no cover - psutil is a base dependency
@@ -85,7 +87,7 @@ class ContainmentPolicy:
 
     def __post_init__(self) -> None:
         if not 1 <= self.cpu_percent <= 100:
-            raise ValueError("cpu_percent must be between 1 and 100")
+            raise ValueError(ui_message("background_containment.58cc2009f1"))
 
 
 BACKGROUND_BATCH = ContainmentPolicy()
@@ -603,13 +605,16 @@ if sys.platform == "win32":
                 return [self.pid]
             listing = _PidList()
             returned = wintypes.DWORD(0)
-            if not _QueryInformationJobObject(
-                self.job,
-                _JobObjectBasicProcessIdList,
-                ctypes.byref(listing),
-                ctypes.sizeof(listing),
-                ctypes.byref(returned),
-            ) and ctypes.get_last_error() != _ERROR_MORE_DATA:
+            if (
+                not _QueryInformationJobObject(
+                    self.job,
+                    _JobObjectBasicProcessIdList,
+                    ctypes.byref(listing),
+                    ctypes.sizeof(listing),
+                    ctypes.byref(returned),
+                )
+                and ctypes.get_last_error() != _ERROR_MORE_DATA
+            ):
                 return []
             count = min(int(listing.NumberOfProcessIdsInList), _PID_LIST_CAPACITY)
             return [int(listing.ProcessIdList[index]) for index in range(count)]

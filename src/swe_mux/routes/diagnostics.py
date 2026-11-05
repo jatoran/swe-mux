@@ -32,7 +32,7 @@ from ..harness import (
     detect_installations_with_versions,
     public_harness_registry,
 )
-from ..http_support import json_response
+from ..http_support import json_response, request_id
 from ..loop_lag import LoopLagMonitor
 from ..network_usage import (
     NetworkUsage,
@@ -61,6 +61,7 @@ from ..transcript_view import (
     conversation_is_readable,
 )
 from ..ui_build import ui_build_id_cached
+from ..ui_messages import error_text, ui_message
 from ..windows_firewall import (
     firewall_supported,
     inspect_firewall,
@@ -328,20 +329,20 @@ async def _bundle_transcript_slices(
     for run_id in run_ids:
         row = await app[keys.HISTORY].history_entry(run_id)
         if not row:
-            slices.append({"agent_run_id": run_id, "error": "no history row"})
+            slices.append({"agent_run_id": run_id, "error": ui_message("diagnostics.12713bb28f")})
             continue
         transcript = row.get("transcript_path")
         path = Path(str(transcript)) if transcript else None
         native_id = str(row.get("native_id") or "") or None
         if not conversation_is_readable(path, str(row["backend"]), native_id):
-            slices.append({"agent_run_id": run_id, "error": "native transcript is unavailable"})
+            slices.append({"agent_run_id": run_id, "error": ui_message("diagnostics.4c3d8c6995")})
             continue
         try:
             parsed = await asyncio.to_thread(
                 history._parse_conversation, path, str(row["backend"]), native_id
             )
         except (OSError, ValueError):
-            slices.append({"agent_run_id": run_id, "error": "native transcript is unreadable"})
+            slices.append({"agent_run_id": run_id, "error": ui_message("diagnostics.b342408c65")})
             continue
         in_window: list[dict[str, Any]] = []
         for message in parsed.messages:
@@ -602,12 +603,10 @@ async def get_notification_diagnostics(request: web.Request) -> web.Response:
     try:
         days = float(request.query.get("days", "7"))
     except ValueError as exc:
-        raise ValueError("days must be a number") from exc
+        raise ValueError(ui_message("diagnostics.3974dbe4c9")) from exc
     telemetry: OperationalTelemetryStore = request.app[keys.TELEMETRY]
     if not math.isfinite(days) or days <= 0 or days > telemetry.retention_days:
-        raise ValueError(
-            f"days must be greater than zero and no more than {telemetry.retention_days}"
-        )
+        raise ValueError(ui_message("diagnostics.27fa976c31", value1=telemetry.retention_days))
     until = time.time()
     return json_response(
         await telemetry.notification_decision_summary(
@@ -674,7 +673,7 @@ def _log_tail(path: Path, max_bytes: int = _DIAGNOSTICS_LOG_TAIL_BYTES) -> dict[
                 handle.seek(size - max_bytes)
             data = handle.read()
     except OSError as exc:
-        return {"path": str(path), "present": False, "error": str(exc), "lines": []}
+        return {"path": str(path), "present": False, "error": error_text(exc), "lines": []}
     text = data.decode("utf-8", "replace")
     return {
         "path": str(path),
@@ -965,7 +964,7 @@ def _wsl_bridge_report(config: Any) -> list[dict[str, Any]]:
             if not enabled:
                 existing = row.get("reasons")
                 reasons = [str(item) for item in existing] if isinstance(existing, list) else []
-                row["reasons"] = ["the WSL agent bridge is switched off", *reasons]
+                row["reasons"] = [ui_message("route_diagnostics.5a15024d29"), *reasons]
             rows.append(row)
             continue
         rows.append(
@@ -976,16 +975,61 @@ def _wsl_bridge_report(config: Any) -> list[dict[str, Any]]:
                 "harnesses": [],
                 "installed": False,
                 "reachable": None,
-                "reasons": [
-                    "the WSL agent bridge is off; enable it in Settings to run an agent "
-                    f"natively inside {distro} and have mux observe it"
-                ],
+                "reasons": [ui_message("route_diagnostics.aa901ae004", value1=distro)],
             }
         )
     return rows
 
 
+async def localization_diagnostic(request: web.Request) -> web.Response:
+    """Record bounded catalog diagnostics without accepting copy, values, or user content."""
+    body = await request.json()
+    entries = body.get("entries") if isinstance(body, dict) else None
+    if not isinstance(entries, list) or not 1 <= len(entries) <= 20:
+        raise ValueError(ui_message("localization.invalid_diagnostic"))
+    validated = []
+    for entry in entries:
+        if not isinstance(entry, dict) or set(entry) - {
+            "operation",
+            "locale",
+            "message_id",
+            "reason",
+        }:
+            raise ValueError(ui_message("localization.invalid_diagnostic"))
+        operation = entry.get("operation")
+        language = entry.get("locale")
+        message_id = entry.get("message_id", "")
+        reason = entry.get("reason", "")
+        if (
+            not isinstance(operation, str)
+            or operation not in {"message_fallback", "language_changed", "locale_loaded"}
+            or not isinstance(language, str)
+            or language not in {"en", "zh-Hans"}
+            or not isinstance(message_id, str)
+            or len(message_id) > 160
+            or any(
+                not (char.isascii() and (char.isalnum() or char in "._:-")) for char in message_id
+            )
+            or not isinstance(reason, str)
+            or reason not in {"", "invalid_message", "invalid_rich_message"}
+        ):
+            raise ValueError(ui_message("localization.invalid_diagnostic"))
+        validated.append((operation, language, message_id, reason))
+    for operation, language, message_id, reason in validated:
+        emit = log.warning if operation == "message_fallback" else log.info
+        emit(
+            "ui_localization operation=%s locale=%s message_id=%s reason=%s request_id=%s",
+            operation,
+            language,
+            message_id,
+            reason,
+            request_id(request),
+        )
+    return json_response({"recorded": len(validated)})
+
+
 ROUTES: tuple[web.RouteDef, ...] = (
+    web.post("/api/diagnostics/localization", localization_diagnostic),
     web.get("/api/sessions/{sid}/state-log", get_session_state_log),
     web.get("/api/sessions/{sid}/diagnostic-bundle", get_session_diagnostic_bundle),
     web.get("/api/diagnostics/status-health", get_status_health),

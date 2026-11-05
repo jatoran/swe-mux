@@ -1,3 +1,4 @@
+import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { ComponentChildren, JSX } from 'preact'
 import { api } from './api'
@@ -59,12 +60,12 @@ type Props={
   onPopSelected:()=>void
 }
 
-const sizeLabel=(bytes:number)=>bytes>=1024?`${Math.round(bytes/1024)} KiB`:`${bytes} B`
+const sizeLabel=(bytes:number)=>bytes>=1024?t("NotesTab.e419c42726", { value1: Math.round(bytes/1024) }):t("NotesTab.276b4e09cd", { value1: bytes })
 const LONG_PRESS_MS=550
 // Deletion is recoverable, so the confirmation says where the note goes rather than
 // claiming a permanence the daemon no longer implements.
-const DELETE_HINT='Click again to move this note to the Project note trash'
-const PROTECTED_HINT='A Project keeps at least one note. Rename this one, or create another note first.'
+const deleteHint=() => (t("NotesTab.b13c6d8b78"))
+const protectedHint=() => (t("NotesTab.a24ef7d6bf"))
 const noteKey=(note:Pick<ProjectNoteSummary,'project_id'|'note_id'>)=>`${note.project_id}:${note.note_id}`
 type NoteMenu=
   |{kind:'project';note:ProjectNoteSummary;x:number;y:number}
@@ -181,7 +182,7 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
       item.title.toLowerCase().includes(needle)
       ||item.project_name.toLowerCase().includes(needle)
       ||item.excerpt.toLowerCase().includes(needle))
-  },[scopedItems,needle])
+  }, [scopedItems, needle, uiLocale.value, catalogRevision.value])
 
   // Grouping by project keeps an all-projects listing readable. A scoped listing is
   // already one project, so it renders flat.
@@ -196,14 +197,14 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
     // By Project name. The buckets arrive in whatever order the notes happened to, which
     // is not an order anybody can predict or scan; the notes *within* a bucket keep theirs.
     return byProjectName([...buckets.entries()],([,bucket])=>bucket.label)
-  },[shown,allProjects])
+  }, [shown, allProjects, uiLocale.value, catalogRevision.value])
 
   const projectItems=useMemo(()=>stableProjectNoteTabs(
     (scopedItems||[]).filter(item=>item.project_id===project?.id)
-  ),[scopedItems,project?.id])
+  ), [scopedItems, project?.id, uiLocale.value, catalogRevision.value])
   // Counted over the loaded collection rather than the search results, so filtering to one
   // row never makes an ordinary note look like a Project's last one.
-  const noteCounts=useMemo(()=>projectNoteCounts(scopedItems||[]),[scopedItems])
+  const noteCounts=useMemo(()=>projectNoteCounts(scopedItems||[]), [scopedItems, uiLocale.value, catalogRevision.value])
   const selectedTabId=canonicalNoteTabId(selectedResourceId)
 
   // A stale remembered id can follow a deletion or an older on-disk build. Resolve it only
@@ -324,7 +325,7 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
         const next=projectItems.find(item=>projectNoteTabId(item.note_id)===fallback)
         if(next)openNote(next,'drawer')
       }
-      window.dispatchEvent(new CustomEvent('mux:note-changed',{detail:{scope:'project',projectId:note.project_id,kind:'note',noteId:note.note_id,revision:'missing'}}))
+      window.dispatchEvent(new CustomEvent('mux:note-changed',{detail:{scope:'project',projectId:note.project_id,kind:'note',noteId:note.note_id,get revision() { return t("NotesTab.ffa63583df") }}}))
     }catch(cause){
       setDeleteConfirm('');setError(cause instanceof Error?cause.message:String(cause));void load()
     }finally{setDeleting('')}
@@ -343,22 +344,20 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
     return <>
       <button
         class={`note-delete ${confirming?'confirming':''} ${guarded?'protected':''}`}
-        aria-label={guarded
-          ?`${note.title} is the only note in ${note.project_name} and cannot be deleted`
-          :confirming?`Confirm deletion of ${note.title}`:`Delete ${note.title}`}
-        title={guarded?PROTECTED_HINT:confirming?DELETE_HINT:'Delete note'}
+        aria-label={guarded ? t("NotesTab.0ec4ac4fed", { title: note.title, project_name: note.project_name }) : confirming ? t("NotesTab.e5abe44a66", { title: note.title }) : t("NotesTab.b4c7358981", { title: note.title })}
+        title={guarded ? protectedHint() : confirming ? deleteHint() : t("NotesTab.b80e4f4423")}
         disabled={busy||guarded}
         onBlur={()=>setDeleteConfirm(current=>current===key?'':current)}
         onClick={()=>void deleteProjectNote(note)}
-      >{busy?'…':confirming?'delete?':'×'}</button>
-      <button class="note-open-as-tab" aria-label={`Open ${note.title} as a workspace tab`} title="Open as a workspace tab instead" onClick={()=>openNote(note,'tab')}>⇥</button>
+      >{busy ? '…' : confirming ? t("NotesTab.0f24da4cd0") : '×'}</button>
+      <button class="note-open-as-tab" aria-label={t("NotesTab.2e4e65a278", { title: note.title })} title={t("NotesTab.de8c86d8b5")} onClick={()=>openNote(note,'tab')}>⇥</button>
     </>
   }
   const submitTitle=async(event:SubmitEvent)=>{
     event.preventDefault()
     if(!titlePrompt||!project)return
     const title=titlePrompt.title.trim()
-    if(!title){setTitleError('Enter a title.');return}
+    if(!title){setTitleError(t("NotesTab.8b33880c49"));return}
     setTitleBusy(true);setTitleError('')
     try{
       if(titlePrompt.mode==='create'){
@@ -384,10 +383,10 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
     <button
       onClick={()=>openNote(note,'drawer')}
       onKeyDown={event=>{openMenuFromKeyboard(note,event)}}
-      title={`Open ${note.title} in this panel · right-click or hold for actions`}
+      title={t("NotesTab.8268f4fbeb", { title: note.title })}
     >
       <strong>{note.title}</strong>
-      <span>{new Date(note.updated_at*1000).toLocaleString()} · {sizeLabel(note.bytes)}</span>
+      <span>{new Date(note.updated_at*1000).toLocaleString(uiLocale.value)} · {sizeLabel(note.bytes)}</span>
       <small>{note.excerpt}</small>
     </button>
     {noteActions(note)}
@@ -410,7 +409,7 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
         activeKey={selectedTabId||''}
         touchDrag
         stripProps={{
-          role:'tablist','aria-label':'Notes in this Project',
+          role:'tablist',get 'aria-label'() { return t("NotesTab.1a23cfed9e") },
           onContextMenu:event=>{
             if(event.target instanceof Element&&event.target.closest('button'))return
             event.preventDefault();event.stopPropagation()
@@ -418,12 +417,12 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
           },
         }}
       >
-        {scratchpadEnabled&&<button
+        {scratchpadEnabled && <button
           role="tab"
           aria-selected={selectedTabId===SCRATCHPAD_TAB_ID}
           tabIndex={selectedTabId===SCRATCHPAD_TAB_ID?0:-1}
           class={selectedTabId===SCRATCHPAD_TAB_ID?'active':''}
-          title="Global Scratchpad · right-click for visibility"
+          title={t("NotesTab.b9ac955c99")}
           disabled={!project}
           onClick={()=>openScratchpad('drawer')}
           onContextMenu={event=>{event.preventDefault();event.stopPropagation();openScratchpadMenu(event.clientX,event.clientY)}}
@@ -431,7 +430,7 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
             if(openScratchpadMenuFromKeyboard(event))return
             if(event.key==='ArrowLeft'||event.key==='ArrowRight')focusAdjacentTab(event,event.key==='ArrowLeft'?-1:1)
           }}
-        >Scratchpad</button>}
+        >{t("NotesTab.17bd998ee0")}</button>}
         {projectItems.map(note=>{
           const resourceId=projectNoteTabId(note.note_id)
           const active=selectedTabId===resourceId
@@ -441,7 +440,7 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
             aria-selected={active}
             tabIndex={active?0:-1}
             class={active?'active':''}
-            title={`${note.title} · right-click or hold for actions`}
+            title={t("NotesTab.9cb00ec966", { title: note.title })}
             onClick={()=>openNote(note,'drawer')}
             onContextMenu={event=>openContextMenu(note,event)}
             onPointerDown={event=>beginLongPress(note,event)}
@@ -453,87 +452,83 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
           >{note.title}</button>
         })}
       </OverflowRail>
-      <button class="notes-browse" aria-label="Search and manage notes" aria-expanded={browserVisible} title="Search and manage notes" onClick={()=>setBrowseOpen(value=>!value)}>⌕</button>
-      <button class="notes-new" aria-label="Create a Project note" disabled={!project} title="Create a Project note" onClick={()=>{setTitleError('');setTitlePrompt({mode:'create',title:'Untitled note'})}}>+</button>
-      <button class="notes-pop" aria-label="Move the selected note into a workspace tab" disabled={!selectedResourceId} title="Move the selected note into a workspace tab" onClick={onPopSelected}>⇥</button>
+      <button class="notes-browse" aria-label={t("NotesTab.a2991c109f")} aria-expanded={browserVisible} title={t("NotesTab.a2991c109f")} onClick={()=>setBrowseOpen(value=>!value)}>⌕</button>
+      <button class="notes-new" aria-label={t("NotesTab.7c08a13d2e")} disabled={!project} title={t("NotesTab.7c08a13d2e")} onClick={()=>{setTitleError('');setTitlePrompt({mode:'create',get title() { return t("NotesTab.e93736573a") }})}}>+</button>
+      <button class="notes-pop" aria-label={t("NotesTab.042c188f8e")} disabled={!selectedResourceId} title={t("NotesTab.042c188f8e")} onClick={onPopSelected}>⇥</button>
     </div>
     <div class="notes-editor-host">
-      {editor||<p class="notes-state">{project?'Reading notes…':'Select a Project to open Notes.'}</p>}
+      {editor || <p class="notes-state">{project ? t("NotesTab.a75e11122d") : t("NotesTab.348ec955e9")}</p>}
     </div>
-    {browserVisible&&<section class="notes-browser" aria-label="Browse notes">
+    {browserVisible && <section class="notes-browser" aria-label={t("NotesTab.98968523eb")}>
       <div class="notes-browser-heading">
-        <strong>{allProjects?'All Project notes':project?.name||'Project notes'}</strong>
-        <button onClick={()=>{setBrowseOpen(false);if(allProjects)onAllProjects(false)}}>Done</button>
+        <strong>{allProjects ? t("NotesTab.26d231e2b8") : project?.name || t("NotesTab.6bffbde03e")}</strong>
+        <button onClick={()=>{setBrowseOpen(false);if(allProjects)onAllProjects(false)}}>{t("NotesTab.11a6767d56")}</button>
       </div>
       <div class="notes-filters">
         <input
           autoFocus
-          aria-label="Search notes"
-          placeholder="Search notes…"
+          aria-label={t("NotesTab.6e7a2179a3")}
+          placeholder={t("NotesTab.d95d6ace9e")}
           value={query}
           spellcheck={false}
           onInput={event=>setQuery(event.currentTarget.value)}
         />
-        <Dropdown ariaLabel="Filter notes by project" value={allProjects?'':scopeId} onChange={value=>onAllProjects(!value)} options={[
-          {value:project?.id||'',label:project?project.name:'No project',disabled:!project},
-          {value:'',label:'All projects'},
+        <Dropdown ariaLabel={t("NotesTab.e770faa33e")} value={allProjects?'':scopeId} onChange={value=>onAllProjects(!value)} options={[
+          {value:project?.id||'',label:project?project.name:t("NotesTab.f34c2be0d1"),disabled:!project},
+          {value:'',get label() { return t("NotesTab.4b87271b6b") }},
         ]}/>
       </div>
       <div class="notes-body notes-tab-body">
-        {scopedError&&<p class="notes-state error" role="alert">{scopedError}</p>}
-        {!scopedItems&&!scopedError&&<p class="notes-state">Reading notes…</p>}
-        {scopedItems&&!scopedError&&!shown.length&&<p class="notes-state">
-          {scopedItems.length?'No note matches this search.':'No notes yet. Create one for this Project.'}
+        {scopedError && <p class="notes-state error" role="alert">{scopedError}</p>}
+        {!scopedItems&&!scopedError && <p class="notes-state">{t("NotesTab.a75e11122d")}</p>}
+        {scopedItems&&!scopedError&&!shown.length && <p class="notes-state">
+          {scopedItems.length ? t("NotesTab.c314c24a94") : t("NotesTab.0f85f7aac7")}
         </p>}
-        {!!shown.length&&<div class="notes-listing">
-          {allProjects
-            ?grouped.map(([id,bucket])=><section class="notes-group" key={id}>
-              <h3>project::{bucket.label}<span>{bucket.notes.length}</span></h3>
+        {!!shown.length && <div class="notes-listing">
+          {allProjects ? grouped.map(([id,bucket])=><section class="notes-group" key={id}>
+              <h3>{rich("NotesTab.f8d078029d", { label: bucket.label, value2: <span>{bucket.notes.length}</span> })}</h3>
               {bucket.notes.map(noteRow)}
-            </section>)
-            :<section class="notes-group">
-              <h3>notes<span>{shown.length}</span></h3>
+            </section>) : <section class="notes-group">
+              <h3>{rich("NotesTab.755e505612", { value1: <span>{shown.length}</span> })}</h3>
               {shown.map(noteRow)}
             </section>}
         </div>}
       </div>
-      <p class="notes-footnote">{scratchpadEnabled?'Scratchpad is global. ':'Scratchpad is disabled and its content is retained. '}Project notes stay in creation order and remain in the tab rail. Deleting one moves it to <code>.swe-mux/notes/trash/</code>; a Project always keeps its last note.</p>
+      <p class="notes-footnote">{rich("NotesTab.d7ecee4711", { value1: (scratchpadEnabled) ? 'yes' : 'no', value2: <code>{t("NotesTab.9bd9029ed6")}</code> })}</p>
     </section>}
-    {menu&&<div
+    {menu && <div
       class="context-menu note-row-menu"
       ref={el=>{menuPanel.current=el;fitMenuInViewport(el)}}
       role="menu"
-      aria-label={menu.kind==='project'?`Actions for ${menu.note.title}`:'Scratchpad visibility'}
+      aria-label={menu.kind==='project' ? t("NotesTab.bc0d30cf9f", { title: menu.note.title }) : t("NotesTab.32c1bd13a6")}
       style={{left:clampContextMenuLeft(menu.x,window.innerWidth),top:Math.max(4,menu.y)}}
       onClickCapture={event=>{if(touchPress.current&&performance.now()-menuOpenedAt.current<250){event.preventDefault();event.stopPropagation()}}}
     >
-      {menu.kind==='scratchpad'?<>
-        <div class="context-title"><strong>GLOBAL SCRATCHPAD</strong></div>
-        <button role="menuitem" disabled={scratchpadBusy} onClick={()=>void toggleScratchpad()}>{scratchpadBusy?'Saving…':scratchpadEnabled?'Disable Scratchpad':'Enable Scratchpad'}</button>
-        <p class="context-note">Disabling hides Scratchpad and closes its workspace views without deleting its content. Right-click empty rail space or use Settings → Notes to enable it again.</p>
-      </>:<>
+      {menu.kind==='scratchpad' ? <>
+        <div class="context-title"><strong>{t("NotesTab.a6a0bc74a1")}</strong></div>
+        <button role="menuitem" disabled={scratchpadBusy} onClick={()=>void toggleScratchpad()}>{scratchpadBusy ? t("NotesTab.23e39291d6") : scratchpadEnabled ? t("NotesTab.c079bbe107") : t("NotesTab.a3b9f7ffd8")}</button>
+        <p class="context-note">{t("NotesTab.d0f392e5f3")}</p>
+      </> : <>
         <div class="context-title"><strong>{menu.note.title}</strong></div>
-        <button role="menuitem" onClick={()=>{const note=menu.note;setMenu(null);openNote(note,'tab')}}>Open in workspace tab</button>
-        <button role="menuitem" onClick={()=>{setTitleError('');setTitlePrompt({mode:'rename',title:menu.note.title,note:menu.note})}}>Rename…</button>
+        <button role="menuitem" onClick={()=>{const note=menu.note;setMenu(null);openNote(note,'tab')}}>{t("NotesTab.320462920d")}</button>
+        <button role="menuitem" onClick={()=>{setTitleError('');setTitlePrompt({mode:'rename',title:menu.note.title,note:menu.note})}}>{t("NotesTab.6fa62b3dba")}</button>
         <div class="context-rule" />
         <button
           role="menuitem"
           class={`danger ${deleteConfirm===noteKey(menu.note)?'confirming':''}`}
           disabled={deleting===noteKey(menu.note)||lastNoteInProject(menu.note,noteCounts)}
-          title={lastNoteInProject(menu.note,noteCounts)?PROTECTED_HINT:DELETE_HINT}
+          title={lastNoteInProject(menu.note,noteCounts) ? protectedHint() : deleteHint()}
           onClick={()=>void deleteProjectNote(menu.note)}
-        >{deleting===noteKey(menu.note)?'Deleting…':deleteConfirm===noteKey(menu.note)?'Confirm delete':'Delete note'}</button>
-        <p class="context-note">{lastNoteInProject(menu.note,noteCounts)
-          ?PROTECTED_HINT
-          :'Deleted notes move to the Project note trash and can be restored from disk.'}</p>
+        >{deleting===noteKey(menu.note) ? t("NotesTab.43b5894c3e") : deleteConfirm===noteKey(menu.note) ? t("NotesTab.da00fa968b") : t("NotesTab.b80e4f4423")}</button>
+        <p class="context-note">{lastNoteInProject(menu.note,noteCounts) ? protectedHint() : t("NotesTab.868fe2637e")}</p>
       </>}
     </div>}
-    {titlePrompt&&<div class="modal-layer note-title-layer" onPointerDown={event=>{if(event.target===event.currentTarget&&!titleBusy){setTitlePrompt(null);setTitleError('')}}}>
-      <form ref={titlePanel} class="modal note-title-modal" role="dialog" aria-modal="true" aria-label={titlePrompt.mode==='create'?'Create note':'Rename note'} onPointerDown={event=>event.stopPropagation()} onSubmit={event=>void submitTitle(event)}>
-        <div class="modal-heading"><div><span>NOTES::{titlePrompt.mode==='create'?'NEW':'RENAME'}</span><h2>{titlePrompt.mode==='create'?'New note':'Rename note'}</h2></div><button type="button" disabled={titleBusy} aria-label="Cancel" onClick={()=>{setTitlePrompt(null);setTitleError('')}}>×</button></div>
-        <label>Title<input autoFocus value={titlePrompt.title} maxLength={160} disabled={titleBusy} onInput={event=>setTitlePrompt(current=>current?{...current,title:event.currentTarget.value}:current)}/></label>
-        {titleError&&<p class="resource-create-error" role="alert">{titleError}</p>}
-        <div class="modal-footer"><button type="button" disabled={titleBusy} onClick={()=>{setTitlePrompt(null);setTitleError('')}}>Cancel</button><button class="primary" disabled={titleBusy||!titlePrompt.title.trim()} type="submit">{titleBusy?'Saving…':titlePrompt.mode==='create'?'Create':'Rename'}</button></div>
+    {titlePrompt && <div class="modal-layer note-title-layer" onPointerDown={event=>{if(event.target===event.currentTarget&&!titleBusy){setTitlePrompt(null);setTitleError('')}}}>
+      <form ref={titlePanel} class="modal note-title-modal" role="dialog" aria-modal="true" aria-label={titlePrompt.mode==='create' ? t("NotesTab.27ecd163ae") : t("NotesTab.cb9d97d7fd")} onPointerDown={event=>event.stopPropagation()} onSubmit={event=>void submitTitle(event)}>
+        <div class="modal-heading"><div><span>{t("NotesTab.2f72f70002", { value1: (titlePrompt.mode==='create') ? 'yes' : 'no' })}</span><h2>{titlePrompt.mode==='create' ? t("NotesTab.76ea482f84") : t("NotesTab.cb9d97d7fd")}</h2></div><button type="button" disabled={titleBusy} aria-label={t("NotesTab.19766ed6cc")} onClick={()=>{setTitlePrompt(null);setTitleError('')}}>×</button></div>
+        <label>{rich("NotesTab.a3799a0eb4", { value1: <input autoFocus value={titlePrompt.title} maxLength={160} disabled={titleBusy} onInput={event=>setTitlePrompt(current=>current?{...current,title:event.currentTarget.value}:current)}/> })}</label>
+        {titleError && <p class="resource-create-error" role="alert">{titleError}</p>}
+        <div class="modal-footer"><button type="button" disabled={titleBusy} onClick={()=>{setTitlePrompt(null);setTitleError('')}}>{t("NotesTab.19766ed6cc")}</button><button class="primary" disabled={titleBusy||!titlePrompt.title.trim()} type="submit">{titleBusy ? t("NotesTab.23e39291d6") : titlePrompt.mode==='create' ? t("NotesTab.4759498ac2") : t("NotesTab.3064d79a29")}</button></div>
       </form>
     </div>}
   </div>

@@ -78,6 +78,7 @@ from ..project_files import (
 from ..runtime_config import forget_llm_readiness
 from ..scan_timeline import SCAN_RULE_ID
 from ..secret_store import PlatformSecretStore, SecretStoreError
+from ..ui_messages import error_text, ui_message
 from ..voice import (
     VOICE_RULE_ID,
 )
@@ -181,7 +182,9 @@ async def put_automation_rules(request: web.Request) -> web.Response:
     try:
         parse_rules(text)
     except RuleValidationError as exc:
-        return json_response({"error": "invalid rules TOML", "fields": {"text": str(exc)}}, 422)
+        return json_response(
+            {"error": ui_message("automation.b21e618369"), "fields": {"text": str(exc)}}, 422
+        )
     if request.query.get("validate") == "1":
         return json_response({"ok": True})
     path = request.app[keys.CONFIG].data_dir / "rules.toml"
@@ -198,9 +201,9 @@ async def put_automation_rules(request: web.Request) -> web.Response:
 async def patch_automation_rule(request: web.Request) -> web.Response:
     body = await request.json()
     if not isinstance(body, dict) or not body or set(body) - {"enabled", "shadow"}:
-        raise ValueError("only enabled and shadow may be changed through the ordinary editor")
+        raise ValueError(ui_message("automation.704dc5ee85"))
     if any(not isinstance(value, bool) for value in body.values()):
-        raise ValueError("enabled and shadow must be boolean")
+        raise ValueError(ui_message("automation.f09b878996"))
     rule_id = request.match_info["rule_id"]
     automation: AutomationEngine = request.app[keys.AUTOMATION]
     found = False
@@ -282,32 +285,44 @@ class FeatureSpender(NamedTuple):
 # `builtin:assistant` did between Phase 10.6 shipping and 2026-08-20.
 FEATURE_SPENDERS: dict[str, FeatureSpender] = {
     SCAN_RULE_ID: FeatureSpender(
-        "Scan timeline", "Per-run scans that extract timeline records",
-        "scan_timeline_enabled", "Scan timeline",
+        "Scan timeline",
+        "Per-run scans that extract timeline records",
+        "scan_timeline_enabled",
+        "Scan timeline",
     ),
     VOICE_RULE_ID: FeatureSpender(
-        "Read aloud", "Spoken summaries of agent replies",
-        "tts_enabled", "Read aloud",
+        "Read aloud",
+        "Spoken summaries of agent replies",
+        "tts_enabled",
+        "Read aloud",
     ),
     PROJECT_CARD_RULE_ID: FeatureSpender(
-        "Project card", "Generated Project context cards",
+        "Project card",
+        "Generated Project context cards",
         # No install-wide switch of its own: it is per-Project, under the
         # automation kill switch, which is the only global truth to report.
-        "automation_enabled", "Automation",
+        "automation_enabled",
+        "Automation",
     ),
     NARRATION_RULE_ID: FeatureSpender(
-        "Attention narration", "Model narration of ranked attention",
-        "attention_narration_enabled", "Attention narration",
+        "Attention narration",
+        "Model narration of ranked attention",
+        "attention_narration_enabled",
+        "Attention narration",
     ),
     ASSISTANT_RULE_ID: FeatureSpender(
-        "Mux assistant", "Conversational fleet operation, typed and spoken",
-        "assistant_enabled", "Mux assistant",
+        "Mux assistant",
+        "Conversational fleet operation, typed and spoken",
+        "assistant_enabled",
+        "Mux assistant",
     ),
     ADAPTIVE_TITLE_RULE_ID: FeatureSpender(
-        "Adaptive title", "Session titles rewritten from scan records",
+        "Adaptive title",
+        "Session titles rewritten from scan records",
         # Per-Project beneath that, but it consumes scan records and cannot
         # spend at all without the timeline that produces them.
-        "scan_timeline_enabled", "Scan timeline",
+        "scan_timeline_enabled",
+        "Scan timeline",
     ),
 }
 
@@ -432,18 +447,14 @@ async def automation_dashboard(request: web.Request) -> web.Response:
     store: AutomationStore = request.app[keys.AUTOMATION_STORE]
     engine = request.app[keys.AUTOMATION].status()
     breakdown = await store.spend_breakdown(days=7)
-    breakdown["rules"] = _label_spend_rows(
-        breakdown["rules"], engine, request.app[keys.CONFIG]
-    )
+    breakdown["rules"] = _label_spend_rows(breakdown["rules"], engine, request.app[keys.CONFIG])
     await _price_cache_saving(request, breakdown)
     return json_response(
         {
             **await store.dashboard(),
             "controls": {
                 "automation_enabled": bool(request.app[keys.CONFIG].automation_enabled),
-                "scan_timeline_enabled": bool(
-                    request.app[keys.CONFIG].scan_timeline_enabled
-                ),
+                "scan_timeline_enabled": bool(request.app[keys.CONFIG].scan_timeline_enabled),
             },
             "engine": engine,
             "provider": await _provider_status(request),
@@ -531,20 +542,20 @@ async def list_annotations(request: web.Request) -> web.Response:
     since = float(raw_since) if raw_since not in (None, "") else None
     session_id = query.get("session_id")
     agent_run_ids = (
-        await _annotation_session_run_ids(request.app, session_id)
-        if session_id
-        else None
+        await _annotation_session_run_ids(request.app, session_id) if session_id else None
     )
     return json_response(
         {
-            "items": _mark_unsupported(await store.annotations(
-                agent_run_id=agent_run_id,
-                agent_run_ids=agent_run_ids,
-                project_id=project_id,
-                tag=tag,
-                since=since,
-                limit=int(query.get("limit", 200)),
-            )),
+            "items": _mark_unsupported(
+                await store.annotations(
+                    agent_run_id=agent_run_id,
+                    agent_run_ids=agent_run_ids,
+                    project_id=project_id,
+                    tag=tag,
+                    since=since,
+                    limit=int(query.get("limit", 200)),
+                )
+            ),
             "tag_counts": await store.annotation_tag_counts(
                 agent_run_id=agent_run_id,
                 agent_run_ids=agent_run_ids,
@@ -643,9 +654,7 @@ async def _provider_status(request: web.Request) -> dict[str, Any]:
                 "requires_verification": endpoint.requires_verification,
                 "cache_policy": endpoint.cache_policy,
                 "secret": store.status(endpoint.secret_name),
-                "verification": llm_verification_state(
-                    endpoint, api_key=api_key, record=record
-                ),
+                "verification": llm_verification_state(endpoint, api_key=api_key, record=record),
                 "readiness": llm_readiness(
                     endpoint,
                     api_key=api_key,
@@ -713,13 +722,11 @@ async def automation_provider_key(request: web.Request) -> web.Response:
         endpoint = _requested_endpoint(request, body)
         secret_name = endpoint.secret_name
         if operation == "test":
-            result = await provider.test_key(
-                str(value) if value else None, endpoint=endpoint
-            )
+            result = await provider.test_key(str(value) if value else None, endpoint=endpoint)
             return json_response({**result, "status": store.status(secret_name)})
         if operation in {"set", "replace"}:
             if not isinstance(value, str) or not value.strip():
-                raise ValueError("key is required")
+                raise ValueError(ui_message("automation.3908de7448"))
             if body.get("test", True):
                 await provider.test_key(value, endpoint=endpoint)
             store.set(secret_name, value)
@@ -737,16 +744,14 @@ async def automation_provider_key(request: web.Request) -> web.Response:
             request.app[keys.LLM_CAPABILITIES].clear(endpoint.provider)
             forget_llm_readiness(request.app)
             return json_response({"ok": True, "status": store.status(secret_name)})
-        raise ValueError("operation must be test, set, replace, or clear")
+        raise ValueError(ui_message("automation.d6a2fb410c"))
     except (OpenRouterError, SecretStoreError) as exc:
         return json_response(
-            {"error": str(exc), "status": store.status("openrouter_api_key")}, 422
+            {"error": error_text(exc), "status": store.status("openrouter_api_key")}, 422
         )
 
 
-def _verification_model(
-    endpoint: LlmEndpoint, catalog_ids: list[str], config: Config
-) -> str:
+def _verification_model(endpoint: LlmEndpoint, catalog_ids: list[str], config: Config) -> str:
     """Which model one proving completion should go to.
 
     The endpoint's own pin wins wherever there is one: that is the model it will
@@ -838,7 +843,7 @@ async def verify_automation_provider(request: web.Request) -> web.Response:
             {
                 "ok": False,
                 "provider": endpoint.provider,
-                "error": str(exc),
+                "error": error_text(exc),
                 "verification": llm_verification_state(
                     endpoint, api_key=store.get(endpoint.secret_name), record=record
                 ),
@@ -926,7 +931,7 @@ async def refresh_automation_models(request: web.Request) -> web.Response:
         await store.cache_models(models)
     except OpenRouterError as exc:
         await store.record_model_error(str(exc))
-        return json_response({"error": str(exc), **await store.model_cache()}, 422)
+        return json_response({"error": error_text(exc), **await store.model_cache()}, 422)
     return json_response(await store.model_cache())
 
 
@@ -1091,6 +1096,7 @@ async def _project_automation_state(  # type: ignore[no-untyped-def]
         llm_ready=llm.ready if llm is not None else True,
         global_allow=global_allow,
     )
+
     def _stored_authority(_root: str | Path, field: str) -> tuple[str | None, bool]:
         """Resolve authority against the values already read above.
 
@@ -1132,9 +1138,7 @@ async def _project_automation_state(  # type: ignore[no-untyped-def]
         # Project field that qualifies an opt-in rather than being one.
         "title_refinements": resolve_title_refinements(
             values.get("title_refinements"),
-            default=install.title_refinements_default
-            if install
-            else TITLE_REFINEMENTS_DEFAULT,
+            default=install.title_refinements_default if install else TITLE_REFINEMENTS_DEFAULT,
         ),
         "title_refinements_own": (
             values["title_refinements"]
@@ -1155,9 +1159,7 @@ async def _project_automation_state(  # type: ignore[no-untyped-def]
             for name in AUTHORITY_FIELDS
         },
         "authority_effective": {
-            name: resolve_authority(
-                install, project.root, name, read_project=_stored_authority
-            )
+            name: resolve_authority(install, project.root, name, read_project=_stored_authority)
             for name in AUTHORITY_FIELDS
         },
     }
@@ -1198,9 +1200,7 @@ async def automation_project_matrix(request: web.Request) -> web.Response:
     allow = _global_allow(config)
     rows = [
         {
-            **await _project_automation_state(
-                project, llm=llm, global_allow=allow, install=config
-            ),
+            **await _project_automation_state(project, llm=llm, global_allow=allow, install=config),
             "project_name": project.name,
         }
         for project in request.app[keys.PROJECTS].ordered_projects()
@@ -1251,12 +1251,8 @@ async def automation_project_matrix(request: web.Request) -> web.Response:
                 }
                 for name, entry in AUTHORITY_FIELDS.items()
             ],
-            "authority_default": {
-                name: install_default(config, name) for name in AUTHORITY_FIELDS
-            },
-            "authority_ceiling": {
-                name: install_ceiling(config, name) for name in AUTHORITY_FIELDS
-            },
+            "authority_default": {name: install_default(config, name) for name in AUTHORITY_FIELDS},
+            "authority_ceiling": {name: install_ceiling(config, name) for name in AUTHORITY_FIELDS},
         }
     )
 
@@ -1281,10 +1277,10 @@ async def put_project_automations(request: web.Request) -> web.Response:
     body = await request.json()
     requested = body.get("automations")
     if not isinstance(requested, dict):
-        raise ValueError("automations must be a table of boolean opt-ins")
+        raise ValueError(ui_message("automation.c98e7f45be"))
     unknown = sorted(set(requested) - set(AUTOMATION_REGISTRY))
     if unknown:
-        raise ValueError(f"unknown automations: {', '.join(unknown)}")
+        raise ValueError(ui_message("automation.5694e8396c", value1=", ".join(unknown)))
     unimplemented = sorted(
         key
         for key, value in requested.items()
@@ -1294,7 +1290,7 @@ async def put_project_automations(request: web.Request) -> web.Response:
         # Refusing beats a toggle that reads as on and does nothing.
         return json_response(
             {
-                "error": f"not implemented yet: {', '.join(unimplemented)}",
+                "error": ui_message("automation.fde754c436", value1=", ".join(unimplemented)),
                 "code": "automation_not_implemented",
             },
             409,
@@ -1307,16 +1303,18 @@ async def put_project_automations(request: web.Request) -> web.Response:
     # write nobody could undo in one place.
     auto_enable = body.get("scan_timeline_auto_enable", _UNSET)
     if auto_enable is not _UNSET and auto_enable is not None and not isinstance(auto_enable, bool):
-        raise ValueError("scan_timeline_auto_enable must be a boolean or null")
+        raise ValueError(ui_message("automation.2c161f2622"))
     refinements = body.get("title_refinements", _UNSET)
-    if refinements is not _UNSET and refinements is not None and (
-        isinstance(refinements, bool)
-        or not isinstance(refinements, int)
-        or not 0 <= refinements <= TITLE_REFINEMENTS_MAX
-    ):
-        raise ValueError(
-            f"title_refinements must be an integer from 0 to {TITLE_REFINEMENTS_MAX} or null"
+    if (
+        refinements is not _UNSET
+        and refinements is not None
+        and (
+            isinstance(refinements, bool)
+            or not isinstance(refinements, int)
+            or not 0 <= refinements <= TITLE_REFINEMENTS_MAX
         )
+    ):
+        raise ValueError(ui_message("automation.5227edcfc5", value1=TITLE_REFINEMENTS_MAX))
     # Agent authority arrives on the same write as the opt-ins it qualifies,
     # because the matrix edits both and a Project's file is one revision. A
     # field mapped to None is the "Follow global" position: the key is *removed*
@@ -1327,22 +1325,20 @@ async def put_project_automations(request: web.Request) -> web.Response:
     if raw_authority is not None and (
         not isinstance(raw_authority, dict)
         or any(not isinstance(key, str) for key in raw_authority)
-        or any(
-            value is not None and not isinstance(value, str) for value in raw_authority.values()
-        )
+        or any(value is not None and not isinstance(value, str) for value in raw_authority.values())
     ):
-        raise ValueError("authority must map authority fields to a level or null")
+        raise ValueError(ui_message("automation.92b1cc7acb"))
     authority: dict[str, Any] = dict(raw_authority or {})
     unknown_authority = sorted(set(authority) - set(AUTHORITY_FIELDS))
     if unknown_authority:
-        raise ValueError(f"unknown authority fields: {', '.join(unknown_authority)}")
+        raise ValueError(ui_message("automation.60062deda3", value1=", ".join(unknown_authority)))
     invalid_levels = sorted(
         f"{key} ({value})"
         for key, value in authority.items()
         if value is not None and AUTHORITY_FIELDS[key].rank(str(value)) < 0
     )
     if invalid_levels:
-        raise ValueError(f"invalid authority levels: {', '.join(invalid_levels)}")
+        raise ValueError(ui_message("automation.75a25361b8", value1=", ".join(invalid_levels)))
     # `scan_timeline_daily_budget_usd` is deliberately not accepted here any
     # more: it is one global setting in Settings -> Automation. A body that
     # still sends it is ignored rather than refused, and the retired key is
@@ -1396,7 +1392,7 @@ async def put_project_automations(request: web.Request) -> web.Response:
             )
         except ValueError as exc:
             if "changed externally" in str(exc):
-                return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+                return json_response({"error": error_text(exc), "code": "revision_conflict"}, 409)
             raise
     if gate_cache := request.app.get(keys.AUTOMATION_GATE_CACHE):
         gate_cache.clear()

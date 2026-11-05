@@ -1,3 +1,5 @@
+import { locale as uiLocale } from './localization/index.ts'
+import { rich, t } from './localization/index.ts'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { GrantButton, GrantGate } from './GrantGate'
@@ -31,11 +33,11 @@ type TimelineState = {
   records:TimelineRecord[];boundaries:Boundary[];backfill:Backfill
 }
 
-const clock = (value:number) => new Date(value*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})
+const clock = (value:number) => new Date(value*1000).toLocaleTimeString(uiLocale.value, {hour:'2-digit',minute:'2-digit',second:'2-digit'})
 const percent = (value:number) => `${Math.round(value*100)}%`
 const amount = (gate:Gate) => gate.unit==='usd'
   ? `$${gate.used.toFixed(4)} / $${gate.limit.toFixed(2)}`
-  : `${Math.round(gate.used).toLocaleString()} / ${Math.round(gate.limit).toLocaleString()} ${gate.unit}`
+  : `${Math.round(gate.used).toLocaleString(uiLocale.value)} / ${Math.round(gate.limit).toLocaleString(uiLocale.value)} ${gate.unit}`
 // Whichever cap is closest to stopping the timeline. Showing the run budget and
 // the project dollar figure while an invisible per-rule token cap did the
 // stopping is what made a dead timeline look like it had headroom to spare.
@@ -45,20 +47,20 @@ const bindingGate = (gates:Gate[]) => gates.length
   : null
 const backfillLabel:Record<BackfillState,string> = {
   idle:'idle', running:'running', completed:'complete',
-  completed_with_gaps:'complete with gaps', partial:'stopped early', failed:'failed',
+  get completed_with_gaps() { return t("ScanTimelineTab.cd426ac56c") }, get partial() { return t("ScanTimelineTab.4c789bcaff") }, failed:'failed',
 }
 // The one line a collapsed row stands on. A record whose model produced no summary
 // still has to be identifiable, or collapsing it would hide that it exists at all.
 const gistOf = (record:TimelineRecord) =>
-  record.summary||record.intent||record.claim||'No semantic change recorded.'
+  record.summary||record.intent||record.claim||t("ScanTimelineTab.c5a127f40a")
 // Flags a collapsed row cannot afford to drop: the two semantic ones say this window
 // is where the run stalled, and the two caveat ones say the record itself is partial.
 // Everything else is detail, which is what the expansion is for.
 const flagsOf = (record:TimelineRecord) => [
-  ...(record.blocked_on&&record.blocked_on!=='none' ? [{key:'blocked',label:'blocked',tone:'warn'}] : []),
-  ...(record.dead_end&&record.approach_status==='abandoned' ? [{key:'dead',label:'dead end',tone:'warn'}] : []),
-  ...(record.coverage?.remaining ? [{key:'behind',label:'behind',tone:'note'}] : []),
-  ...(record.repairs?.length ? [{key:'repaired',label:'repaired',tone:'note'}] : []),
+  ...(record.blocked_on&&record.blocked_on!=='none' ? [{key:'blocked',get label() { return t("ScanTimelineTab.6973dddd3e") },tone:'warn'}] : []),
+  ...(record.dead_end&&record.approach_status==='abandoned' ? [{key:'dead',get label() { return t("ScanTimelineTab.83e3113c82") },tone:'warn'}] : []),
+  ...(record.coverage?.remaining ? [{key:'behind',get label() { return t("ScanTimelineTab.b1b886ce5f") },tone:'note'}] : []),
+  ...(record.repairs?.length ? [{key:'repaired',get label() { return t("ScanTimelineTab.3baf75ce88") },tone:'note'}] : []),
 ]
 
 export function ScanTimelineTab({session,onOpenProjectSettings}:{
@@ -165,13 +167,13 @@ export function ScanTimelineTab({session,onOpenProjectSettings}:{
     finally{setBusy(false)}
   }
 
-  if(!session)return <p class="drawer-empty">Focus an agent session to view its scan timeline.</p>
-  if(!state)return <div class="scan-timeline-panel"><p>{error||'Loading timeline…'}</p></div>
+  if(!session)return <p class="drawer-empty">{t("ScanTimelineTab.8fcecc4789")}</p>
+  if(!state)return <div class="scan-timeline-panel"><p>{error || t("ScanTimelineTab.3f40157f05")}</p></div>
   const allowed=state.global_enabled&&state.project_enabled
   const binding=bindingGate(state.gates||[])
   const running=state.backfill.state==='running'
   const projectButton=<button class="scan-project-link" disabled={!projectId}
-    onClick={()=>projectId&&onOpenProjectSettings(projectId)}>Project settings</button>
+    onClick={()=>projectId&&onOpenProjectSettings(projectId)}>{t("ScanTimelineTab.fccd73a69e")}</button>
   // Two switches gate this, and both are granted here in one act. Naming only the outer
   // one meant turning it on, walking back, and finding a second gate with a second link
   // to a second overlay - two full round trips to see one pane. The gate is drawn only
@@ -184,22 +186,18 @@ export function ScanTimelineTab({session,onOpenProjectSettings}:{
     ]
     return <section class="scan-timeline-panel">
       <header>
-        <div><strong>Behavior timeline</strong><small>{state.model}</small></div>
+        <div><strong>{t("ScanTimelineTab.9ef803e89d")}</strong><small>{state.model}</small></div>
         {projectButton}
       </header>
       <div class="scan-timeline-off">
         <GrantGate
           ids={missing}
           projectId={projectId||undefined}
-          heading={state.global_enabled
-            ? 'This Project has not permitted Scan timeline.'
-            : 'Scan timeline is switched off for this install.'}
-          confirmLabel="Turn on Scan timeline"
+          heading={state.global_enabled ? t("ScanTimelineTab.55800b8efe") : t("ScanTimelineTab.608890d77c")}
+          confirmLabel={t("ScanTimelineTab.fbd6de54ce")}
           onGranted={load}
         >
-          <p>A readable behavioural history of each conversation here: what was asked,
-          what the agent was doing, what it claimed, and what stopped it. Turning it on
-          scans nothing yet — this conversation is armed separately, from this tab.</p>
+          <p>{t("ScanTimelineTab.c7b59b34d1")}</p>
         </GrantGate>
       </div>
     </section>
@@ -210,8 +208,8 @@ export function ScanTimelineTab({session,onOpenProjectSettings}:{
   ].sort((left,right)=>left.at-right.at)
   return <section class="scan-timeline-panel">
     <header>
-      <div><strong>Behavior timeline</strong><small>{state.model}</small></div>
-      <label class="scan-run-toggle"><span>this run</span><input type="checkbox" checked={state.run_enabled} disabled={busy||!state.agent_run_id} onChange={event=>void toggle(event.currentTarget.checked)}/></label>
+      <div><strong>{t("ScanTimelineTab.9ef803e89d")}</strong><small>{state.model}</small></div>
+      <label class="scan-run-toggle"><span>{t("ScanTimelineTab.c35c81578e")}</span><input type="checkbox" checked={state.run_enabled} disabled={busy||!state.agent_run_id} onChange={event=>void toggle(event.currentTarget.checked)}/></label>
       {projectButton}
     </header>
     {/* One row by default. Six budget lines is the honest set, and it was also
@@ -219,38 +217,26 @@ export function ScanTimelineTab({session,onOpenProjectSettings}:{
         only one worth standing costs. */}
     <details class="scan-budget">
       <summary>
-        <span>Budget</span>
-        {binding
-          ? <em class={headroom(binding)>=0.9?'scan-gate-binding':undefined}>{binding.label} {amount(binding)} · {percent(headroom(binding))}</em>
-          : <em>no limits reported</em>}
+        <span>{t("ScanTimelineTab.1c6225ec70")}</span>
+        {binding ? <em class={headroom(binding)>=0.9?'scan-gate-binding':undefined}>{binding.label} {amount(binding)} · {percent(headroom(binding))}</em> : <em>{t("ScanTimelineTab.5fcb495929")}</em>}
       </summary>
       <div class="scan-spend-line">
         {state.gates.map(gate=><span key={gate.id} class={gate===binding&&headroom(gate)>=0.9?'scan-gate-binding':undefined}>{gate.label} {amount(gate)}</span>)}
       </div>
     </details>
-    {!state.run_enabled&&<p class="scan-gate">{state.auto_enable&&!state.run_decided
-      ? 'Not armed yet. This Project arms new conversations automatically, so it starts on the next turn.'
-      : state.auto_enable
-        ? 'Switched off for this conversation. This Project arms new ones automatically, but a conversation you turned off stays off.'
-        : <>Off for this conversation. It resets on /clear, /new, or session end.{' '}
-          {/* Named the switch and offered nothing, which is the defect the setting-link
-              rule exists to remove. It is a Project-wide field, so it is granted here
-              and still edited (and withdrawn) in the Project's own settings. */}
-          <GrantButton id="project.scanTimelineAutoArm" projectId={projectId||undefined}
+    {!state.run_enabled && <p class="scan-gate">{state.auto_enable&&!state.run_decided ? t("ScanTimelineTab.52de345951") : state.auto_enable ? t("ScanTimelineTab.fd5f49264c") : <>{rich("ScanTimelineTab.74ce464b90", { value1: <GrantButton id="project.scanTimelineAutoArm" projectId={projectId||undefined}
             onGranted={load}
-            title="Arms every new conversation in this Project · writes to the Project’s .swe-mux/config.toml"
-          >Arm every new conversation here</GrantButton>{' '}to stop repeating this.</>}</p>}
-    {state.run_enabled&&state.skip_reason&&<p class="scan-gate scan-stopped">Not scanning: {state.skip_reason}.</p>}
-    {error&&<p class="usage-error">{error}</p>}
-    {state.backfill.state!=='idle'&&<p class={`scan-backfill-status ${state.backfill.state}`}>
-      {state.backfill.state==='running'
-        ? `Scanning full session · ${state.backfill.processed_chunks}/${state.backfill.total_chunks||'…'} chunks · ${state.backfill.created_records} records`
-        : `Full-session scan ${backfillLabel[state.backfill.state]} · ${state.backfill.processed_chunks}/${state.backfill.total_chunks} chunks · ${state.backfill.created_records} records${state.backfill.failed_chunks?` · ${state.backfill.failed_chunks} chunks failed`:''}${state.backfill.skipped_chunks?` · ${state.backfill.skipped_chunks} already covered`:''}${state.backfill.reason?` · ${state.backfill.reason}`:''}`}
+            title={t("ScanTimelineTab.12e743d51a")}
+          >{t("ScanTimelineTab.f49049c042")}</GrantButton> })}</>}</p>}
+    {state.run_enabled&&state.skip_reason && <p class="scan-gate scan-stopped">{rich("ScanTimelineTab.73e9c30218", { skip_reason: state.skip_reason })}</p>}
+    {error && <p class="usage-error">{error}</p>}
+    {state.backfill.state!=='idle' && <p class={`scan-backfill-status ${state.backfill.state}`}>
+      {state.backfill.state==='running' ? t("ScanTimelineTab.49a08a8eef", { processed_chunks: state.backfill.processed_chunks, value2: state.backfill.total_chunks||'…', created_records: state.backfill.created_records }) : t("ScanTimelineTab.532b7d4147", { value1: backfillLabel[state.backfill.state], processed_chunks: state.backfill.processed_chunks, total_chunks: state.backfill.total_chunks, created_records: state.backfill.created_records, value5: state.backfill.failed_chunks?t("ScanTimelineTab.f521f03d88", { value1: state.backfill.failed_chunks }):'', value6: state.backfill.skipped_chunks?t("ScanTimelineTab.d9825a6acd", { value1: state.backfill.skipped_chunks }):'', value7: state.backfill.reason?` · ${state.backfill.reason}`:'' })}
     </p>}
     <div class="scan-timeline-list" ref={listRef} onScroll={onListScroll}>
-      {state.records.length===0&&<p class="drawer-empty">No scan records for this session.</p>}
+      {state.records.length===0 && <p class="drawer-empty">{t("ScanTimelineTab.83299179e2")}</p>}
       {events.map(event=>{
-        if(event.kind==='boundary')return <div class="scan-boundary" key={event.boundary.id}><strong>New conversation</strong><span>{clock(event.boundary.created_at)} · {event.boundary.reason}</span></div>
+        if(event.kind==='boundary')return <div class="scan-boundary" key={event.boundary.id}><strong>{t("ScanTimelineTab.396c946f0c")}</strong><span>{clock(event.boundary.created_at)} · {event.boundary.reason}</span></div>
         const record=event.record
         // Compact is the resting state. The row still carries the record's identity:
         // when it happened, what phase it belongs to, one line of what happened, and
@@ -261,7 +247,7 @@ export function ScanTimelineTab({session,onOpenProjectSettings}:{
         return <div class="scan-record-wrap" key={record.id}>
           <article class={`scan-record${open?' open':''}`}>
             <button class="scan-record-head" aria-expanded={open} aria-controls={detailId}
-              title={open?'Collapse this record':gistOf(record)}
+              title={open ? t("ScanTimelineTab.639af6857d") : gistOf(record)}
               onClick={()=>toggleRecord(record.id)}>
               <span class="scan-record-line">
                 <time>{clock(record.t1)}</time>
@@ -272,26 +258,26 @@ export function ScanTimelineTab({session,onOpenProjectSettings}:{
               <span class="scan-record-gist">{gistOf(record)}</span>
               <b class="scan-record-caret" aria-hidden="true">›</b>
             </button>
-            {open&&<div class="scan-record-detail" id={detailId}>
-              <p class="scan-record-novelty">novelty {percent(record.novelty)}</p>
-              {record.user_ask&&<dl><dt>Asked</dt><dd>{record.user_ask}</dd></dl>}
-              {record.intent&&<dl><dt>Intent</dt><dd>{record.intent}</dd></dl>}
-              {record.claim&&<dl><dt>Claim</dt><dd>{record.claim}</dd></dl>}
+            {open && <div class="scan-record-detail" id={detailId}>
+              <p class="scan-record-novelty">{rich("ScanTimelineTab.115d42f307", { value1: percent(record.novelty) })}</p>
+              {record.user_ask && <dl><dt>{t("ScanTimelineTab.821c038b7a")}</dt><dd>{record.user_ask}</dd></dl>}
+              {record.intent && <dl><dt>{t("ScanTimelineTab.29131ad07d")}</dt><dd>{record.intent}</dd></dl>}
+              {record.claim && <dl><dt>{t("ScanTimelineTab.4ca41db028")}</dt><dd>{record.claim}</dd></dl>}
               {/* Same guard as the row's `blocked` flag: an empty blocker is not a blocker,
                   and drew a labelled row with nothing in it. */}
-              {record.blocked_on&&record.blocked_on!=='none'&&<dl><dt>Blocked</dt><dd>{record.blocked_on}</dd></dl>}
-              {record.dead_end&&record.approach_status==='abandoned'&&<dl class="scan-dead-end"><dt>Dead end</dt><dd>{record.dead_end}</dd></dl>}
-              {!!record.target.length&&<details class="scan-record-targets">
-                <summary>Evidence targets <span>{record.target.length}</span></summary>
+              {record.blocked_on&&record.blocked_on!=='none' && <dl><dt>{t("ScanTimelineTab.18f2a0947f")}</dt><dd>{record.blocked_on}</dd></dl>}
+              {record.dead_end&&record.approach_status==='abandoned' && <dl class="scan-dead-end"><dt>{t("ScanTimelineTab.f2fd4044ac")}</dt><dd>{record.dead_end}</dd></dl>}
+              {!!record.target.length && <details class="scan-record-targets">
+                <summary>{rich("ScanTimelineTab.a59148de0f", { value1: <span>{record.target.length}</span> })}</summary>
                 <ul>{record.target.map(target=><li key={target}><code>{target}</code></li>)}</ul>
               </details>}
-              {!!record.coverage?.remaining&&<p class="scan-record-lag">{record.coverage.remaining} later messages were still unscanned when this record was written; a catch-up scan follows.</p>}
-              {!!record.repairs?.length&&<details class="scan-record-targets scan-record-repairs">
-                <summary>Model output repaired <span>{record.repairs.length}</span></summary>
+              {!!record.coverage?.remaining && <p class="scan-record-lag">{rich("ScanTimelineTab.4f736984f2", { remaining: record.coverage.remaining })}</p>}
+              {!!record.repairs?.length && <details class="scan-record-targets scan-record-repairs">
+                <summary>{rich("ScanTimelineTab.22f8c5803d", { value1: <span>{record.repairs.length}</span> })}</summary>
                 <ul>{record.repairs.map(repair=><li key={repair}>{repair}</li>)}</ul>
               </details>}
-              <footer><span>{record.behavior.join(' · ')} · confidence {percent(record.confidence)}</span><button disabled={busy} onClick={()=>void source(record)}>{expanded[record.id]!==undefined?'Hide source':'View source'}</button></footer>
-              {expanded[record.id]!==undefined&&<pre class="scan-source">{JSON.stringify(expanded[record.id],null,2)}</pre>}
+              <footer><span>{rich("ScanTimelineTab.e3070ac4f9", { value1: record.behavior.join(' · '), value2: percent(record.confidence) })}</span><button disabled={busy} onClick={()=>void source(record)}>{expanded[record.id]!==undefined ? t("ScanTimelineTab.a52ddc94bb") : t("ScanTimelineTab.6ee818aa2d")}</button></footer>
+              {expanded[record.id]!==undefined && <pre class="scan-source">{JSON.stringify(expanded[record.id],null,2)}</pre>}
             </div>}
           </article>
         </div>
@@ -299,17 +285,13 @@ export function ScanTimelineTab({session,onOpenProjectSettings}:{
     </div>
     <footer>
       <div>
-        <button disabled={busy||!state.run_enabled||running} onClick={()=>void scan()}>Scan now</button>
-        {running
-          ? <button disabled={busy} onClick={()=>void stopBackfill()}>Stop full scan</button>
-          : <button disabled={busy||!state.run_enabled} onClick={()=>void backfill()}>Scan full session</button>}
+        <button disabled={busy||!state.run_enabled||running} onClick={()=>void scan()}>{t("ScanTimelineTab.c01d65df01")}</button>
+        {running ? <button disabled={busy} onClick={()=>void stopBackfill()}>{t("ScanTimelineTab.9028ed3f30")}</button> : <button disabled={busy||!state.run_enabled} onClick={()=>void backfill()}>{t("ScanTimelineTab.7041f36728")}</button>}
       </div>
       <span class={`scan-activity ${state.scanning||running?'busy':''}`}
-        title={state.scanning
-          ? 'A scan request is out to the model and its record has not landed yet.'
-          : `Event-triggered · 3 minute heartbeat · source expansions ${state.metrics.rehydrations}/${state.metrics.record_reads}`}>
+        title={state.scanning ? t("ScanTimelineTab.b9cfcf474b") : t("ScanTimelineTab.01fa11e4c2", { rehydrations: state.metrics.rehydrations, record_reads: state.metrics.record_reads })}>
         <b aria-hidden="true"/>
-        {state.scanning?'Scanning…':running?'Full-session scan…':'Idle · 3 min heartbeat'}
+        {state.scanning ? t("ScanTimelineTab.38d96da6e8") : running ? t("ScanTimelineTab.96992b9dec") : t("ScanTimelineTab.987fe3220a")}
       </span>
     </footer>
   </section>

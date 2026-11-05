@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // The Action rail's arrow keys: the tap-or-hold button whose rules `railKeyRepeat.ts`
 // owns, plus the listeners those rules need.
 //
@@ -105,7 +106,7 @@ export function RailRepeatKey({repeat,sequence,label,title,className,railItem,sl
     data-rail-slot={slot}
     data-reorder-id={reorderId}
     class={`${className} rail-key-repeat`}
-    title={`${title} (hold to repeat)`}
+    title={t("RailRepeatKey.d64aac8e2a", { title: title })}
     onMouseDown={event=>event.preventDefault()}
     onPointerDown={event=>{
       if(!event.isPrimary||event.button!==0)return

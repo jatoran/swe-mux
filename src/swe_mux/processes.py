@@ -22,6 +22,7 @@ from .errors import NotFound
 from .framed_ipc import RemoteError
 from .host_metrics import process_exited
 from .process_fingerprint import command_hash, process_identity
+from .ui_messages import ui_message
 
 # The worker process imports this module to sample processes, so everything only
 # the daemon half needs - the session model, the event bus, aiohttp for preview
@@ -298,8 +299,7 @@ class OwnedProcess:
             self.exited_at is None
             and self.attribution_version >= PROCESS_ATTRIBUTION_VERSION
             and self.attribution_source in {"session_root", "parent_walk", "job_membership"}
-            and self.evidence_state
-            in {"active", "escaped", "suspected_orphan"}
+            and self.evidence_state in {"active", "escaped", "suspected_orphan"}
         )
 
 
@@ -671,8 +671,7 @@ class ProcessInspector:
         snapshots = [
             item
             for item in self.owned.values()
-            if item.exited_at is None
-            and item.attribution_version >= PROCESS_ATTRIBUTION_VERSION
+            if item.exited_at is None and item.attribution_version >= PROCESS_ATTRIBUTION_VERSION
         ]
         previous_listeners = self._listeners
         current_listeners = {
@@ -722,9 +721,7 @@ class ProcessInspector:
         persisted = {key: value for key, value in self._persisted.items() if key in retained}
         persisted.update(written)
         self._persisted = persisted
-        log.debug(
-            "process observations persisted changed=%d retained=%d", len(rows), len(retained)
-        )
+        log.debug("process observations persisted changed=%d retained=%d", len(rows), len(retained))
 
     def _changed_observations(
         self,
@@ -947,8 +944,7 @@ class ProcessInspector:
             # that opened the annotation.
             threshold = annotation.since - self.BACKGROUND_FAST_CLEAR_MIN_AGE_SECONDS
             if any(
-                self._could_be_background_task(item, root_pid, threshold)
-                for item in descendants
+                self._could_be_background_task(item, root_pid, threshold) for item in descendants
             ):
                 continue
             if clear_standing_activity(
@@ -1100,9 +1096,7 @@ class ProcessInspector:
                 }
             )
         )
-        await worker.call(
-            "processes", "load", {}, payload.encode("utf-8"), timeout_seconds=120.0
-        )
+        await worker.call("processes", "load", {}, payload.encode("utf-8"), timeout_seconds=120.0)
         self._sampling["loads"] += 1
         log.info(
             "process sampler loaded into the worker with %d retained process(es)",
@@ -1238,10 +1232,7 @@ class ProcessInspector:
         stack: list[tuple[int, int, float]] = (
             []
             if root_pid in stop
-            else [
-                (pid, root_pid, root_started)
-                for pid in self._children_by_pid.get(root_pid, ())
-            ]
+            else [(pid, root_pid, root_started) for pid in self._children_by_pid.get(root_pid, ())]
         )
         while stack and len(handles) < limit:
             pid, parent_pid, parent_started = stack.pop()
@@ -1270,8 +1261,7 @@ class ProcessInspector:
             if pid in stop:
                 continue
             stack.extend(
-                (child_pid, pid, started)
-                for child_pid in self._children_by_pid.get(pid, ())
+                (child_pid, pid, started) for child_pid in self._children_by_pid.get(pid, ())
             )
         return handles
 
@@ -1901,9 +1891,7 @@ class ProcessInspector:
             "members": members,
         }
 
-    def _invalidate_attribution(
-        self, key: tuple[int, float], now: float, reason: str
-    ) -> None:
+    def _invalidate_attribution(self, key: tuple[int, float], now: float, reason: str) -> None:
         """Retire a live process claim without asserting that the OS process exited."""
         item = self.owned.get(key)
         if item is None or item.exited_at is not None:
@@ -2100,7 +2088,10 @@ class ProcessInspector:
             assert worker is not None
             try:
                 _, payload = await worker.call(
-                    "processes", "unique_memory", {}, json.dumps(pids).encode("utf-8"),
+                    "processes",
+                    "unique_memory",
+                    {},
+                    json.dumps(pids).encode("utf-8"),
                     timeout_seconds=60.0,
                 )
                 return {int(pid): int(value) for pid, value in json.loads(payload).items()}
@@ -2474,9 +2465,7 @@ class ProcessInspector:
                 {
                     "session_id": session_id,
                     "project_id": (
-                        session.record.project_id
-                        if session
-                        else project_of_session.get(session_id)
+                        session.record.project_id if session else project_of_session.get(session_id)
                     ),
                     "project_scope_id": session.record.trusted_scope_id if session else None,
                     "repo_group_id": (
@@ -2572,17 +2561,17 @@ class ProcessInspector:
         self, session_id: str, pid: int, identity_id: str | None = None
     ) -> tuple[Any, OwnedProcess]:
         if psutil is None:
-            raise ValueError("process inspection is unavailable")
+            raise ValueError(ui_message("processes.dfa823b9f8"))
         matches = [
             item
             for item in self.owned.values()
             if item.session_id == session_id and item.pid == pid and item.exited_at is None
         ]
         if len(matches) != 1:
-            raise ValueError("process is not owned by this session")
+            raise ValueError(ui_message("processes.36c1941ecc"))
         item = matches[0]
         if item.attribution_version < PROCESS_ATTRIBUTION_VERSION:
-            raise ValueError("process ownership evidence is obsolete; refresh before acting")
+            raise ValueError(ui_message("processes.288252adae"))
         # Deliberately re-derived here rather than read off the row's evidence. This
         # is the last gate before a signal, and it has to hold even when attribution
         # was wrong: a mislabelled desktop shell offered "Terminate tree" is the UI
@@ -2591,17 +2580,17 @@ class ProcessInspector:
             (item.pid, float(item.started_at or 0)),
             self._fingerprints(self._infrastructure_handles()),
         ):
-            raise ValueError("process is swe-mux itself, not session-owned")
+            raise ValueError(ui_message("processes.eb6a4a617d"))
         if identity_id and item.identity_id != identity_id:
-            raise ValueError("process fingerprint changed; refresh before acting")
+            raise ValueError(ui_message("processes.e6b73e93cf"))
         try:
             process = psutil.Process(pid)
             if abs(process.create_time() - (item.started_at or 0)) > 0.01:
-                raise ValueError("process identity changed")
+                raise ValueError(ui_message("processes.c1c1d2bc79"))
         except psutil.NoSuchProcess as exc:
-            raise ValueError("process no longer exists") from exc
+            raise ValueError(ui_message("processes.f788b75ef7")) from exc
         except (psutil.AccessDenied, OSError) as exc:
-            raise ValueError("process fingerprint cannot be revalidated") from exc
+            raise ValueError(ui_message("processes.2b15fd491d")) from exc
         return process, item
 
     @staticmethod
@@ -2625,9 +2614,7 @@ class ProcessInspector:
                 try:
                     process.send_signal(getattr(signal, "CTRL_BREAK_EVENT", signal.SIGTERM))
                 except (OSError, ValueError, psutil.Error) as exc:
-                    raise ValueError(
-                        "this process cannot be interrupted on Windows; use terminate instead"
-                    ) from exc
+                    raise ValueError(ui_message("processes.2fcb0bb3ca")) from exc
             else:
                 process.send_signal(signal.SIGINT)
         elif action == "terminate":
@@ -2644,7 +2631,7 @@ class ProcessInspector:
                     child.terminate()
             process.terminate()
         else:
-            raise ValueError("action must be interrupt, terminate, or terminate_tree")
+            raise ValueError(ui_message("processes.db69f182d8"))
         return False
 
     async def _remote_act(
@@ -2677,7 +2664,7 @@ class ProcessInspector:
         except WorkerUnavailable:
             return None
         except RemoteError as exc:
-            raise RuntimeError(f"process action failed in the worker: {exc.error}") from exc
+            raise RuntimeError(ui_message("processes.b4dd515702", value1=exc.error)) from exc
         refused = reply.get("refused")
         if isinstance(refused, str):
             raise ValueError(refused)
@@ -3118,8 +3105,7 @@ class PreviewRegistry:
         if entry is None or entry == item.entry:
             return
         log.info(
-            "preview entry set preview_id=%s session_id=%s port=%d entry=%s previous=%s "
-            "reason=%s",
+            "preview entry set preview_id=%s session_id=%s port=%d entry=%s previous=%s reason=%s",
             item.id,
             item.session_id,
             item.port,
@@ -3343,20 +3329,20 @@ class PreviewRegistry:
             parsed = urlsplit(url)
             port = parsed.port or (443 if parsed.scheme == "https" else 80)
         except ValueError as exc:
-            raise ValueError("preview URL has an invalid port") from exc
+            raise ValueError(ui_message("processes.5d613de01d")) from exc
         host = parsed.hostname or ""
         if parsed.scheme not in {"http", "https"}:
-            raise ValueError("preview URL must use HTTP or HTTPS")
+            raise ValueError(ui_message("processes.33448ef69e"))
         if host not in PREVIEW_LOOPBACK_HOSTS:
-            raise ValueError("preview destination must be a literal loopback address")
+            raise ValueError(ui_message("processes.7d92599cf8"))
         if parsed.username or parsed.password:
-            raise ValueError("preview URL cannot contain credentials")
+            raise ValueError(ui_message("processes.39b46288ce"))
         if parsed.fragment:
-            raise ValueError("preview URL cannot contain a fragment")
+            raise ValueError(ui_message("processes.9aa0f9591b"))
         if parsed.query:
-            raise ValueError("preview registration URL cannot contain a query")
+            raise ValueError(ui_message("processes.941d74f0ab"))
         if not 1 <= port <= 65535:
-            raise ValueError("preview URL has an invalid port")
+            raise ValueError(ui_message("processes.5d613de01d"))
         if port in self.reserved_ports():
             # A copied Preview link (`http://127.0.0.1:<mux>/preview/<id>/...`) names a
             # registration that already exists: open that one. Anything else on this
@@ -3423,7 +3409,7 @@ class PreviewRegistry:
                 owner_command = str(listening.get("command") or "")
                 break
         if owner is None and not approved:
-            raise ValueError("preview listener is not owned by this session; approval is required")
+            raise ValueError(ui_message("processes.7a2477fdc4"))
         if owner is not None:
             return self._record_detected(
                 owner,
@@ -3542,9 +3528,7 @@ class PreviewRegistry:
         check = getattr(self.inspector, "port_conflict", None)
         if check is not None and item.kind == "loopback" and item.port not in self.reserved_ports():
             try:
-                conflict = await check(
-                    item.host, item.port, session_id=item.session_id
-                )
+                conflict = await check(item.host, item.port, session_id=item.session_id)
             except Exception:  # noqa: BLE001 - a diagnostic must never hide a preview
                 log.exception("preview port conflict check failed preview_id=%s", item.id)
         self._note_conflict(item, conflict)
@@ -3555,9 +3539,7 @@ class PreviewRegistry:
         """Log a shared port once when it appears or changes, and once when it clears."""
         if conflict is None:
             if self._conflicts_logged.pop(item.id, None) is not None:
-                log.info(
-                    "preview port no longer shared preview_id=%s port=%d", item.id, item.port
-                )
+                log.info("preview port no longer shared preview_id=%s port=%d", item.id, item.port)
             return
         pids = tuple(int(listener["pid"]) for listener in conflict["listeners"])
         signature = (pids, conflict["answering_pid"])

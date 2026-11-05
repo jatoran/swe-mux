@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { api, type ApiError } from './api.ts'
 import { serverNow } from './serverClock.ts'
 import type { DeliveryReadiness } from './types.ts'
@@ -400,12 +401,12 @@ export function scheduleStatus(message: QueueMessage, now = serverNow()): string
 export function senderLabel(message: QueueMessage): string {
   switch (message.sender_kind) {
     case 'agent':
-      return `from ${message.sender_label || message.sender_id || 'another agent'}`
+      return t("queueApi.8b762f6bdd", { value1: message.sender_label || message.sender_id || t("queueApi.03a2317923") })
     case 'remote_user':
-      return 'from you (remote)'
+      return t("queueApi.36ed3e344c")
     case 'rule':
     case 'queue_draft':
-      return 'from an observer'
+      return t("queueApi.2984d91480")
     default:
       return ''
   }

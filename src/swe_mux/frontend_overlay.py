@@ -107,6 +107,7 @@ from typing import Any
 
 from .build_support import sidecar_is_current
 from .ui_build import normalize_ui_build_id, parse_ui_build_id
+from .ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -394,9 +395,7 @@ def write_manifest(root: Path, manifest: OverlayManifest) -> Path:
 def parse_manifest(payload: object) -> OverlayManifest:
     """An `overlay.json` body, or a refusal naming which shape rule it broke."""
     if not isinstance(payload, dict):
-        raise OverlayRefused(
-            REASON_MANIFEST_UNREADABLE, f"{MANIFEST_NAME} is not a JSON object."
-        )
+        raise OverlayRefused(REASON_MANIFEST_UNREADABLE, f"{MANIFEST_NAME} is not a JSON object.")
     if payload.get("schema") != MANIFEST_SCHEMA:
         raise OverlayRefused(
             REASON_UNSUPPORTED_SCHEMA,
@@ -424,9 +423,7 @@ def parse_manifest(payload: object) -> OverlayManifest:
         )
     files = payload.get("files")
     if not isinstance(files, dict) or not files:
-        raise OverlayRefused(
-            REASON_MANIFEST_UNREADABLE, f"{MANIFEST_NAME} lists no files."
-        )
+        raise OverlayRefused(REASON_MANIFEST_UNREADABLE, f"{MANIFEST_NAME} lists no files.")
     checked: dict[str, str] = {}
     for name, digest in files.items():
         if not isinstance(name, str) or not isinstance(digest, str):
@@ -443,8 +440,7 @@ def parse_manifest(payload: object) -> OverlayManifest:
         if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
             raise OverlayRefused(
                 REASON_MANIFEST_UNREADABLE,
-                f"{MANIFEST_NAME} carries {digest!r} for {name!r}, which is not a "
-                "SHA-256 digest.",
+                f"{MANIFEST_NAME} carries {digest!r} for {name!r}, which is not a SHA-256 digest.",
             )
         checked[safe] = digest
     declared = payload.get("tree_digest")
@@ -870,8 +866,7 @@ def _validate_members(names: Iterable[str]) -> list[str]:
         if pure.startswith("/") or ":" in head:
             raise OverlayRefused(
                 REASON_ARCHIVE_INVALID,
-                f"The archive contains an absolute path ({name!r}), which an overlay "
-                "never does.",
+                f"The archive contains an absolute path ({name!r}), which an overlay never does.",
             )
         if any(part == ".." for part in pure.split("/")):
             raise OverlayRefused(
@@ -899,8 +894,7 @@ def extract_overlay(archive: Path, destination: Path) -> Path:
     if not archive.name.lower().endswith(ARCHIVE_SUFFIX):
         raise OverlayRefused(
             REASON_ARCHIVE_INVALID,
-            f"{archive.name!r} is not a frontend overlay archive; one is named "
-            f"*{ARCHIVE_SUFFIX}.",
+            f"{archive.name!r} is not a frontend overlay archive; one is named *{ARCHIVE_SUFFIX}.",
         )
     destination = Path(destination)
     shutil.rmtree(destination, ignore_errors=True)
@@ -1173,9 +1167,7 @@ class OverlayStore:
                     handle.write(chunk)
                     received += len(chunk)
 
-                status, declared = await downloader(
-                    url, write=write, max_bytes=MAX_OVERLAY_BYTES
-                )
+                status, declared = await downloader(url, write=write, max_bytes=MAX_OVERLAY_BYTES)
         except OverlayRefused:
             with suppress(OSError):
                 part.unlink(missing_ok=True)
@@ -1317,8 +1309,7 @@ class OverlayStore:
                 shutil.rmtree(path)
             except OSError as exc:
                 events.append(
-                    f"could not remove the superseded tree {path.name[:12]} "
-                    f"({type(exc).__name__})"
+                    f"could not remove the superseded tree {path.name[:12]} ({type(exc).__name__})"
                 )
         with suppress(OSError):
             shutil.rmtree(self.root / STAGING_DIRNAME, ignore_errors=True)
@@ -1346,7 +1337,7 @@ class OverlayStore:
             return {
                 "reverted": True,
                 "changed": False,
-                "message": "The overlay was already reverted.",
+                "message": ui_message("frontend_overlay.3933fd93e7"),
                 "state": state.as_dict(),
             }
         state.active = False
@@ -1360,10 +1351,7 @@ class OverlayStore:
         return {
             "reverted": True,
             "changed": True,
-            "message": (
-                "The overlay is switched off. The bundled frontend serves from the "
-                "next daemon start - reload the daemon to apply it now."
-            ),
+            "message": (ui_message("frontend_overlay.011db3a33e")),
             "state": state.as_dict(),
         }
 
@@ -1379,7 +1367,7 @@ class OverlayStore:
             return {
                 "restored": True,
                 "changed": False,
-                "message": "The overlay is already switched on.",
+                "message": ui_message("frontend_overlay.f28213e8be"),
                 "state": state.as_dict(),
             }
         if not tree_path(self._data_dir, state.digest).is_dir():
@@ -1394,10 +1382,7 @@ class OverlayStore:
         return {
             "restored": True,
             "changed": True,
-            "message": (
-                "The overlay is switched on. It serves from the next daemon start - "
-                "reload the daemon to apply it now."
-            ),
+            "message": (ui_message("frontend_overlay.5eb501e814")),
             "state": state.as_dict(),
         }
 

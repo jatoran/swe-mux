@@ -1,3 +1,4 @@
+import { rich, t } from './localization/index.ts'
 import { useEffect, useState } from 'preact/hooks'
 import { api } from './api'
 import type { ProviderAccountsStatus } from './ProviderAccounts'
@@ -19,15 +20,15 @@ export function SetupAccounts({enabled}:{enabled:string[]}) {
     try{setAccounts(await api<ProviderAccountsStatus>('POST',`/api/provider-accounts/${provider}/${operation}`,{},{timeoutMs:15000}));window.dispatchEvent(new Event('swe-mux:provider-accounts-changed'))}
     catch(cause){setError((cause as Error).message)}finally{setBusy('')}
   }
-  return <section class="setup-accounts"><h3>Agent accounts</h3><p class="setup-hint">Use an existing login, or sign in now. Saving keeps a local snapshot for account switching.</p>
+  return <section class="setup-accounts"><h3 data-heading-message="SetupAccounts.c6eb55dce3">{t("SetupAccounts.c6eb55dce3")}</h3><p class="setup-hint">{t("SetupAccounts.ad98ecfc3b")}</p>
     {accounts?.providers.filter(provider=>enabled.includes(provider)).map(provider=>{
       const current=accounts.current[provider],login=accounts.login?.[provider]
-      const status=current?.state==='saved'?'Already saved':current?.state==='external'?'Already signed in':current?.state==='unreadable'?'Login could not be read':'Sign-in needed'
-      return <div class="harness-setup-row" key={provider}><span><strong>{provider}</strong><small>{current?.email||current?.organization||''} {status}</small>{login?.state==='running'&&<small role="status">Finish sign-in in the browser on this computer.</small>}{login?.state==='failed'&&<small role="alert">{login.error||'Sign-in failed. Try again.'}</small>}{current?.state==='signed_out'&&accounts.login_commands?.[provider]&&<small>Or run <code>{accounts.login_commands[provider]}</code> in a terminal.</small>}</span>
-        {login?.state==='running'?<button disabled={!!busy} onClick={()=>void action(provider,'login/dismiss')}>Cancel sign-in</button>:current?.state==='external'?<button disabled={!!busy} onClick={()=>void action(provider,'capture')}>Save current login</button>:current?.state!=='saved'&&<button disabled={!!busy} onClick={()=>void action(provider,'login')}>Sign in and save</button>}
+      const status=current?.state==='saved'?t("SetupAccounts.748a428faf"):current?.state==='external'?t("SetupAccounts.60b1283d87"):current?.state==='unreadable'?t("SetupAccounts.3b1ae9fbb2"):t("SetupAccounts.31e23ff084")
+      return <div class="harness-setup-row" key={provider}><span><strong>{provider}</strong><small>{current?.email||current?.organization || ''} {status}</small>{login?.state==='running' && <small role="status">{t("SetupAccounts.92b56db48d")}</small>}{login?.state==='failed' && <small role="alert">{login.error || t("SetupAccounts.57b7106b34")}</small>}{current?.state==='signed_out'&&accounts.login_commands?.[provider] && <small>{rich("SetupAccounts.23d15ae18e", { value1: <code>{accounts.login_commands[provider]}</code> })}</small>}</span>
+        {login?.state==='running' ? <button disabled={!!busy} onClick={()=>void action(provider,'login/dismiss')}>{t("SetupAccounts.9effa0b748")}</button> : current?.state==='external' ? <button disabled={!!busy} onClick={()=>void action(provider,'capture')}>{t("SetupAccounts.9f73f988bd")}</button> : current?.state!=='saved' && <button disabled={!!busy} onClick={()=>void action(provider,'login')}>{t("SetupAccounts.532b191d5a")}</button>}
       </div>
     })}
-    <button disabled={!!busy} class="link" onClick={()=>void reload().catch(cause=>setError(cause.message))}>Check login again</button>
-    {error&&<p role="alert">{error}</p>}
+    <button disabled={!!busy} class="link" onClick={()=>void reload().catch(cause=>setError(cause.message))}>{t("SetupAccounts.d07501f278")}</button>
+    {error && <p role="alert">{error}</p>}
   </section>
 }

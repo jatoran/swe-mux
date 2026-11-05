@@ -28,11 +28,11 @@ test('tab ids and labels are both unique', () => {
 test('each settings group is one contiguous run covering every tab in order', () => {
   // A group is a contiguous run. If a tab drifts away from its group the run splits,
   // and the sidebar would draw the same heading twice - which is the bug, not the fix.
-  const groupNames=settingsTabGroups.map(group=>group.group)
+  const groupNames=settingsTabGroups().map(group=>group.group)
   assert.equal(new Set(groupNames).size,groupNames.length,'each group must be one contiguous run')
   assert.deepEqual(groupNames,['Workspace','Agents','Interface','System'])
-  assert.equal(settingsTabGroups.flatMap(group=>group.tabs).length,settingsTabs.length)
-  assert.deepEqual(settingsTabGroups.flatMap(group=>group.tabs).map(tab=>tab.id),ids)
+  assert.equal(settingsTabGroups().flatMap(group=>group.tabs).length,settingsTabs.length)
+  assert.deepEqual(settingsTabGroups().flatMap(group=>group.tabs).map(tab=>tab.id),ids)
 })
 
 test('every tab is addressable by its own label, case- and space-insensitively', () => {

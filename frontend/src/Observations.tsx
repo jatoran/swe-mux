@@ -1,3 +1,5 @@
+import { codeLabel } from './localization/codeLabels.ts'
+import { rich, t } from './localization/index.ts'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { useModalFocus } from './modalFocus'
@@ -80,8 +82,8 @@ export function Observations(
       )
       setState(result)
       setNote(decision === 'approve'
-        ? `Started ${result.session?.name || 'the session'} with the requested prompt.`
-        : 'Request dismissed. Nothing was started.')
+        ? t("Observations.a36dddb826", { value1: result.session?.name || t("Observations.2c48580eec") })
+        : t("Observations.4f3f23e9e2"))
     } catch (err) {
       setNote(err instanceof Error ? err.message : String(err))
       await load()
@@ -95,23 +97,19 @@ export function Observations(
     const decided = request.status && request.status !== 'pending'
     return <li class={`observation-request${item.done ? ' done' : ''}`}>
       <div class="observation-request-head">
-        <span class="observation-request-tag">spawn request</span>
-        <span>{request.from_name || request.from_session || 'an agent'}</span>
+        <span class="observation-request-tag">{t("Observations.5e2f6b11ae")}</span>
+        <span>{request.from_name || request.from_session || t("Observations.647936ec3e")}</span>
         {request.backend && <span>{request.backend}</span>}
-        {decided && <span class="observation-request-status">{request.status}</span>}
+        {decided && <span class="observation-request-status">{codeLabel(request.status)}</span>}
       </div>
       {request.reason && <p class="observation-request-reason">{request.reason}</p>}
       <pre class="observation-request-prompt">{request.prompt || item.body}</pre>
       <div class="observation-request-actions">
-        {decided
-          ? <span>{request.status === 'approved' ? 'approved — session started' : 'dismissed'}</span>
-          : <>
-              <button class="primary" disabled={busy} onClick={() => void decide(item, 'approve')}>
-                approve &amp; start session
-              </button>
-              <button disabled={busy} onClick={() => void decide(item, 'dismiss')}>dismiss</button>
+        {decided ? <span>{request.status === 'approved' ? t("Observations.cdef3515ef") : t("Observations.7111684708")}</span> : <>
+              <button class="primary" disabled={busy} onClick={() => void decide(item, 'approve')}>{t("Observations.9443d3bca9")}</button>
+              <button disabled={busy} onClick={() => void decide(item, 'dismiss')}>{t("Observations.5880072b27")}</button>
             </>}
-        <button aria-label="Delete request" onClick={() => remove(item)}>×</button>
+        <button aria-label={t("Observations.6548cf87ee")} onClick={() => remove(item)}>×</button>
       </div>
     </li>
   }
@@ -119,43 +117,41 @@ export function Observations(
   const open = state.observations.filter(o => !o.done)
   // Typed requests are decisions, not notes: they never ride the batch insert.
   const asText = () => open.filter(o => o.kind !== 'spawn_request').map(o => `- ${o.body}`).join('\n')
-  const copyAll = () => { void navigator.clipboard.writeText(asText()); setNote('Copied open items to clipboard.') }
+  const copyAll = () => { void navigator.clipboard.writeText(asText()); setNote(t("Observations.0007982640")) }
   const sendBatch = () => {
-    if (!onInsertBatch) { setNote('Focus an agent terminal to insert into.'); return }
-    if (!open.length) { setNote('No open observations to send.'); return }
+    if (!onInsertBatch) { setNote(t("Observations.21b41f43c4")); return }
+    if (!open.length) { setNote(t("Observations.a31d8976c7")); return }
     onInsertBatch(`${asText()}\n`)
-    setNote('Inserted open items into the focused agent (not sent).')
+    setNote(t("Observations.2084a1eb89"))
   }
 
-  return <div class="usage-layer observations-layer" role="dialog" aria-modal="true" aria-label="Observation inbox"
+  return <div class="usage-layer observations-layer" role="dialog" aria-modal="true" aria-label={t("Observations.ffefd4b8f2")}
     onMouseDown={event => event.target === event.currentTarget && onClose()}>
     <section class="usage-panel observations-panel" ref={panel}>
       <header>
-        <div><span>OBSERVATIONS</span><strong>{project.name} · capture now, hand to the agent later</strong></div>
-        <div class="usage-header-actions"><button aria-label="Close observations" onClick={onClose}>×</button></div>
+        <div><span>{t("Observations.fb186ecc8f")}</span><strong>{rich("Observations.25006b9f59", { name: project.name })}</strong></div>
+        <div class="usage-header-actions"><button aria-label={t("Observations.3bad562e94")} onClick={onClose}>×</button></div>
       </header>
       <div class="observations-compose">
-        <textarea ref={input} rows={2} placeholder="Something you noticed while testing…" value={draft}
+        <textarea ref={input} rows={2} placeholder={t("Observations.9d19cc7d47")} value={draft}
           onInput={e => setDraft(e.currentTarget.value)}
           onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void add() } }} />
-        <button class="primary" disabled={busy || !draft.trim()} onClick={() => void add()}>capture <kbd>Ctrl+↵</kbd></button>
+        <button class="primary" disabled={busy || !draft.trim()} onClick={() => void add()}>{rich("Observations.d5aceea6b8", { value1: <kbd>{t("Observations.019df2c402")}</kbd> })}</button>
       </div>
-      <div class="usage-progress" role="status" aria-live="polite"><span>·</span><strong>{note || `${open.length} open · ${state.observations.length - open.length} done`}</strong></div>
+      <div class="usage-progress" role="status" aria-live="polite"><span>·</span><strong>{note || t("Observations.f09d93adbb", { length: open.length, value2: state.observations.length - open.length })}</strong></div>
       <main>
-        {state.observations.length === 0
-          ? <div class="automation-empty"><strong>Inbox empty</strong><span>Drop a line whenever something catches your eye. Nothing is sent until you say so.</span></div>
-          : <ul class="observations-list">{state.observations.map(item =>
+        {state.observations.length === 0 ? <div class="automation-empty"><strong>{t("Observations.64e3f4a952")}</strong><span>{t("Observations.4cdf1ebac2")}</span></div> : <ul class="observations-list">{state.observations.map(item =>
             item.kind === 'spawn_request'
               ? spawnRequestRow(item)
               : <li class={item.done ? 'done' : ''}>
                   <label><input type="checkbox" checked={item.done} onChange={() => toggle(item)} /><span>{item.body}</span></label>
-                  <button aria-label="Delete observation" onClick={() => remove(item)}>×</button>
+                  <button aria-label={t("Observations.2509af0bab")} onClick={() => remove(item)}>×</button>
                 </li>)}</ul>}
       </main>
       <footer>
-        <button class="primary" disabled={!open.length} onClick={sendBatch}>↑ insert open items into agent</button>
-        <button disabled={!open.length} onClick={copyAll}>copy open</button>
-        <button disabled={state.observations.every(o => !o.done)} onClick={clearDone}>clear done</button>
+        <button class="primary" disabled={!open.length} onClick={sendBatch}>{t("Observations.66faf0fbf0")}</button>
+        <button disabled={!open.length} onClick={copyAll}>{t("Observations.1fee9e1ab0")}</button>
+        <button disabled={state.observations.every(o => !o.done)} onClick={clearDone}>{t("Observations.95df6259f7")}</button>
       </footer>
     </section>
   </div>

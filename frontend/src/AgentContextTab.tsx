@@ -1,3 +1,5 @@
+import { dateTimeFormatter } from './localization/index.ts'
+import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { mobileLayout } from './deviceMode'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api, type ApiError } from './api'
@@ -61,20 +63,20 @@ function rememberSourceSelection(projectId: string, sourceId: string) {
 }
 
 function formatBytes(value: number): string {
-  if (value < 1024) return `${value} B`
-  return `${Math.max(1, Math.round(value / 1024))} KiB`
+  if (value < 1024) return t("AgentContextTab.4d41026686", { value: value })
+  return t("AgentContextTab.e419c42726", { value1: Math.max(1, Math.round(value / 1024)) })
 }
 
 function formatTime(value: number | null): string {
   if (!value) return ''
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+  return dateTimeFormatter({ dateStyle: 'medium', timeStyle: 'short' })
     .format(new Date(value * 1000))
 }
 
 function errorMessage(cause: unknown): string {
   const error = cause as ApiError
   if (error?.detail?.code === 'revision_conflict') {
-    return 'The instruction files changed after this preview. Rescan and review the new diff.'
+    return t("AgentContextTab.6a5a3ed321")
   }
   return cause instanceof Error ? cause.message : String(cause)
 }
@@ -122,7 +124,7 @@ function SourceRow({ item, selected, focusedBackend, runStartedAt, onOpen, onRev
   return <button
     class={`agent-context-source ${selected ? 'selected' : ''}`}
     aria-disabled={!available}
-    title={`${item.detail || (available ? `View ${item.label}` : statusLabel(item.status))}${item.revealable ? ' · right-click to open file location' : ''}`}
+    title={t("AgentContextTab.1a69eac848", { value1: item.detail || (available ? `View ${item.label}` : statusLabel(item.status)), value2: (item.revealable) ? 'yes' : 'no' })}
     onClick={() => available && onOpen(item.id)}
     onContextMenu={event => {
       if (mobileLayout() || !agentContextSourceMenuEnabled(item, window.matchMedia(AGENT_CONTEXT_DESKTOP_MENU_QUERY).matches)) return
@@ -136,13 +138,11 @@ function SourceRow({ item, selected, focusedBackend, runStartedAt, onOpen, onRev
       <i class={`context-state ${item.status}`}>{statusLabel(item.status)}</i>
     </span>
     {(focused && item.kind === 'instructions' || newerThanRun || item.changed_since_start) && <span class="agent-context-source-flags">
-      {focused && item.kind === 'instructions' && <i class="context-state focused">focused agent</i>}
-      {newerThanRun && <i class="context-state changed">newer than run</i>}
-      {item.changed_since_start && <i class="context-state changed-daemon">changed this daemon run</i>}
+      {focused && item.kind === 'instructions' && <i class="context-state focused">{t("AgentContextTab.25f9f86c76")}</i>}
+      {newerThanRun && <i class="context-state changed">{t("AgentContextTab.7bce069b16")}</i>}
+      {item.changed_since_start && <i class="context-state changed-daemon">{t("AgentContextTab.7e3ae20ec4")}</i>}
     </span>}
-    {available
-      ? <small>{formatBytes(item.size)}{item.modified_at ? ` · ${formatTime(item.modified_at)}` : ''}</small>
-      : <small>{item.detail || 'No readable file is available.'}</small>}
+    {available ? <small>{formatBytes(item.size)}{item.modified_at ? t("AgentContextTab.f6b53f9c8a", { value1: formatTime(item.modified_at) }) : ''}</small> : <small>{item.detail || t("AgentContextTab.cfae9f3c91")}</small>}
   </button>
 }
 
@@ -299,12 +299,12 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
       if (item.revision) values.set(item.label, item.revision)
     }
     return values
-  }, [inventory])
+  }, [inventory, uiLocale.value, catalogRevision.value])
 
   if (!project) {
     return <>
-      <p class="drawer-status">no Project selected</p>
-      <p class="drawer-empty">Agent context belongs to a Project. Select one to inspect its instruction and memory files.</p>
+      <p class="drawer-status">{t("AgentContextTab.b4b1fa111c")}</p>
+      <p class="drawer-empty">{t("AgentContextTab.0d34ffe109")}</p>
     </>
   }
 
@@ -343,7 +343,7 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
         },
         { timeoutMs: REQUEST_TIMEOUT_MS },
       )
-      setMessage(`${result.target} now matches ${preview.source.label}. A restore point was saved.`)
+      setMessage(t("AgentContextTab.05f4fedc21", { target: result.target, label: preview.source.label }))
       setSelectedId(inventory?.sync_options.find(option => option.direction === preview.direction)?.target_id || '')
       setPreview(null)
       await refresh()
@@ -390,7 +390,7 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
         },
         { timeoutMs: REQUEST_TIMEOUT_MS },
       )
-      setMessage(`${result.target} now links to ${linkPreview.source.label}. A restore point was saved.`)
+      setMessage(t("AgentContextTab.8ac1498432", { target: result.target, label: linkPreview.source.label }))
       setSelectedId(inventory?.sync_options.find(option => option.direction === linkPreview.direction)?.target_id || '')
       setLinkPreview(null)
       await refresh()
@@ -412,7 +412,7 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
         { source_id: item.id, target_revision: item.revision },
         { timeoutMs: REQUEST_TIMEOUT_MS },
       )
-      setMessage(`${result.target} is independent again and keeps the current linked content.`)
+      setMessage(t("AgentContextTab.1e90392c68", { target: result.target }))
       setSelectedId(item.id)
       setUnlinkConfirm(null)
       await refresh()
@@ -435,7 +435,7 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
         { backup_id: backup.id, target_revision: targetRevision },
         { timeoutMs: REQUEST_TIMEOUT_MS },
       )
-      setMessage(`${backup.target} was restored. The replaced state was also backed up.`)
+      setMessage(t("AgentContextTab.28c02098d0", { target: backup.target }))
       setRestoreConfirm(null)
       await refresh()
     } catch (cause) {
@@ -484,15 +484,13 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
     <header class="agent-context-header">
       <div>
         <small title={focusCwd || project.root}>
-          {focusedAgent
-            ? `${focusedAgent.backend} focused · ${focusCwd || project.root}`
-            : `${project.name} · Project inventory`}
+          {focusedAgent ? t("AgentContextTab.eb34ec31ed", { backend: focusedAgent.backend, value2: focusCwd || project.root }) : t("AgentContextTab.cd9142b1ca", { name: project.name })}
         </small>
       </div>
       {/* The one read that skips both caches, on both ends. "Rescan" has to mean it: a
           stat signature cannot see a same-size rewrite landing in the same nanosecond,
           and this is what a reader presses when they believe they are looking at one. */}
-      <button disabled={loading || !!busy} onClick={() => void refresh(true)}>{loading ? 'scanning…' : 'rescan'}</button>
+      <button disabled={loading || !!busy} onClick={() => void refresh(true)}>{loading ? t("AgentContextTab.15fd21ae62") : t("AgentContextTab.2944692d97")}</button>
     </header>
 
     {(error || message) && <p class={`agent-context-notice ${error ? 'error' : ''}`} aria-live="polite">
@@ -505,14 +503,14 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
       open={AGENT_CONTEXT_DISCLOSURE_DEFAULTS.projectInstructions}
     >
       <summary>
-        <span>Project instructions</span>
+        <span>{t("AgentContextTab.6205b4d88e")}</span>
         {inventory && <i class={`context-comparison ${inventory.instructions.comparison}`}>
           {comparisonLabel(inventory.instructions.comparison)}
         </i>}
       </summary>
       <div class="agent-context-disclosure-body">
         <div class="agent-context-disclosure-intro">
-          <button disabled={!inventory || !!busy} onClick={() => setSyncOpen(true)}>sync…</button>
+          <button disabled={!inventory || !!busy} onClick={() => setSyncOpen(true)}>{t("AgentContextTab.50c3fcb98b")}</button>
         </div>
         <div class="agent-context-sources">
           {instructions.map(item => <SourceRow
@@ -533,9 +531,9 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
       class="agent-context-disclosure agent-context-instructions"
       open={AGENT_CONTEXT_DISCLOSURE_DEFAULTS.globalInstructions}
     >
-      <summary><span>Global instructions</span></summary>
+      <summary><span>{t("AgentContextTab.4b8b3efd0b")}</span></summary>
       <div class="agent-context-disclosure-body">
-        <p>User-level instruction files shared by every Project for each provider.</p>
+        <p>{t("AgentContextTab.af8e707470")}</p>
         <div class="agent-context-sources">
           {globalInstructions.map(item => <SourceRow
             key={item.id}
@@ -556,14 +554,14 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
       open={AGENT_CONTEXT_DISCLOSURE_DEFAULTS.memories}
     >
       <summary>
-        <span>Memories</span>
-        <i>{memories} file{memories === 1 ? '' : 's'}</i>
+        <span>{t("AgentContextTab.e7218b5e4a")}</span>
+        <i>{rich("AgentContextTab.22fb26c456", { memories: memories, value2: (memories === 1) ? 'yes' : 'no' })}</i>
       </summary>
       <div class="agent-context-memory-list">
         {providers.map(provider => <section class="agent-context-memory-provider" key={provider.id}>
           <header>
             <h4>{provider.label}</h4>
-            {focusedAgent?.backend === provider.id && <i class="context-state focused">focused agent</i>}
+            {focusedAgent?.backend === provider.id && <i class="context-state focused">{t("AgentContextTab.25f9f86c76")}</i>}
             <i class={`context-state ${provider.status}`}>{statusLabel(provider.status)}</i>
           </header>
           <p>{provider.detail}</p>
@@ -578,7 +576,7 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
               onRevealMenu={(item, x, y) => setSourceMenu({ item, x, y })}
             />)}
           </div>}
-          {provider.truncated && <p>Showing {provider.items.length} of {provider.item_count} memory files.</p>}
+          {provider.truncated && <p>{rich("AgentContextTab.6e583b6d74", { length: provider.items.length, item_count: provider.item_count })}</p>}
         </section>)}
       </div>
     </details>
@@ -590,19 +588,19 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
         a labelled region now, with its own heading rule, whether or not it holds anything. */}
     <section class={`agent-context-viewer ${selectedId ? '' : 'empty'}`}>
       <header>
-        <span class="agent-context-viewer-kicker">Preview</span>
-        <strong>{selectedId ? (selected?.source.label || 'Loading…') : 'No file selected'}</strong>
-        {selectedId && selected && <small>{selected.source.provider} · read-only · {formatBytes(selected.source.size)}</small>}
-        {selectedId && <button class="agent-context-viewer-clear" title="Close this file" onClick={() => setSelectedId('')}>×</button>}
+        <span class="agent-context-viewer-kicker">{t("AgentContextTab.324b134f57")}</span>
+        <strong>{selectedId ? (selected?.source.label || t("AgentContextTab.ba3bbbe10d")) : t("AgentContextTab.26bfbd5c83")}</strong>
+        {selectedId && selected && <small>{rich("AgentContextTab.b2de9a7c2e", { provider: selected.source.provider, value2: formatBytes(selected.source.size) })}</small>}
+        {selectedId && <button class="agent-context-viewer-clear" title={t("AgentContextTab.6f1ca61c86")} onClick={() => setSelectedId('')}>×</button>}
       </header>
-      {selectedId && (selected ? <pre tabIndex={0}>{selected.text}</pre> : <p>Reading source…</p>)}
+      {selectedId && (selected ? <pre tabIndex={0}>{selected.text}</pre> : <p>{t("AgentContextTab.8e9e4d2e37")}</p>)}
     </section>
 
     {sourceMenu && <div
       class="context-menu agent-context-source-menu"
       ref={element => { sourceMenuPanel.current = element; fitMenuInViewport(element) }}
       role="menu"
-      aria-label={`File actions for ${sourceMenu.item.label}`}
+      aria-label={t("AgentContextTab.67a942d90b", { label: sourceMenu.item.label })}
       style={{
         left: clampContextMenuLeft(sourceMenu.x, window.innerWidth),
         top: Math.max(4, Math.min(sourceMenu.y, window.innerHeight - 80)),
@@ -610,14 +608,14 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
       onMouseDown={event => event.stopPropagation()}
     >
       <div class="context-title"><strong>{sourceMenu.item.label}</strong></div>
-      <button role="menuitem" onClick={() => void revealSource(sourceMenu.item)}>Open in default explorer</button>
+      <button role="menuitem" onClick={() => void revealSource(sourceMenu.item)}>{t("AgentContextTab.4bbc7fc723")}</button>
     </div>}
 
     {syncOpen && <div class="modal-layer agent-context-sync-layer" onMouseDown={event => event.target === event.currentTarget && closeSync()}>
-      <section ref={syncPanel} class="modal agent-context-sync-modal" role="dialog" aria-modal="true" aria-label="Manage instruction sync">
+      <section ref={syncPanel} class="modal agent-context-sync-modal" role="dialog" aria-modal="true" aria-label={t("AgentContextTab.444b403821")}>
         <div class="modal-heading">
-          <div><span>AGENT CONTEXT</span><h2>Instruction sync</h2></div>
-          <button type="button" aria-label="Close instruction sync" onClick={closeSync}>×</button>
+          <div><span>{t("AgentContextTab.ad0657f6eb")}</span><h2 data-heading-message="AgentContextTab.75c9be9efe">{t("AgentContextTab.75c9be9efe")}</h2></div>
+          <button type="button" aria-label={t("AgentContextTab.9311a168f8")} onClick={closeSync}>×</button>
         </div>
         <div class="agent-context-sync-body">
           {(error || message) && <p class={`agent-context-notice ${error ? 'error' : ''}`} aria-live="polite">
@@ -625,125 +623,111 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
           </p>}
           <section class="agent-context-sync-card">
             <header>
-              <div><strong>Copy once</strong><small>{project.root}</small></div>
+              <div><strong>{t("AgentContextTab.acfaa3d4d6")}</strong><small>{project.root}</small></div>
               {inventory && <i class={`context-comparison ${inventory.instructions.comparison}`}>
                 {comparisonLabel(inventory.instructions.comparison)}
               </i>}
             </header>
-            <p>Choose a direction, review the diff, then confirm the whole-file overwrite.</p>
+            <p>{t("AgentContextTab.da259c99fb")}</p>
             <div class="agent-context-sync">
               {(inventory?.sync_options || []).map(option => <button
                 key={option.direction}
                 disabled={!sourceExists.get(option.source) || managedLinks.length > 0 || !!busy}
                 onClick={() => void openPreview(option.direction)}
               >
-                {busy === `preview:${option.direction}` ? 'preparing…' : `${option.source} → ${option.target}`}
+                {busy === `preview:${option.direction}` ? t("AgentContextTab.586466fe59") : t("AgentContextTab.56fcac7a82", { source: option.source, target: option.target })}
               </button>)}
             </div>
           </section>
 
-          {preview && <section class="agent-context-confirm" aria-label="Confirm instruction sync">
+          {preview && <section class="agent-context-confirm" aria-label={t("AgentContextTab.81223b1be7")}>
             <header>
-              <strong>Overwrite {preview.target.label}?</strong>
-              <small>{preview.source.label} will replace the entire file. A restore point is created first.</small>
+              <strong>{rich("AgentContextTab.fa5eeb30f8", { label: preview.target.label })}</strong>
+              <small>{rich("AgentContextTab.034bd68a3e", { label: preview.source.label })}</small>
             </header>
-            {preview.in_sync
-              ? <p>The normalized contents already match; there is nothing to copy.</p>
-              : <pre>{preview.diff || '(The destination is empty.)'}</pre>}
+            {preview.in_sync ? <p>{t("AgentContextTab.9e154f7071")}</p> : <pre>{preview.diff || t("AgentContextTab.b6693d24f3")}</pre>}
             <footer>
-              <button onClick={() => setPreview(null)}>cancel</button>
+              <button onClick={() => setPreview(null)}>{t("AgentContextTab.2374d91794")}</button>
               <button class="danger" disabled={preview.in_sync || busy === 'sync'} onClick={() => void commitSync()}>
-                {busy === 'sync' ? 'overwriting…' : `overwrite ${preview.target.label}`}
+                {busy === 'sync' ? t("AgentContextTab.2c5fde28bc") : t("AgentContextTab.85575f2d2c", { label: preview.target.label })}
               </button>
             </footer>
           </section>}
 
           <section class="agent-context-sync-card">
             <header>
-              <div><strong>Keep linked</strong><small>Relative Project-root symbolic link</small></div>
-              {managedLinks.length > 0 && <i class="context-comparison linked">Linked</i>}
+              <div><strong>{t("AgentContextTab.d27dd3eef7")}</strong><small>{t("AgentContextTab.fb10228e58")}</small></div>
+              {managedLinks.length > 0 && <i class="context-comparison linked">{t("AgentContextTab.bfda026e6c")}</i>}
             </header>
-            <p>Choose which file remains canonical. The other filename becomes a relative link to it, and both agents read the same content.</p>
-            {managedLinks.length > 0
-              ? managedLinks.map(item => {
+            <p>{t("AgentContextTab.d62803b138")}</p>
+            {managedLinks.length > 0 ? managedLinks.map(item => {
                 const confirming = unlinkConfirm?.id === item.id
                 return <div class="agent-context-backup" key={`link:${item.id}`}>
                   <span>
-                    <strong>{item.label} links to {item.link_target}</strong>
-                    <small>Unlinking keeps the current shared content in an independent file.</small>
+                    <strong>{rich("AgentContextTab.4e8078eee1", { label: item.label, link_target: item.link_target })}</strong>
+                    <small>{t("AgentContextTab.cdb7337e96")}</small>
                   </span>
-                  {confirming
-                    ? <span class="agent-context-backup-confirm">
-                      <button onClick={() => setUnlinkConfirm(null)}>cancel</button>
+                  {confirming ? <span class="agent-context-backup-confirm">
+                      <button onClick={() => setUnlinkConfirm(null)}>{t("AgentContextTab.2374d91794")}</button>
                       <button class="danger" disabled={!!busy} onClick={() => void commitUnlink(item)}>
-                        {busy === `unlink:${item.id}` ? 'unlinking...' : 'unlink and keep content'}
+                        {busy === `unlink:${item.id}` ? t("AgentContextTab.a62eac49df") : t("AgentContextTab.3a12eb44bb")}
                       </button>
-                    </span>
-                    : <button disabled={!!busy} onClick={() => {
+                    </span> : <button disabled={!!busy} onClick={() => {
                       setUnlinkConfirm(item)
                       setLinkPreview(null)
                       setPreview(null)
                       setRestoreConfirm(null)
-                    }}>unlink...</button>}
+                    }}>{t("AgentContextTab.3ff361099f")}</button>}
                 </div>
-              })
-              : <div class="agent-context-sync">
+              }) : <div class="agent-context-sync">
                 {(inventory?.sync_options || []).map(option => <button
                   key={`link:${option.direction}`}
                   disabled={!linkableSources.get(option.source_id) || !linkableTargets.get(option.target_id) || !!busy}
-                  title={`${option.target} will become a relative link to ${option.source}`}
+                  title={t("AgentContextTab.bb3aa9853a", { target: option.target, source: option.source })}
                   onClick={() => void openLinkPreview(option.direction)}
                 >
-                  {busy === `link-preview:${option.direction}` ? 'preparing...' : canonicalLinkLabel(option)}
+                  {busy === `link-preview:${option.direction}` ? t("AgentContextTab.24f20c2546") : canonicalLinkLabel(option)}
                 </button>)}
               </div>}
-            <p>Availability depends on the host filesystem. Windows requires Developer Mode or symbolic-link privilege; swe-mux does not elevate. A committed symlink can check out as plain text when Git symlink support is disabled.</p>
+            <p>{t("AgentContextTab.b47a18ff85")}</p>
           </section>
 
-          {linkPreview && <section class="agent-context-confirm" aria-label="Confirm instruction link">
+          {linkPreview && <section class="agent-context-confirm" aria-label={t("AgentContextTab.badc38e910")}>
             <header>
-              <strong>Link {linkPreview.target.label} to {linkPreview.source.label}?</strong>
-              <small>{linkPreview.source.label} remains canonical. {linkPreview.target.label} stops being an independent file. A restore point is created first.</small>
+              <strong>{rich("AgentContextTab.8ab0bd02eb", { label: linkPreview.target.label, value2: linkPreview.source.label })}</strong>
+              <small>{rich("AgentContextTab.b2e350a48b", { label: linkPreview.source.label, value2: linkPreview.target.label })}</small>
             </header>
-            {linkPreview.already_linked
-              ? <p>These files are already linked.</p>
-              : linkPreview.diff
-                ? <pre>{linkPreview.diff}</pre>
-                : <p>The destination is missing or already has matching content.</p>}
-            <p>Future writes through either filename normally change the canonical file. A tool that replaces the linked directory entry can break the relationship; Rescan will show that state.</p>
+            {linkPreview.already_linked ? <p>{t("AgentContextTab.58dc994a04")}</p> : linkPreview.diff ? <pre>{linkPreview.diff}</pre> : <p>{t("AgentContextTab.472d649c1f")}</p>}
+            <p>{t("AgentContextTab.6ef54c2469")}</p>
             <footer>
-              <button onClick={() => setLinkPreview(null)}>cancel</button>
+              <button onClick={() => setLinkPreview(null)}>{t("AgentContextTab.2374d91794")}</button>
               <button class="danger" disabled={linkPreview.already_linked || busy === 'link'} onClick={() => void commitLink()}>
-                {busy === 'link' ? 'linking...' : `link ${linkPreview.target.label}`}
+                {busy === 'link' ? t("AgentContextTab.d0833b268a") : t("AgentContextTab.7b2b9cbab8", { label: linkPreview.target.label })}
               </button>
             </footer>
           </section>}
 
           <section class="agent-context-sync-card agent-context-backups">
-            <header><div><strong>Restore points</strong><small>Created before every copy, link, unlink, or restore.</small></div></header>
-            {(inventory?.backups.length || 0) === 0
-              ? <p>No restore points yet.</p>
-              : inventory!.backups.map(backup => {
+            <header><div><strong>{t("AgentContextTab.29f90b645a")}</strong><small>{t("AgentContextTab.6a97da62ec")}</small></div></header>
+            {(inventory?.backups.length || 0) === 0 ? <p>{t("AgentContextTab.efb291e282")}</p> : inventory!.backups.map(backup => {
                 const confirming = restoreConfirm?.id === backup.id
                 const canRestore = currentRevision.has(backup.target)
                 return <div class="agent-context-backup" key={backup.id}>
                   <span>
                     <strong>{backupAction(backup)}</strong>
-                    <small>{formatTime(backup.created_at)} · {backup.existed ? formatBytes(backup.size) : 'file did not exist'}</small>
+                    <small>{formatTime(backup.created_at)} · {backup.existed ? formatBytes(backup.size) : t("AgentContextTab.7da59b277b")}</small>
                   </span>
-                  {confirming
-                    ? <span class="agent-context-backup-confirm">
-                      <button onClick={() => setRestoreConfirm(null)}>cancel</button>
+                  {confirming ? <span class="agent-context-backup-confirm">
+                      <button onClick={() => setRestoreConfirm(null)}>{t("AgentContextTab.2374d91794")}</button>
                       <button class="danger" disabled={!canRestore || !!busy} onClick={() => void restore(backup)}>
-                        {busy === `restore:${backup.id}` ? 'restoring…' : 'restore now'}
+                        {busy === `restore:${backup.id}` ? t("AgentContextTab.38de3dcd94") : t("AgentContextTab.dfc454e79e")}
                       </button>
-                    </span>
-                    : <button disabled={!canRestore || !!busy} onClick={() => { setRestoreConfirm(backup); setPreview(null) }}>restore…</button>}
+                    </span> : <button disabled={!canRestore || !!busy} onClick={() => { setRestoreConfirm(backup); setPreview(null) }}>{t("AgentContextTab.7af7c43080")}</button>}
                 </div>
               })}
           </section>
         </div>
-        <div class="modal-footer"><button type="button" onClick={closeSync}>Close</button></div>
+        <div class="modal-footer"><button type="button" onClick={closeSync}>{t("AgentContextTab.7d9eb7acb1")}</button></div>
       </section>
     </div>}
   </div>

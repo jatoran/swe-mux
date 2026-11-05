@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // Sidebar ordering: how Projects are sorted at the root and inside Groups, and where
 // the Groups themselves sit among them. Pure so the guard logic can be unit tested under
 // the node type-stripping runner; the caller supplies the records and the user-action
@@ -38,12 +39,12 @@ export interface ProjectSortOption {
 }
 
 export const PROJECT_SORT_OPTIONS: ProjectSortOption[] = [
-  { id: 'custom', label: 'Manual order', hint: 'The order you dragged them into' },
-  { id: 'activity', label: 'Recently used', hint: 'Latest prompt submit or session start first' },
-  { id: 'name', label: 'Name (A→Z)', hint: 'Alphabetical, numbers in numeric order' },
-  { id: 'name-desc', label: 'Name (Z→A)', hint: 'Reverse alphabetical' },
-  { id: 'created-desc', label: 'Newest first', hint: 'Most recently added Project first' },
-  { id: 'created', label: 'Oldest first', hint: 'Longest-registered Project first' },
+  { id: 'custom', get label() { return t("projectSort.3634933710") }, get hint() { return t("projectSort.decc098b8a") } },
+  { id: 'activity', get label() { return t("projectSort.1e7cf8df9b") }, get hint() { return t("projectSort.0175554500") } },
+  { id: 'name', get label() { return t("projectSort.ea9056f9ba") }, get hint() { return t("projectSort.738f8beb19") } },
+  { id: 'name-desc', get label() { return t("projectSort.d5d5a9b899") }, get hint() { return t("projectSort.9580acba29") } },
+  { id: 'created-desc', get label() { return t("projectSort.ffb6f5764b") }, get hint() { return t("projectSort.e63d449f19") } },
+  { id: 'created', get label() { return t("projectSort.6e2ebdab3c") }, get hint() { return t("projectSort.1e092356e2") } },
 ]
 
 const SORT_MODES = new Set<string>(PROJECT_SORT_OPTIONS.map(option => option.id))
@@ -53,7 +54,7 @@ export function isProjectSortMode(value: unknown): value is ProjectSortMode {
 }
 
 export function projectSortLabel(mode: ProjectSortMode): string {
-  return PROJECT_SORT_OPTIONS.find(option => option.id === mode)?.label || 'Manual order'
+  return PROJECT_SORT_OPTIONS.find(option => option.id === mode)?.label || t("projectSort.3634933710")
 }
 
 export interface SidebarOrderPrefs {

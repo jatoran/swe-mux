@@ -1,3 +1,4 @@
+import { rich, t } from './localization/index.ts'
 import { useState } from 'preact/hooks'
 import { api } from './api'
 import {
@@ -79,28 +80,20 @@ export function GitLandRow({ project, worktreeRoot, branch, detached, queue, onC
 
   const installStopped = queue !== null && !queue.installedEnabled
 
-  return <section class="git-land-row-section" aria-label={`Auto-merge ${branch || worktreeRoot}`}>
+  return <section class="git-land-row-section" aria-label={t("GitLandRow.42a40f5b62", { value1: branch || worktreeRoot })}>
     {error && <p class="git-state error" role="alert">{error}</p>}
 
     {/* A detached worktree is stated rather than offered and then refused: the daemon
         has no branch name to fast-forward from. */}
-    {detached && <p class="git-change-empty">
-      This worktree is on a detached HEAD. Create a named branch here before merging it.
-    </p>}
+    {detached && <p class="git-change-empty">{t("GitLandRow.64b17b19ab")}</p>}
 
-    {!detached && (active
-      ? <LandProgress request={active} busy={busy} onCancel={() => void cancel(active.id)} />
-      : <div class="git-land-launch">
-        <button disabled={busy || !branch} onClick={() => void enqueue()}>
-          Auto-merge {branch}
-        </button>
-        <small>fast-forward only · the daemon runs it, not this button</small>
+    {!detached && (active ? <LandProgress request={active} busy={busy} onCancel={() => void cancel(active.id)} /> : <div class="git-land-launch">
+        <button disabled={busy || !branch} onClick={() => void enqueue()}>{rich("GitLandRow.af88597015", { branch: branch })}</button>
+        <small>{t("GitLandRow.67daef8fc7")}</small>
         {/* One line, and a way to act on it. The strip states which of the two causes
             it is and holds the control; repeating either here would put a Project-wide
             answer under every worktree, which is the repetition this row shed. */}
-        {installStopped && <button class="git-land-elsewhere" onClick={onShowLanding}>
-          auto-merge is switched off - open Auto-merge
-        </button>}
+        {installStopped && <button class="git-land-elsewhere" onClick={onShowLanding}>{t("GitLandRow.ea40d9a964")}</button>}
       </div>)}
 
     {/* What happened last time, and why. A conflict's paths and a refusal's reason are
@@ -123,20 +116,17 @@ export function GitLandRow({ project, worktreeRoot, branch, detached, queue, onC
       </p>
       {last.paths.length > 0 && <ul class="git-land-paths">
         {last.paths.slice(0, 12).map(path => <li key={path}><code>{path}</code></li>)}
-        {last.paths.length > 12 && <li><small>and {last.paths.length - 12} more</small></li>}
+        {last.paths.length > 12 && <li><small>{rich("GitLandRow.edb26af65a", { value1: last.paths.length - 12 })}</small></li>}
       </ul>}
       {/* Answered by the trunk rather than by the queue. A fast-forward refusal tells its
           author to merge and land by hand, and doing so left this row saying a block
           still stood over work the trunk already had. */}
-      {last.absorbedByTrunk && <p class="git-land-absorbed">
-        The trunk already contains what this asked to land.
-      </p>}
+      {last.absorbedByTrunk && <p class="git-land-absorbed">{t("GitLandRow.1453760430")}</p>}
       {/* The reason line is one sentence; this is the whole message the daemon wrote for
           whoever has to act on it. A manual Land has no agent session to send it to, so
           without this the requester standing right here was the only one who never got
           the explanation. */}
-      {(last.state === 'refused' || last.state === 'handed_back')
-        && <LandMessage requestId={last.id} />}
+      {(last.state === 'refused' || last.state === 'handed_back') && <LandMessage requestId={last.id} />}
     </div>}
   </section>
 }
@@ -167,19 +157,17 @@ function LandProgress({ request, busy, onCancel }: {
           apart. */}
       {landKindNote(request) && <small class="git-land-kind-note">{landKindNote(request)}</small>}
       {label && <span class="git-land-progress-detail">{label}</span>}
-      {request.origin !== 'operator' && <small>requested by agent</small>}
-      {cancellable && <button disabled={busy} onClick={onCancel}>Cancel</button>}
+      {request.origin !== 'operator' && <small>{t("GitLandRow.f9071a2bdf")}</small>}
+      {cancellable && <button disabled={busy} onClick={onCancel}>{t("GitLandRow.19766ed6cc")}</button>}
     </div>
     {request.reason && <p class="git-land-reason">{request.reason}</p>}
     {/* Steps this run has finished, with what each of them actually took. A list of
         facts about the run on screen, never an estimate of the one still going. */}
     {progress && progress.completedSteps.length > 0 && <ol class="git-land-steps">
       {progress.completedSteps.map(step => <li key={step.name}>
-        <span>{step.name}</span><small>{Math.round(step.durationMs / 1000)}s</small>
+        <span>{step.name}</span><small>{rich("GitLandRow.6732456ec2", { value1: Math.round(step.durationMs / 1000) })}</small>
       </li>)}
     </ol>}
-    {progress && progress.beyondPlan && <small class="git-land-note">
-      This run has more steps than the last one that passed, so there is no total to show.
-    </small>}
+    {progress && progress.beyondPlan && <small class="git-land-note">{t("GitLandRow.2f5d12a756")}</small>}
   </div>
 }

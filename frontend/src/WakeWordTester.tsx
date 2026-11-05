@@ -1,3 +1,4 @@
+import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { buildVoiceMatcher, conversationCapability, DEFAULT_COMMANDS, DEFAULT_WAKE_WORDS, PersistentVoiceCapture } from './conversation'
 import type { CaptureMarks } from './voiceLatency'
@@ -31,9 +32,7 @@ export function WakeWordTester({ wakeWords, commands, available, diagnostic }: {
   const targetRef = useRef(target)
   targetRef.current = target
   const matcher = useMemo(
-    () => buildVoiceMatcher(wakeWords.length ? wakeWords : DEFAULT_WAKE_WORDS, commands.length ? commands : DEFAULT_COMMANDS),
-    [wakeWords, commands],
-  )
+    () => buildVoiceMatcher(wakeWords.length ? wakeWords : DEFAULT_WAKE_WORDS, commands.length ? commands : DEFAULT_COMMANDS), [wakeWords, commands, uiLocale.value, catalogRevision.value])
   const matcherRef = useRef(matcher)
   matcherRef.current = matcher
   const wakeRef = useRef(wakeWords)
@@ -74,13 +73,13 @@ export function WakeWordTester({ wakeWords, commands, available, diagnostic }: {
   const start = async () => {
     const capability = conversationCapability()
     if (!capability.available) { setStatus(capability.reason); return }
-    if (!available) { setStatus(diagnostic || 'Daemon transcription is unavailable.'); return }
+    if (!available) { setStatus(diagnostic || t("WakeWordTester.c3629f50b0")); return }
     setTrials([])
-    setStatus('Requesting microphone…')
+    setStatus(t("WakeWordTester.619398e5a3"))
     const capture = new PersistentVoiceCapture({
       playbackActive: () => false,
-      onSpeechStart: () => setStatus('Listening…'),
-      onSpeechEnd: () => setStatus('Heard you.'),
+      onSpeechStart: () => setStatus(t("WakeWordTester.bbb4106e81")),
+      onSpeechEnd: () => setStatus(t("WakeWordTester.799ad5fa32")),
       // Speculation is the command path's latency trick, not part of what is being
       // measured; the tester scores one decode per spoken utterance.
       onSpeculative: () => {},
@@ -94,7 +93,7 @@ export function WakeWordTester({ wakeWords, commands, available, diagnostic }: {
       captureRef.current = capture
       runningRef.current = true
       setRunning(true)
-      setStatus('Say the wake word and a command, the way you normally would.')
+      setStatus(t("WakeWordTester.4bc74251ac"))
     } catch (cause) {
       capture.stop()
       setStatus(cause instanceof Error ? cause.message : String(cause))
@@ -106,45 +105,39 @@ export function WakeWordTester({ wakeWords, commands, available, diagnostic }: {
   useEffect(() => {
     if (running && trials.length >= targetRef.current) {
       stop()
-      setStatus('Done. Read the misses first — those are the variants worth adding.')
+      setStatus(t("WakeWordTester.a57f0effd6"))
     }
   }, [trials.length, running])
 
   const report = summarizeTrials(trials)
   const suggestion = report.total === 0 ? ''
     : report.wakeHeard < report.total
-      ? `The wake word was missed ${report.total - report.wakeHeard} of ${report.total} times. Add the spellings under "heard" to the wake-word list, or pick a trigger that is longer and more distinctive.`
+      ? t("WakeWordTester.05ecf24d82", { value1: report.total - report.wakeHeard, value2: report.total })
       : report.matched < report.total
-        ? 'The wake word was heard every time, so the trigger is fine; the command phrase after it is what did not match. Add the phrasings you actually used.'
-        : 'Every utterance matched. This trigger word and phrase set survive the recognizer.'
+        ? t("WakeWordTester.f3435be87f")
+        : t("WakeWordTester.b5d72a89d3")
 
   return <div class="wake-test">
     <div class="wake-test-actions">
-      <label>Utterances<input type="number" min="3" max="50" value={target} disabled={running} onInput={event => setTarget(Math.max(3, Math.min(50, Number(event.currentTarget.value) || 10)))} /></label>
-      {running
-        ? <button onClick={stop}>Stop ({trials.length}/{target})</button>
-        : <button class="primary" onClick={() => void start()}>Start test</button>}
-      {trials.length > 0 && !running && <button onClick={() => setTrials([])}>Clear</button>}
+      <label>{rich("WakeWordTester.9fefa18c48", { value1: <input type="number" min="3" max="50" value={target} disabled={running} onInput={event => setTarget(Math.max(3, Math.min(50, Number(event.currentTarget.value) || 10)))} /> })}</label>
+      {running ? <button onClick={stop}>{rich("WakeWordTester.b60d5c2b58", { length: trials.length, target: target })}</button> : <button class="primary" onClick={() => void start()}>{t("WakeWordTester.664ffe9913")}</button>}
+      {trials.length > 0 && !running && <button onClick={() => setTrials([])}>{t("WakeWordTester.83b12c2216")}</button>}
     </div>
     {status && <p aria-live="polite">{status}</p>}
     {trials.length > 0 && <>
       <table class="wake-test-table">
-        <thead><tr><th>#</th><th>heard</th><th>wake</th><th>matched</th><th>decode</th></tr></thead>
+        <thead><tr><th>#</th><th>{t("WakeWordTester.0040953a08")}</th><th>{t("WakeWordTester.51391bf0ab")}</th><th>{t("WakeWordTester.eadc688cd5")}</th><th>{t("WakeWordTester.713a1417c7")}</th></tr></thead>
         <tbody>
           {trials.map((trial, index) => <tr key={index} class={trial.command ? '' : 'wake-test-miss'}>
             <td>{index + 1}</td>
-            <td>{trial.text || <em>(nothing recognized)</em>}</td>
+            <td>{trial.text || <em>{t("WakeWordTester.c59708c4f2")}</em>}</td>
             <td>{trial.wake || '—'}</td>
             <td>{trial.command || '—'}</td>
-            <td>{trial.decodeMs ? `${trial.decodeMs} ms` : '—'}</td>
+            <td>{trial.decodeMs ? t("WakeWordTester.e060faa28a", { decodeMs: trial.decodeMs }) : '—'}</td>
           </tr>)}
         </tbody>
       </table>
-      <p>
-        Matched {report.matched}/{report.total} · wake word heard {report.wakeHeard}/{report.total}
-        {report.medianDecodeMs ? ` · median decode ${report.medianDecodeMs} ms` : ''}
-        {report.byCommand.length ? ` · ${report.byCommand.map(entry => `${entry.command} ×${entry.count}`).join(', ')}` : ''}
-      </p>
+      <p>{rich("WakeWordTester.c67c0ca7ae", { matched: report.matched, total: report.total, wakeHeard: report.wakeHeard, value4: report.total, value5: report.medianDecodeMs ? t("WakeWordTester.13f0cabaa4", { medianDecodeMs: report.medianDecodeMs }) : '', value6: report.byCommand.length ? t("WakeWordTester.f6b53f9c8a", { value1: report.byCommand.map(entry => `${entry.command} ×${entry.count}`).join(', ') }) : '' })}</p>
       {suggestion && <p class={report.matched < report.total ? 'settings-inline-error' : ''}>{suggestion}</p>}
     </>}
   </div>

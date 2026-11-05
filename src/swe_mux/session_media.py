@@ -6,6 +6,8 @@ import logging
 from contextlib import suppress
 from pathlib import Path
 
+from .ui_messages import ui_message
+
 log = logging.getLogger(__name__)
 
 
@@ -36,13 +38,13 @@ _MEDIA_SIGNATURES = {
 def validate_session_media(media_type: str, data: bytes | bytearray) -> str:
     suffix = _MEDIA_TYPES.get(media_type)
     if suffix is None:
-        raise ValueError("supported clipboard image types: PNG, JPEG, WebP, GIF")
+        raise ValueError(ui_message("session_media.3a8bbd3c3b"))
     if len(data) > 10 * 1024 * 1024:
-        raise ValueError("clipboard image exceeds the 10 MiB limit")
+        raise ValueError(ui_message("session_media.4f8aa05adc"))
     if not any(data.startswith(signature) for signature in _MEDIA_SIGNATURES[media_type]):
-        raise ValueError("clipboard image content does not match its declared type")
+        raise ValueError(ui_message("session_media.e0e4044f0f"))
     if media_type == "image/webp" and data[8:12] != b"WEBP":
-        raise ValueError("clipboard image content does not match its declared type")
+        raise ValueError(ui_message("session_media.e0e4044f0f"))
     return suffix
 
 
@@ -50,7 +52,7 @@ def session_media_directory(data_dir: Path, session_id: str) -> Path:
     root = (data_dir / "media").resolve()
     directory = (root / session_id).resolve()
     if directory.parent != root:
-        raise ValueError("invalid session media identity")
+        raise ValueError(ui_message("session_media.904435a9d3"))
     return directory
 
 

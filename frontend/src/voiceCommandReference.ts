@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import type { Command } from './commands.ts'
 
 export type VoiceHelpCategory = 'reading' | 'sessions' | 'projects' | 'navigation' | 'dictation' | 'approvals'
@@ -14,23 +15,23 @@ export const VOICE_HELP_COMMANDS:Record<VoiceHelpCategory,string[]>={
 export const VOICE_ACTION_ORDER=['send','append','cancel','undo','mute','read','summary','verbatim','interrupt','help','standby','resume','hold','proceed','comms_on','comms_off','stop'] as const
 
 export const VOICE_ACTION_META:Record<string,{label:string;hint:string}>={
-  send:{label:'Send / submit',hint:'submit the buffered message'},
-  append:{label:'Append',hint:'append the buffer without submitting'},
-  cancel:{label:'Cancel / clear',hint:'clear the whole draft'},
-  undo:{label:'Undo',hint:'remove the last transcribed phrase'},
-  mute:{label:'Mute',hint:'stop playback, keep listening'},
-  read:{label:'Read reply',hint:'speak the latest reply'},
-  summary:{label:'Summary mode',hint:'switch spoken replies to summaries'},
-  verbatim:{label:'Verbatim mode',hint:'switch spoken replies to verbatim'},
-  interrupt:{label:'Interrupt',hint:'stop playback and send Ctrl-C to the agent'},
-  help:{label:'Help',hint:'list the commands'},
-  standby:{label:'Standby',hint:'keep listening but ignore speech until resumed'},
-  resume:{label:'Resume',hint:'leave standby and act on speech again'},
-  hold:{label:'Hold (brainstorm)',hint:'chat mode buffers your thinking instead of answering each pause'},
-  proceed:{label:'Go ahead',hint:'send the held brainstorm to the assistant as one message'},
-  comms_on:{label:'Voice Comms on',hint:'request short spoken replies from the focused agent'},
-  comms_off:{label:'Voice Comms off',hint:'restore normal replies and prior read-aloud settings'},
-  stop:{label:'Stop listening',hint:'turn conversation mode off and release the mic'},
+  send:{get label() { return t("voiceCommandReference.520734e7b1") },get hint() { return t("voiceCommandReference.fa18a31a0a") }},
+  append:{get label() { return t("voiceCommandReference.fc15cc0a80") },get hint() { return t("voiceCommandReference.6fd4f20e19") }},
+  cancel:{get label() { return t("voiceCommandReference.0ea0f26a49") },get hint() { return t("voiceCommandReference.cb9097101e") }},
+  undo:{get label() { return t("voiceCommandReference.a8283ade31") },get hint() { return t("voiceCommandReference.4e9325909b") }},
+  mute:{get label() { return t("voiceCommandReference.8dd6857baf") },get hint() { return t("voiceCommandReference.427a7f7b80") }},
+  read:{get label() { return t("voiceCommandReference.fd2dbead21") },get hint() { return t("voiceCommandReference.02b1212572") }},
+  summary:{get label() { return t("voiceCommandReference.52d760bc2e") },get hint() { return t("voiceCommandReference.3deb12c850") }},
+  verbatim:{get label() { return t("voiceCommandReference.2da2936426") },get hint() { return t("voiceCommandReference.4a0be40569") }},
+  interrupt:{get label() { return t("voiceCommandReference.b625231412") },get hint() { return t("voiceCommandReference.9e2fe3d001") }},
+  help:{get label() { return t("voiceCommandReference.b79cac926e") },get hint() { return t("voiceCommandReference.72cec24686") }},
+  standby:{get label() { return t("voiceCommandReference.fcd589c1bc") },get hint() { return t("voiceCommandReference.042d3cfc9a") }},
+  resume:{get label() { return t("voiceCommandReference.d640c7421d") },get hint() { return t("voiceCommandReference.7cd7711ff4") }},
+  hold:{get label() { return t("voiceCommandReference.cbd221d5a1") },get hint() { return t("voiceCommandReference.3941e26538") }},
+  proceed:{get label() { return t("voiceCommandReference.4a6d4a7f29") },get hint() { return t("voiceCommandReference.abbb093f07") }},
+  comms_on:{get label() { return t("voiceCommandReference.297bda6676") },get hint() { return t("voiceCommandReference.94618c5b14") }},
+  comms_off:{get label() { return t("voiceCommandReference.c185122157") },get hint() { return t("voiceCommandReference.80cbc4e8cb") }},
+  stop:{get label() { return t("voiceCommandReference.94fa9b2363") },get hint() { return t("voiceCommandReference.b482e2a908") }},
 }
 
 export type ConfiguredVoiceCommand={action:string;phrases:string[]}
@@ -57,13 +58,13 @@ export type VoiceCatalogSection={
 }
 
 const GROUPS:Array<{id:VoiceReferenceGroup['id'];title:string;matches:(id:string)=>boolean}>=[
-  {id:'status',title:'Status and guarded approvals',matches:id=>id.startsWith('voice.')},
-  {id:'workspace',title:'Workspace and side panels',matches:id=>id.startsWith('drawer.')||id.startsWith('sidebar.')},
-  {id:'projects',title:'Current Projects by name',matches:id=>id.startsWith('project.focus:')},
-  {id:'sessions',title:'Current sessions by name',matches:id=>id.startsWith('session.focus:')||id==='session.nextInProject'||id==='session.previousInProject'},
-  {id:'launch',title:'Start sessions in Projects',matches:id=>id.startsWith('session.spawn:')},
-  {id:'terminal',title:'Focused terminal commands',matches:id=>id.startsWith('terminal.')},
-  {id:'other',title:'Other current commands',matches:()=>true},
+  {id:'status',get title() { return t("voiceCommandReference.733783bd68") },matches:id=>id.startsWith('voice.')},
+  {id:'workspace',get title() { return t("voiceCommandReference.05fd9d2be0") },matches:id=>id.startsWith('drawer.')||id.startsWith('sidebar.')},
+  {id:'projects',get title() { return t("voiceCommandReference.c84044f4ff") },matches:id=>id.startsWith('project.focus:')},
+  {id:'sessions',get title() { return t("voiceCommandReference.62c6c05fe9") },matches:id=>id.startsWith('session.focus:')||id==='session.nextInProject'||id==='session.previousInProject'},
+  {id:'launch',get title() { return t("voiceCommandReference.18ab268616") },matches:id=>id.startsWith('session.spawn:')},
+  {id:'terminal',get title() { return t("voiceCommandReference.ae050f6188") },matches:id=>id.startsWith('terminal.')},
+  {id:'other',get title() { return t("voiceCommandReference.28aa6920a0") },matches:()=>true},
 ]
 
 const uniquePhrases=(phrases:string[])=>[...new Set(phrases.map(phrase=>phrase.trim()).filter(Boolean))]
@@ -125,13 +126,13 @@ export function completeVoiceReference(
   const grammarCategories=category?[category]:Object.keys(VOICE_HELP_COMMANDS) as VoiceHelpCategory[]
   const sections:VoiceCatalogSection[]=grammarCategories.map(name=>({
     id:`grammar:${name}`,
-    title:`${name[0].toUpperCase()+name.slice(1)} grammar`,
+    get title() { return t("voiceCommandReference.d35ace64e3", { value1: name[0].toUpperCase()+name.slice(1) }) },
     phrases:VOICE_HELP_COMMANDS[name],
     commands:[],
   }))
   const configured=configuredActionsFor(configuredCommands,category)
   if(configured.length)sections.push({
-    id:'capture',title:'Configured conversation controls',phrases:[],commands:configured,
+    id:'capture',get title() { return t("voiceCommandReference.591fa4326f") },phrases:[],commands:configured,
   })
   for(const group of registeredVoiceReference(commands)){
     const current=category?group.commands.filter(command=>commandMatchesHelpCategory(command.id,category)):group.commands

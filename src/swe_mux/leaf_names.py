@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import re
 
+from .ui_messages import ui_message
+
 WINDOWS_INVALID_LEAF_CHARS = frozenset('<>:"/\\|?*')
 WINDOWS_RESERVED_LEAF_STEMS = frozenset(
     {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
@@ -44,27 +46,27 @@ def validate_leaf_name(
     """
 
     if not name:
-        raise ValueError(f"{label} must not be empty")
+        raise ValueError(ui_message("leaf_names.489fcc5daa", value1=label))
     if name in {".", ".."}:
-        raise ValueError(f"{label} must be a single file or folder name")
+        raise ValueError(ui_message("leaf_names.15188e3ea8", value1=label))
     if name.casefold() in reserved_names:
-        raise ValueError("project control directory names are reserved")
+        raise ValueError(ui_message("leaf_names.01e968ad25"))
     if name.endswith((" ", ".")):
-        raise ValueError(f"{label}s may not end with a space or dot")
+        raise ValueError(ui_message("leaf_names.8124417c3d", value1=label))
     if any(
         character in WINDOWS_INVALID_LEAF_CHARS or ord(character) < 32 or ord(character) == 127
         for character in name
     ):
-        raise ValueError(f"{label} contains a Windows-invalid character")
+        raise ValueError(ui_message("leaf_names.4ac1ec7350", value1=label))
     try:
         utf16_units = len(name.encode("utf-16-le")) // 2
     except UnicodeEncodeError as exc:
-        raise ValueError(f"{label} contains invalid Unicode") from exc
+        raise ValueError(ui_message("leaf_names.1fea26392d", value1=label)) from exc
     if utf16_units > 255:
-        raise ValueError(f"{label} exceeds 255 UTF-16 code units")
+        raise ValueError(ui_message("leaf_names.b1eac5c5dc", value1=label))
     device_stem = name.split(".", 1)[0].rstrip(" ").upper()
     if device_stem in WINDOWS_RESERVED_LEAF_STEMS:
-        raise ValueError(f"{label} is reserved by Windows")
+        raise ValueError(ui_message("leaf_names.ea9717c00d", value1=label))
 
 
 def suggest_folder_name(name: str) -> str:

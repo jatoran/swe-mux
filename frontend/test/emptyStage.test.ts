@@ -1,10 +1,11 @@
+import { withCatalogText } from './support/localizedSource.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 
-const app = readFileSync(join(import.meta.dirname, '..', 'src', 'App.tsx'), 'utf8')
-const css = readFileSync(join(import.meta.dirname, '..', 'src', 'style.css'), 'utf8')
+const app = withCatalogText(readFileSync(join(import.meta.dirname, '..', 'src', 'App.tsx'), 'utf8'))
+const css = withCatalogText(readFileSync(join(import.meta.dirname, '..', 'src', 'style.css'), 'utf8'))
 
 test('the empty workspace stage offers the Run menu itself, front and centre', () => {
   // The stage used to name four ways to begin and offer none; the only control attached to
@@ -19,16 +20,16 @@ test('the empty workspace stage offers the Run menu itself, front and centre', (
   assert.ok(app.includes("aria-expanded={runMenu?.project.id===activeProject.id&&runMenu?.trigger===EMPTY_STAGE_RUN_TRIGGER}"))
   assert.ok(app.includes('aria-haspopup="menu"\n      aria-expanded={runMenu?.project.id===activeProject.id&&runMenu?.trigger===EMPTY_STAGE_RUN_TRIGGER}'))
   // No active Project means nothing to run in, so the button goes with it and the copy stays.
-  assert.ok(app.includes('{activeProject&&<button\n      type="button"\n      class="empty-stage-run"'))
+  assert.ok(app.includes('{activeProject && <button\n      type="button"\n      class="empty-stage-run"'))
   assert.ok(app.includes('<p>Run a terminal, or open a note, a file, or a preview to begin. Files and notes live in the side panel.</p>'))
 })
 
 test('desktop and mobile draw the same empty stage', () => {
   // One helper, two placements: the desktop pane tree's stage and the mobile projection's.
   // Two hand-copied blocks is how the desktop and mobile copy drifted before.
-  assert.equal(app.match(/<h1>Your Project workspace\.<\/h1>/g)?.length, 1, 'the copy lives once')
+  assert.equal(app.match(/<h1\b[^>]*>Your Project workspace\.<\/h1>/g)?.length, 1, 'the copy lives once')
   assert.ok(app.includes("{emptyStage('stack-active empty-stage')}"), 'the desktop pane tree uses the helper')
-  assert.ok(app.includes(":emptyStage('empty-stage')}"), 'the mobile projection uses the helper')
+  assert.ok(/:\s*emptyStage\('empty-stage'\)\}/.test(app), 'the mobile projection uses the helper')
 })
 
 test('the stage button is drawn as an accent control larger than the header chip', () => {

@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
+from .ui_messages import ui_message
+
 LAYOUT_VERSION = 7
 MAX_LAYOUT_LEAVES = 64
 MAX_LAYOUT_DEPTH = 24
@@ -36,10 +38,10 @@ def _pane(
 
 def _ratio(value: object, *, default: float = 0.5) -> float:
     if not isinstance(value, (int, float)) or isinstance(value, bool):
-        raise ValueError("layout split ratio must be numeric")
+        raise ValueError(ui_message("layouts.69ad87329d"))
     normalized = round(float(value), 4)
     if not 0.1 <= normalized <= 0.9:
-        raise ValueError("layout split ratio must be between 0.1 and 0.9")
+        raise ValueError(ui_message("layouts.608e80bcd6"))
     return normalized
 
 
@@ -68,7 +70,7 @@ def _is_retired_leaf(value: object) -> bool:
 
 def _validated_leaf(value: object, seen: set[str], leaves: list[dict[str, Any]]) -> dict[str, Any]:
     if not isinstance(value, dict):
-        raise ValueError("layout pane children must be leaves")
+        raise ValueError(ui_message("layouts.b1045318e5"))
     kind, resource_id = value.get("kind"), value.get("id")
     if (
         value.get("type") != "leaf"
@@ -76,14 +78,14 @@ def _validated_leaf(value: object, seen: set[str], leaves: list[dict[str, Any]])
         or not isinstance(resource_id, str)
         or not resource_id
     ):
-        raise ValueError("layout leaf requires a supported kind and non-empty id")
+        raise ValueError(ui_message("layouts.da003359ed"))
     if resource_id in seen:
-        raise ValueError("layout cannot contain the same resource more than once")
+        raise ValueError(ui_message("layouts.2d1552958d"))
     seen.add(resource_id)
     leaf = _leaf(str(kind), resource_id)
     leaves.append(leaf)
     if len(leaves) > MAX_LAYOUT_LEAVES:
-        raise ValueError(f"layout exceeds maximum leaf count {MAX_LAYOUT_LEAVES}")
+        raise ValueError(ui_message("layouts.17a6cd93f6", value1=MAX_LAYOUT_LEAVES))
     return leaf
 
 
@@ -101,9 +103,9 @@ def _validate_node(
     split with one surviving branch collapses into that branch.
     """
     if depth > MAX_LAYOUT_DEPTH:
-        raise ValueError(f"layout exceeds maximum depth {MAX_LAYOUT_DEPTH}")
+        raise ValueError(ui_message("layouts.bbd872683e", value1=MAX_LAYOUT_DEPTH))
     if not isinstance(node, dict):
-        raise ValueError("layout node must be an object")
+        raise ValueError(ui_message("layouts.6b5040fba4"))
     node_type = node.get("type")
     if legacy and node_type == "leaf":
         if _is_retired_leaf(node):
@@ -112,7 +114,7 @@ def _validate_node(
     if node_type == "stack":
         children = node.get("children")
         if not isinstance(children, list) or not children:
-            raise ValueError("layout pane requires at least one tab")
+            raise ValueError(ui_message("layouts.4557804509"))
         normalized = [
             _validated_leaf(child, seen, leaves)
             for child in children
@@ -124,7 +126,7 @@ def _validate_node(
     if node_type == "split":
         direction = node.get("direction")
         if direction not in SPLIT_DIRECTIONS:
-            raise ValueError("layout split direction must be horizontal or vertical")
+            raise ValueError(ui_message("layouts.166e07679d"))
         ratio = _ratio(node.get("ratio", 0.5))
         first = _validate_node(
             node.get("first"), depth=depth + 1, seen=seen, leaves=leaves, legacy=legacy
@@ -144,7 +146,7 @@ def _validate_node(
             "first": first,
             "second": second,
         }
-    raise ValueError("layout node type must be stack or split")
+    raise ValueError(ui_message("layouts.1592be0976"))
 
 
 def _migrate_resource_workspace(
@@ -154,11 +156,11 @@ def _migrate_resource_workspace(
         return None, 0.38
     raw_ids = workspace.get("open_ids", [])
     if not isinstance(raw_ids, list):
-        raise ValueError("layout note workspace open_ids must be an array")
+        raise ValueError(ui_message("layouts.00677453da"))
     children: list[dict[str, Any]] = []
     for resource_id in raw_ids:
         if not isinstance(resource_id, str) or not resource_id:
-            raise ValueError("layout note workspace ids must be non-empty strings")
+            raise ValueError(ui_message("layouts.2e8ecb90bb"))
         if resource_id in seen:
             continue
         leaf = _leaf("note", resource_id)
@@ -167,7 +169,7 @@ def _migrate_resource_workspace(
         children.append(_validated_leaf(leaf, seen, leaves))
     raw_size = workspace.get("size", 0.38)
     if not isinstance(raw_size, (int, float)) or isinstance(raw_size, bool):
-        raise ValueError("layout note workspace size must be numeric")
+        raise ValueError(ui_message("layouts.06856a6544"))
     size = max(0.2, min(0.7, round(float(raw_size), 4)))
     return (_pane(children, workspace.get("active_id")) if children else None), size
 
@@ -177,18 +179,18 @@ def normalize_layout(layout: object) -> dict[str, Any]:
     if layout is None:
         return {"version": LAYOUT_VERSION, "root": None}
     if not isinstance(layout, dict):
-        raise ValueError("layout must be an object")
+        raise ValueError(ui_message("layouts.bee2421557"))
     version = layout.get("version", 1)
     if version == 1:
         panes = layout.get("panes")
         if not isinstance(panes, list) or not all(isinstance(item, str) for item in panes):
-            raise ValueError("layout version 1 requires a string panes array")
+            raise ValueError(ui_message("layouts.bda3f0af3d"))
         unique = list(dict.fromkeys(item for item in panes if item))
         if len(unique) > MAX_LAYOUT_LEAVES:
-            raise ValueError(f"layout exceeds maximum leaf count {MAX_LAYOUT_LEAVES}")
+            raise ValueError(ui_message("layouts.17a6cd93f6", value1=MAX_LAYOUT_LEAVES))
         return {"version": LAYOUT_VERSION, "root": _balanced_terminals(unique)}
     if version not in {2, 3, 4, 5, 6, LAYOUT_VERSION}:
-        raise ValueError(f"unsupported layout version {version}")
+        raise ValueError(ui_message("layouts.5d94c4774c", value1=version))
     root = layout.get("root")
     seen: set[str] = set()
     leaves: list[dict[str, Any]] = []
@@ -352,7 +354,7 @@ def attach_leaf(
     direction: str | None = None,
 ) -> dict[str, Any]:
     if kind not in LEAF_KINDS:
-        raise ValueError(f"unsupported layout leaf kind: {kind}")
+        raise ValueError(ui_message("layouts.572c05d359", value1=kind))
     normalized = normalize_layout(layout)
     if any(leaf["id"] == resource_id for leaf in _layout_leaves(normalized)):
         return normalized
@@ -394,7 +396,7 @@ def stack_leaf(
     layout: object, kind: str, resource_id: str, *, target_id: str
 ) -> dict[str, Any] | None:
     if kind not in LEAF_KINDS:
-        raise ValueError(f"layout panes cannot hold {kind} leaves")
+        raise ValueError(ui_message("layouts.c4c51132f5", value1=kind))
     normalized = normalize_layout(layout)
     if any(leaf["id"] == resource_id for leaf in _layout_leaves(normalized)):
         containing = _pane_containing(normalized["root"], resource_id)

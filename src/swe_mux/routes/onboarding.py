@@ -22,6 +22,7 @@ from ..llm_endpoint import resolve_endpoint
 from ..openrouter import OpenRouterError
 from ..reconcile import ExternalTranscript, scan_external_transcripts_async
 from ..runtime_config import apply_runtime_config
+from ..ui_messages import error_text, ui_message
 
 log = logging.getLogger(__name__)
 
@@ -36,15 +37,15 @@ async def patch_onboarding(request: web.Request) -> web.Response:
     config: Config = request.app[keys.CONFIG]
     body = await request.json()
     if not isinstance(body, dict) or type(body.get("revision")) is not int:
-        return json_response({"error": "onboarding revision is required"}, 422)
+        return json_response({"error": ui_message("onboarding.6125958166")}, 422)
     revision = body.pop("revision")
     action = body.pop("action", "progress")
     if action not in {"progress", "restart", "fresh", "reuse"}:
-        return json_response({"error": "unknown setup action"}, 422)
+        return json_response({"error": ui_message("onboarding.4bf7555cd5")}, 422)
     current = await asyncio.to_thread(onboarding.read_state, config)
     if revision != current["revision"]:
         return json_response(
-            {"error": "Setup changed on another device. Reload and try again.", "state": current},
+            {"error": ui_message("onboarding.d4808082cb"), "state": current},
             409,
         )
     backup = None
@@ -101,7 +102,7 @@ async def patch_onboarding(request: web.Request) -> web.Response:
         if state["status"] == "complete" and not config.harness_setup_complete:
             update_config(config, {"harness_setup_complete": True})
     except ValueError as exc:
-        return json_response({"error": str(exc)}, 422)
+        return json_response({"error": error_text(exc)}, 422)
     await request.app[keys.EVENTS].emit(
         "onboarding_changed", revision=state["revision"], action=action
     )
@@ -163,7 +164,7 @@ async def discover_projects(request: web.Request) -> web.Response:
     requested = request.query.get("harnesses", "").split(",")
     backends = [name for name in requested if name]
     if not backends or any(name not in HARNESSES for name in backends):
-        return json_response({"error": "Select at least one registered harness to scan."}, 422)
+        return json_response({"error": ui_message("onboarding.50787183db")}, 422)
     started = time.monotonic()
     # The worker-backed walk when the daemon has one (`transcript_discovery.py`).
     scanner = request.app.get(keys.TRANSCRIPT_SCANNER)
@@ -177,12 +178,7 @@ async def discover_projects(request: web.Request) -> web.Response:
             "onboarding project discovery timed out", extra={"harnesses": ",".join(backends)}
         )
         return json_response(
-            {
-                "error": (
-                    "History discovery took too long. Add a folder manually or retry "
-                    "with fewer harnesses."
-                )
-            },
+            {"error": (ui_message("onboarding.c74f8cd7ae"))},
             504,
         )
     log.info(
@@ -203,15 +199,13 @@ async def configure_models(request: web.Request) -> web.Response:
     config: Config = request.app[keys.CONFIG]
     body = await request.json()
     if not isinstance(body, dict) or set(body) - {"revision", "cheap", "regular"}:
-        return json_response({"error": "Expected cheap and regular model choices."}, 422)
+        return json_response({"error": ui_message("onboarding.f88e10da40")}, 422)
     if type(body.get("revision")) is not int or body["revision"] != config.revision:
-        return json_response(
-            {"error": "Settings changed. Reload the model choices and retry."}, 409
-        )
+        return json_response({"error": ui_message("onboarding.667f91cc9a")}, 409)
     if any(
         not isinstance(body.get(key), str) or not body[key].strip() for key in ("cheap", "regular")
     ):
-        return json_response({"error": "Choose a cheap and a regular model."}, 422)
+        return json_response({"error": ui_message("onboarding.0e3a2b162f")}, 422)
     changes = model_setup.setup_model_changes(
         config, body["cheap"].strip(), body["regular"].strip()
     )
@@ -233,7 +227,7 @@ async def activate_model_features(request: web.Request) -> web.Response:
 
     body = await request.json()
     if not isinstance(body, dict) or set(body) - {"features", "overrides"}:
-        return json_response({"error": "Expected selected model features."}, 422)
+        return json_response({"error": ui_message("onboarding.8e9c159e19")}, 422)
     features = body.get("features")
     allowed = {"automations", "summaries", "assistant"}
     if (
@@ -241,14 +235,14 @@ async def activate_model_features(request: web.Request) -> web.Response:
         or not features
         or any(not isinstance(item, str) or item not in allowed for item in features)
     ):
-        return json_response({"error": "Choose automations, summaries, or assistant."}, 422)
+        return json_response({"error": ui_message("onboarding.98aabcb5d1")}, 422)
     overrides = body.get("overrides", {})
     if (
         not isinstance(overrides, dict)
         or set(overrides) - {"automation_enabled", "scan_timeline_enabled"}
         or any(not isinstance(value, bool) for value in overrides.values())
     ):
-        return json_response({"error": "Invalid model feature overrides."}, 422)
+        return json_response({"error": ui_message("onboarding.e543658466")}, 422)
     ready = await automation._activation_readiness(request)
     if not ready.ready or ready.code == "unknown":
         return json_response({"error": ready.reason, "llm": ready.as_dict()}, 409)
@@ -301,7 +295,7 @@ async def verify_models(request: web.Request) -> web.Response:
     digest = model_setup.fingerprint(config, endpoint, secrets.get(endpoint.secret_name))
     models = model_setup.role_models(config, endpoint)
     if not all(models.values()):
-        return json_response({"error": "Choose a model for every required role."}, 422)
+        return json_response({"error": ui_message("onboarding.865f915a3d")}, 422)
     schema = {
         "type": "object",
         "properties": {"ok": {"type": "boolean"}},
@@ -319,7 +313,7 @@ async def verify_models(request: web.Request) -> web.Response:
                 max_tokens=512,
             )
             if result.value.get("ok") is not True:
-                raise ValueError(f"{model} did not return the requested structured result.")
+                raise ValueError(ui_message("onboarding.cdaab658cd", value1=model))
             checks.append(
                 {"model": model, "check": "structured output", "cost_usd": result.cost_usd}
             )
@@ -339,7 +333,7 @@ async def verify_models(request: web.Request) -> web.Response:
                     "type": "function",
                     "function": {
                         "name": "setup_check",
-                        "description": "Verify tool support",
+                        "description": ui_message("onboarding.ff257568bc"),
                         "parameters": schema,
                     },
                 }
@@ -353,20 +347,18 @@ async def verify_models(request: web.Request) -> web.Response:
             and json.loads(call.get("function", {}).get("arguments", "{}")) == {"ok": True}
             for call in turn.tool_calls
         ):
-            raise ValueError(f"{models['assistant']} did not produce the requested tool call.")
+            raise ValueError(ui_message("onboarding.32d006b4a7", value1=models["assistant"]))
         checks.append(
             {"model": models["assistant"], "check": "tool calling", "cost_usd": turn.cost_usd}
         )
     except (OpenRouterError, ValueError) as exc:
         log.warning("onboarding model verification failed: %s", exc)
-        return json_response({"error": str(exc), "checks": checks}, 422)
+        return json_response({"error": error_text(exc), "checks": checks}, 422)
     current_endpoint = resolve_endpoint(config, request.app.get(keys.LLM_CAPABILITIES))
     if digest != model_setup.fingerprint(
         config, current_endpoint, secrets.get(current_endpoint.secret_name)
     ):
-        return json_response(
-            {"error": "Model settings changed during verification. Review and test again."}, 409
-        )
+        return json_response({"error": ui_message("onboarding.54dbcc076b")}, 409)
     model_setup.record_verification(config, digest, checks)
     log.info(
         "onboarding model roles verified",

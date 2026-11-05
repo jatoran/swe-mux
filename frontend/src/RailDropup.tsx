@@ -119,11 +119,9 @@ export function RailDropup({ label, anchor, onClose, sticky, children }: Props) 
     onMouseDown={holdSoftKeyboard}
     onKeyDown={walk}
   >
-    {actions.length === 1
-      ? <button type="button" class="rail-dropup-open" title={actions[0].title} onClick={() => { onClose(); actions[0].run() }}>
+    {actions.length === 1 ? <button type="button" class="rail-dropup-open" title={actions[0].title} onClick={() => { onClose(); actions[0].run() }}>
         {actions[0].label}
-      </button>
-      : <div class="rail-dropup-sticky">
+      </button> : <div class="rail-dropup-sticky">
         {actions.map(action => <button
           key={action.label}
           type="button"

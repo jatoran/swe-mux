@@ -1,3 +1,4 @@
+import { rich, t } from './localization/index.ts'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { useModalFocus } from './modalFocus'
 import { api } from './api'
@@ -31,7 +32,7 @@ export function ConnectPhone({ onClose, onComplete }: { onClose: () => void; onC
       const response=await fetch('/api/remote/mobile-voice/enable',{method:'POST',headers:{'Content-Type':'application/json','X-Mux-User-Gesture':'mobile-voice-setup'},body:'{}'})
       const result=await response.json()
       setAuthorization(result.authorization_url||'')
-      if(!response.ok)throw new Error(result.error||result.diagnostic||'Secure phone setup failed.')
+      if(!response.ok)throw new Error(result.error||result.diagnostic||t("ConnectPhone.d5af83335a"))
       if(result.diagnostic)setError(result.diagnostic)
       await refresh()
     }catch(cause){setError((cause as Error).message)}finally{setBusy(false)}
@@ -45,26 +46,24 @@ export function ConnectPhone({ onClose, onComplete }: { onClose: () => void; onC
   }, [])
 
   const url = connectionUrl(remote, port)
-  return <div class="connect-phone-backdrop" role="dialog" aria-modal="true" aria-label="Connect a phone" onClick={onClose}>
+  return <div class="connect-phone-backdrop" role="dialog" aria-modal="true" aria-label={t("ConnectPhone.8b4df73a36")} onClick={onClose}>
     <section ref={panel} class="connect-phone" onClick={event => event.stopPropagation()}>
-      <header><strong>CONNECT::A PHONE</strong><button type="button" class="link" onClick={onClose} aria-label="Close">Close</button></header>
+      <header><strong>{t("ConnectPhone.f8a1bec3ba")}</strong><button type="button" class="link" onClick={onClose} aria-label={t("ConnectPhone.7d9eb7acb1")}>{t("ConnectPhone.7d9eb7acb1")}</button></header>
       <div class="connect-phone-body">
         <TailscaleConnection status={remote} />
-        {remote&&!remote.tailnet_enabled&&<p>Phone access is disabled. <button disabled={busy} onClick={()=>{setBusy(true);void api('PATCH','/api/config',{tailnet_enabled:true}).then(()=>refresh()).catch(cause=>setError(cause.message)).finally(()=>setBusy(false))}}>Enable private Tailscale access</button></p>}
-        <p>Install Tailscale on this computer and your phone, then sign in to the same private network.</p>
-        <a href="https://tailscale.com/download" target="_blank" rel="noreferrer">Get Tailscale</a>
-        <div class="theme-actions"><button disabled={busy} onClick={()=>void refresh()}>Check connection again</button><button disabled={busy||remote?.connection_state!=='connected'} onClick={()=>void secure()}>Set up secure phone access</button></div>
-        {authorization&&<p><a href={authorization} target="_blank" rel="noreferrer">Approve HTTPS in Tailscale</a>, then check again.</p>}
-        {url
-          ? <div class="connect-phone-url">
+        {remote&&!remote.tailnet_enabled && <p>{rich("ConnectPhone.d4c85590d1", { value1: <button disabled={busy} onClick={()=>{setBusy(true);void api('PATCH','/api/config',{tailnet_enabled:true}).then(()=>refresh()).catch(cause=>setError(cause.message)).finally(()=>setBusy(false))}}>{t("ConnectPhone.3235ea00c6")}</button> })}</p>}
+        <p>{t("ConnectPhone.47d4f2e82d")}</p>
+        <a href="https://tailscale.com/download" target="_blank" rel="noreferrer">{t("ConnectPhone.05cbce45ad")}</a>
+        <div class="theme-actions"><button disabled={busy} onClick={()=>void refresh()}>{t("ConnectPhone.e44eed5584")}</button><button disabled={busy||remote?.connection_state!=='connected'} onClick={()=>void secure()}>{t("ConnectPhone.b1ac52eebd")}</button></div>
+        {authorization && <p>{rich("ConnectPhone.cedf4cd0e3", { value1: <a href={authorization} target="_blank" rel="noreferrer">{t("ConnectPhone.f998e98ea8")}</a> })}</p>}
+        {url ? <div class="connect-phone-url">
               <ConnectionQr url={url} />
-              <p>Scan this on the phone, or open <a href={url} target="_blank" rel="noreferrer">{url}</a>.</p>
-            </div>
-          : <p>Connect this machine to Tailscale to get a phone address, then check the connection again.</p>}
+              <p>{rich("ConnectPhone.d5e8e3a1a0", { value1: <a href={url} target="_blank" rel="noreferrer">{url}</a> })}</p>
+            </div> : <p>{t("ConnectPhone.64ededcef7")}</p>}
         <PhoneDnsChecklist />
-        {error&&<p role="alert">{error}</p>}
-        {onComplete&&<button class="primary" disabled={!url} onClick={onComplete}>I opened the workspace on my phone</button>}
-        <p class="connect-phone-note">Any device on this tailnet reaches this daemon with no login. Only connect phones you control, and do not enable the tailnet listener on a shared tailnet.</p>
+        {error && <p role="alert">{error}</p>}
+        {onComplete && <button class="primary" disabled={!url} onClick={onComplete}>{t("ConnectPhone.5e09b8c145")}</button>}
+        <p class="connect-phone-note">{t("ConnectPhone.99467ff88c")}</p>
       </div>
     </section>
   </div>

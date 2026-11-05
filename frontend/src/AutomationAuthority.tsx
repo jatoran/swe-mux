@@ -1,3 +1,4 @@
+import { rich, t } from './localization/index.ts'
 import { Dropdown } from './Dropdown'
 
 // The agent authority rows on the Policy tab: one row per field, the install
@@ -40,37 +41,37 @@ export type AuthorityRowProject={
 const AUTHORITY_COPY:{setting:string;levels:Record<string,string>;note:string}[]=[
   {
     setting: 'session_control_grant',
-    levels:{draft:'Approve each',granted:'Direct'},
-    note:'Needs Agent session control.',
+    levels:{get draft() { return t("AutomationAuthority.505b3bb691") },get granted() { return t("AutomationAuthority.002c7c6846") }},
+    get note() { return t("AutomationAuthority.c304440f9a") },
   },
   {
     setting: 'spawn_grant',
-    levels:{draft:'Approve each',granted:'Direct'},
-    note:'Needs Agent session control. Per-origin limit applies.',
+    levels:{get draft() { return t("AutomationAuthority.505b3bb691") },get granted() { return t("AutomationAuthority.002c7c6846") }},
+    get note() { return t("AutomationAuthority.224c4244ab") },
   },
   {
     setting: 'land_grant',
-    levels:{draft:'Approve each',granted:'Direct'},
-    note:'Needs Auto-merge. Fast-forward only.',
+    levels:{get draft() { return t("AutomationAuthority.505b3bb691") },get granted() { return t("AutomationAuthority.002c7c6846") }},
+    get note() { return t("AutomationAuthority.d414c23cc1") },
   },
   {
     setting: 'land_verify_grant',
-    levels:{draft:'Approve each',granted:'Run directly'},
-    note:'Needs Auto-merge. Direct covers only this machine’s edits.',
+    levels:{get draft() { return t("AutomationAuthority.505b3bb691") },get granted() { return t("AutomationAuthority.7dede5ed25") }},
+    get note() { return t("AutomationAuthority.bd3c9da199") },
   },
   {
     setting: 'interject_grant',
-    levels:{off:'Queue only',granted:'Interject'},
-    note:'The receiving session must be interruptible.',
+    levels:{get off() { return t("AutomationAuthority.7de5fcfc91") },get granted() { return t("AutomationAuthority.c4ac9e7173") }},
+    get note() { return t("AutomationAuthority.72407e0a09") },
   },
   {
     setting: 'message_envelope',
     levels:{
-      full:'Full context',
-      compact:'Sender + reply',
-      bare:'Message only',
+      get full() { return t("AutomationAuthority.c6b8f68e53") },
+      get compact() { return t("AutomationAuthority.bce72a0707") },
+      get bare() { return t("AutomationAuthority.612a95d171") },
     },
-    note:'Disclosure added to delivered agent messages.',
+    get note() { return t("AutomationAuthority.cafcc64d58") },
   },
 ]
 
@@ -135,26 +136,25 @@ export function AutomationAuthority({fields,defaults,ceiling,projects,projectId,
     return <div class={`automation-matrix-row automation-authority-row${inert?' globally-off':''}`} key={spec.field} role="row">
       <div class="automation-matrix-name">
         <span class="project-setting-name"><b>{spec.label}</b></span>
-        <p class="project-automation-deps">{copyFor(spec.field)?.note||''}</p>
+        <p class="project-automation-deps">{copyFor(spec.field)?.note || ''}</p>
       </div>
       <div class="automation-matrix-cell automation-authority-global">
-        <Dropdown ariaLabel={`Install default for ${spec.label}`} value={defaults[spec.field]||spec.builtin}
+        <Dropdown ariaLabel={t("AutomationAuthority.9c5a9df3f4", { value1: spec.label })} value={defaults[spec.field]||spec.builtin}
           disabled={busy} options={options} onChange={level=>setDefault(spec.field,level)}/>
         <div class="automation-authority-meta">
-          <label class="check" title="Override Projects that set their own value">
+          <label class="check" title={t("AutomationAuthority.f1d1cb0c63")}>
             <input type="checkbox" disabled={busy} checked={locked} onChange={()=>toggleLock(spec.field)}/>
-            <span>enforce</span>
+            <span>{t("AutomationAuthority.c1f1005e99")}</span>
           </label>
           <small>{reach}</small>
         </div>
       </div>
       <div class="automation-matrix-cell" data-setting={spec.field}>
-        <Dropdown ariaLabel={`${spec.label} in this Project`} value={own??''}
+        <Dropdown ariaLabel={t("AutomationAuthority.1179160918", { value1: spec.label })} value={own??''}
           disabled={busy||!project||project.status==='read-only'}
-          options={[{value:'',label:'Use global'},...options]}
+          options={[{value:'',get label() { return t("AutomationAuthority.2d0a248774") }},...options]}
           onChange={level=>onWriteProject({[spec.field]:level||null})}/>
-        {locked&&own!=null&&own!==effective&&
-          <small class="automation-authority-overridden">Capped at {levelLabel(spec.field,effective)}.</small>}
+        {locked&&own!=null&&own!==effective && <small class="automation-authority-overridden">{rich("AutomationAuthority.9fd4b688ed", { value1: levelLabel(spec.field,effective) })}</small>}
       </div>
       <span class="automation-matrix-fleet">{projects.filter(item=>
         (item.authority_effective[spec.field]||spec.builtin)===spec.levels[spec.levels.length-1]
@@ -162,9 +162,9 @@ export function AutomationAuthority({fields,defaults,ceiling,projects,projectId,
     </div>
   }
 
-  return <div class="automation-matrix-grid automation-authority-grid" role="table" aria-label="Agent authority">
+  return <div class="automation-matrix-grid automation-authority-grid" role="table" aria-label={t("AutomationAuthority.1fac324f77")}>
     <div class="automation-matrix-head" role="row" data-setting="agent_authority">
-      <span>agent authority</span><span>global</span><span>{project?.project_name||'project'}</span><span>widest</span>
+      <span>{t("AutomationAuthority.d055d9d8c6")}</span><span>{t("AutomationAuthority.8001c27439")}</span><span>{project?.project_name || t("AutomationAuthority.244210e484")}</span><span>{t("AutomationAuthority.0ab54da4d4")}</span>
     </div>
     {fields.map(row)}
   </div>

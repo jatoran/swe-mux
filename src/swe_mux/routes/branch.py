@@ -46,6 +46,7 @@ from ..transcript_view import (
     cut_points_from,
     resolve_cut_offset,
 )
+from ..ui_messages import error_text, ui_message
 
 log = logging.getLogger(__name__)
 
@@ -197,9 +198,7 @@ async def _branch_pane_name(app: web.Application, record: Any) -> str:
     return f"B{ordinal}-{subject}" if subject else f"B{ordinal}-branch"
 
 
-def _branch_point_payload(
-    point: CutPoint, previous: CutPoint | None, text: str
-) -> dict[str, Any]:
+def _branch_point_payload(point: CutPoint, previous: CutPoint | None, text: str) -> dict[str, Any]:
     """One offered branch point, with both cuts and why each is or is not available.
 
     Two cuts per message rather than one, because the two things an operator wants
@@ -252,17 +251,17 @@ def _branch_source(request: web.Request) -> tuple[Any, str, Any] | web.Response:
     session = manager.resolve(request.match_info["sid"])
     record = session.record
     if not has_observable_transcript(record.backend):
-        return json_response(
-            {"error": "only observable agent sessions can branch", "code": "not_agent"}, 422
-        )
+        return json_response({"error": ui_message("branch.ae9e58b676"), "code": "not_agent"}, 422)
     conversation = _branch_source_id(session)
     if not conversation:
         return json_response(
-            {"error": "no conversation id to branch from yet", "code": "native_id_missing"}, 409
+            {"error": ui_message("branch.9c6bb2b817"), "code": "native_id_missing"}, 409
         )
     project = request.app[keys.PROJECTS].projects.get(record.project_id)
     if project is None:
-        return json_response({"error": "project missing", "code": "project_missing"}, 422)
+        return json_response(
+            {"error": ui_message("branch.a95062a62e"), "code": "project_missing"}, 422
+        )
     return session, conversation, project
 
 
@@ -442,7 +441,11 @@ async def _branch_by_transcript_fork(
     adapter = manager.adapters.get(record.backend)
     if adapter is None:
         return json_response(
-            {"error": f"no adapter for {record.backend}", "code": "adapter_missing"}, 422
+            {
+                "error": ui_message("branch.7e3677ad1e", value1=record.backend),
+                "code": "adapter_missing",
+            },
+            422,
         )
     outcome = await _read_branch_points(
         session.transcript_path,
@@ -452,12 +455,12 @@ async def _branch_by_transcript_fork(
     )
     if isinstance(outcome, str):
         return json_response(
-            {"error": f"the conversation cannot be forked: {outcome}", "code": outcome}, 409
+            {"error": ui_message("branch.3751b5132f", value1=outcome), "code": outcome}, 409
         )
     points, text_by_id, _truncated = outcome
     if not points:
         return json_response(
-            {"error": "the conversation has no messages to branch from", "code": "no_messages"},
+            {"error": ui_message("branch.ddba6c1064"), "code": "no_messages"},
             409,
         )
     message_id = str(body.get("from_message_id") or "") or points[-1].message_id
@@ -466,17 +469,13 @@ async def _branch_by_transcript_fork(
         "before" if chosen is not None and chosen.role == "user" else "after"
     )
     if mode not in {"before", "after"}:
-        return json_response(
-            {"error": "mode must be 'before' or 'after'", "code": "bad_mode"}, 422
-        )
+        return json_response({"error": ui_message("branch.8132d0cdab"), "code": "bad_mode"}, 422)
     cut, detail = resolve_cut_offset(points, message_id, mode)
     if cut is None:
         assert isinstance(detail, str)
-        log.info(
-            "branch refused for %s at %s/%s: %s", record.id, message_id, mode, detail
-        )
+        log.info("branch refused for %s at %s/%s: %s", record.id, message_id, mode, detail)
         return json_response(
-            {"error": f"that point cannot be branched from: {detail}", "code": detail}, 409
+            {"error": ui_message("branch.02aa5cae91", value1=detail), "code": detail}, 409
         )
     assert isinstance(detail, CutPoint)
     branch_cwd = record.run_cwd or record.cwd
@@ -489,8 +488,7 @@ async def _branch_by_transcript_fork(
     if target_path is None or source_path is None:
         return json_response(
             {
-                "error": f"{record.backend} does not keep this conversation in a file "
-                "mux can fork",
+                "error": ui_message("branch.acdf09e792", value1=record.backend),
                 "code": "no_transcript",
             },
             409,
@@ -520,13 +518,13 @@ async def _branch_by_transcript_fork(
         )
     except ForkRefused as exc:
         log.warning("branch fork of %s refused: %s (%s)", conversation, exc, exc.code)
-        return json_response({"error": str(exc), "code": exc.code}, 409)
+        return json_response({"error": error_text(exc), "code": exc.code}, 409)
     except ForkUnsupported as exc:
-        return json_response({"error": str(exc), "code": "branch_unsupported"}, 422)
+        return json_response({"error": error_text(exc), "code": "branch_unsupported"}, 422)
     except (OSError, TimeoutError) as exc:
         log.error("branch fork of %s failed to write: %s", conversation, exc)
         return json_response(
-            {"error": f"the fork could not be written: {exc}", "code": "fork_write_failed"}, 500
+            {"error": ui_message("branch.2e57b60977", value1=exc), "code": "fork_write_failed"}, 500
         )
     seed = text_by_id.get(message_id) if mode == "before" and detail.role == "user" else None
     return {
@@ -585,7 +583,7 @@ async def branch_session(request: web.Request) -> web.Response:
         # outright rather than corrupted politely.
         return json_response(
             {
-                "error": f"branching is not implemented for {record.backend} sessions",
+                "error": ui_message("branch.8552cc9b79", value1=record.backend),
                 "code": "branch_unsupported",
             },
             422,
@@ -594,7 +592,7 @@ async def branch_session(request: web.Request) -> web.Response:
     if strategy != "transcript_fork" and body.get("from_message_id"):
         return json_response(
             {
-                "error": f"{record.backend} can only branch from where the conversation stands now",
+                "error": ui_message("branch.88a4b393f2", value1=record.backend),
                 "code": "branch_point_unsupported",
             },
             422,
@@ -602,7 +600,9 @@ async def branch_session(request: web.Request) -> web.Response:
     if strategy == "cli_fork" and (blocked := _branch_block_reason(session)):
         code, why = blocked
         log.info("branch refused for %s: %s (%s)", record.id, why, code)
-        return json_response({"error": f"cannot branch while {why}", "code": code}, 409)
+        return json_response(
+            {"error": ui_message("branch.7f684b0e2c", value1=why), "code": code}, 409
+        )
     branch_cwd = record.run_cwd or record.cwd
     started_at = time.monotonic()
     events = request.app.get(keys.EVENTS)

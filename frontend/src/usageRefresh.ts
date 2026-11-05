@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // A usage refresh runs in the background on the daemon: `POST /api/usage/refresh`
 // answers 202 at once and `GET /api/usage` reports `refreshing` until it ends. The
 // scan is contained (idle priority, a CPU cap, very-low I/O), so it is slow by
@@ -96,23 +97,23 @@ export async function runUsageRefresh<T extends RefreshableStatus>(
 
 export function formatBytes(bytes: number | null | undefined): string | null {
   if (bytes === null || bytes === undefined || !Number.isFinite(bytes)) return null
-  if (bytes >= 2 ** 30) return `${(bytes / 2 ** 30).toFixed(1)} GB`
-  if (bytes >= 2 ** 20) return `${Math.round(bytes / 2 ** 20)} MB`
-  if (bytes >= 2 ** 10) return `${Math.round(bytes / 2 ** 10)} KB`
-  return `${Math.round(bytes)} B`
+  if (bytes >= 2 ** 30) return t("usageRefresh.93b74ca293", { value1: (bytes / 2 ** 30).toFixed(1) })
+  if (bytes >= 2 ** 20) return t("usageRefresh.60e78b906d", { value1: Math.round(bytes / 2 ** 20) })
+  if (bytes >= 2 ** 10) return t("usageRefresh.634b3dd62c", { value1: Math.round(bytes / 2 ** 10) })
+  return t("usageRefresh.276b4e09cd", { value1: Math.round(bytes) })
 }
 
 function formatSeconds(seconds: number): string {
-  if (seconds < 60) return `${Math.max(0, Math.round(seconds))}s`
+  if (seconds < 60) return t("usageRefresh.6732456ec2", { value1: Math.max(0, Math.round(seconds)) })
   const minutes = Math.floor(seconds / 60)
   const rest = Math.round(seconds % 60)
-  return rest ? `${minutes}m ${rest}s` : `${minutes}m`
+  return rest ? t("usageRefresh.565fc0fdc0", { value1: minutes, value2: rest }) : t("usageRefresh.10767db0b0", { value1: minutes })
 }
 
 function scope(kind: string | null | undefined, since: string | null | undefined): string {
-  if (kind === 'incremental' && since) return `days since ${since}`
-  if (kind === 'rebuild') return 'full history'
-  if (kind === 'configured_window') return 'the configured window'
+  if (kind === 'incremental' && since) return t("usageRefresh.21a1e1c74a", { value1: since })
+  if (kind === 'rebuild') return t("usageRefresh.674d360dc7")
+  if (kind === 'configured_window') return t("usageRefresh.6546b16695")
   return 'transcripts'
 }
 
@@ -120,11 +121,11 @@ function scope(kind: string | null | undefined, since: string | null | undefined
 export function describeUsageActivity(collector: UsageCollector | undefined, nowSeconds: number): string | null {
   if (!collector) return null
   if (collector.phase === 'deferred') {
-    return `Scheduled refresh waiting for a quieter moment${collector.deferred_reason ? ` (${collector.deferred_reason})` : ''}.`
+    return t("usageRefresh.9b39c5e7da", { value1: collector.deferred_reason ? ` (${collector.deferred_reason})` : '' })
   }
   const run = collector.run
   if (!run) return null
-  const parts = [`Scanning ${scope(run.kind, run.since)} in the background`]
+  const parts = [t("usageRefresh.d16f5ab608", { value1: scope(run.kind, run.since) })]
   const read = formatBytes(run.read_bytes)
   if (read) parts.push(`${read} read`)
   parts.push(formatSeconds(nowSeconds - run.started_at))
@@ -134,13 +135,13 @@ export function describeUsageActivity(collector: UsageCollector | undefined, now
 /** The last finished refresh, in one line; null when there has not been one. */
 export function describeLastRun(last: UsageLastRun | null | undefined): string | null {
   if (!last || !last.kind) return null
-  const parts = [`Last refresh: ${scope(last.kind, last.since)}`]
+  const parts = [t("usageRefresh.df1e58fcab", { value1: scope(last.kind, last.since) })]
   if (typeof last.duration_ms === 'number') parts.push(formatSeconds(last.duration_ms / 1000))
   const read = formatBytes(last.resources?.read_bytes)
   if (read) parts.push(`${read} read`)
   if (last.resources?.mechanism) {
     const cap = last.resources.cpu_percent_cap
-    parts.push(`background priority${typeof cap === 'number' ? `, ≤${cap}% CPU` : ''}`)
+    parts.push(t("usageRefresh.920eb3c6a2", { value1: typeof cap === 'number' ? `, ≤${cap}% CPU` : '' }))
   }
   if (last.ccusage_version) parts.push(`ccusage ${last.ccusage_version}`)
   if (last.error) parts.push('failed')

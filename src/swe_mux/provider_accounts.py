@@ -26,6 +26,7 @@ from .logsetup import bound_request_id, current_request_id, new_request_id
 from .models import MuxEvent
 from .shim_paths import ExecutableResolution, combine_resolutions, resolve_executable
 from .subprocess_flags import background_creation_flags, reap_process_tree
+from .ui_messages import error_text, ui_message
 
 log = logging.getLogger(__name__)
 
@@ -590,9 +591,7 @@ class ProviderAccountManager:
         entry = _record(self._identities().get(self._identity_slot(provider, digest)))
         return entry or None
 
-    def _remember_identity(
-        self, provider: Provider, digest: str, identity: dict[str, Any]
-    ) -> None:
+    def _remember_identity(self, provider: Provider, digest: str, identity: dict[str, Any]) -> None:
         if not identity or not any(_string(identity.get(key)) for key in IDENTITY_FIELDS):
             return
         entries = self._identities()
@@ -833,9 +832,7 @@ class ProviderAccountManager:
                 }
         return result
 
-    def _match_hint(
-        self, provider: Provider, identity: dict[str, Any]
-    ) -> dict[str, Any] | None:
+    def _match_hint(self, provider: Provider, identity: dict[str, Any]) -> dict[str, Any] | None:
         """Name the saved slot a weak identity points at, without acting on it."""
         identity_key = self._identity_key(identity)
         if identity_key is None:
@@ -879,8 +876,7 @@ class ProviderAccountManager:
             matches = [
                 item
                 for item in self._accounts()
-                if item.get("provider") == provider
-                and self._account_verified_key(item) == verified
+                if item.get("provider") == provider and self._account_verified_key(item) == verified
             ]
             if len(matches) == 1:
                 return matches[0], "verified_identity"
@@ -1029,9 +1025,7 @@ class ProviderAccountManager:
         if changed and write:
             self._write()
 
-    async def reconcile_current(
-        self, *, force_identity_probe: bool = False
-    ) -> dict[str, Any]:
+    async def reconcile_current(self, *, force_identity_probe: bool = False) -> dict[str, Any]:
         """Reconcile live auth, identifying an unrecognized login against the provider."""
         async with self._mutation_lock:
             self._reconcile_current()
@@ -1042,9 +1036,7 @@ class ProviderAccountManager:
             for provider in PROVIDERS:
                 if _record(self._current.get(provider)).get("state") != "external":
                     continue
-                await self._identify_live_login(
-                    provider, force_identity_probe=force_identity_probe
-                )
+                await self._identify_live_login(provider, force_identity_probe=force_identity_probe)
             self._reconcile_current()
             selected = dict(_record(self._manifest.get("selected")))
 
@@ -1256,8 +1248,7 @@ class ProviderAccountManager:
             # login" for one CLI and "will follow on its next request" for the
             # other, and the surface printing it must not guess which.
             "switch_reaches_live": {
-                provider: _provider_profile(provider).switch_reaches_live
-                for provider in PROVIDERS
+                provider: _provider_profile(provider).switch_reaches_live for provider in PROVIDERS
             },
             # Computed here rather than joined in the browser, so the phone, the
             # popover and Settings cannot disagree about how many sessions are
@@ -1310,8 +1301,7 @@ class ProviderAccountManager:
                 )
                 if owner is not None:
                     raise ProviderAccountConflict(
-                        f"those credentials belong to the saved account "
-                        f"'{owner.get('label')}'; capture into that account instead"
+                        ui_message("provider_accounts.5faf399ce3", value1=owner.get("label"))
                     )
             # Verified identity first: it is the only key that reliably keeps one
             # provider account in exactly one slot.
@@ -1645,7 +1635,7 @@ class ProviderAccountManager:
                 account_id=account_id,
                 matched_by="selection_guard",
                 new_digest=_string(account.get("auth_digest")),
-                detail=f"a live session rotated {reverted_to} back over the switch",
+                detail=ui_message("provider_accounts.7cb44e65a1", value1=reverted_to),
             )
         await self.events.emit(
             "provider_account_selected",
@@ -1688,14 +1678,16 @@ class ProviderAccountManager:
                 )
                 if owner is not None:
                     raise ProviderAccountConflict(
-                        f"the live login belongs to the saved account "
-                        f"'{owner.get('label')}', not '{account.get('label')}'"
+                        ui_message(
+                            "provider_accounts.4ba06ec696",
+                            value1=owner.get("label"),
+                            value2=account.get("label"),
+                        )
                     )
                 existing = self._account_verified_key(account)
                 if existing is not None and existing != verified_key:
                     raise ProviderAccountConflict(
-                        f"'{account.get('label')}' is a different provider account than the "
-                        f"live login; save the live login as its own account instead"
+                        ui_message("provider_accounts.d3acf2cd35", value1=account.get("label"))
                     )
             if not self._sync_managed_auth(
                 provider, account, content, digest, identity, matched_by="adopt"
@@ -1738,7 +1730,7 @@ class ProviderAccountManager:
             "telemetry_purged",
             provider=provider,
             account_id=account_id,
-            detail=f"since={since!r} removed={removed}",
+            detail=ui_message("provider_accounts.f996f619b2", value1=repr(since), value2=removed),
         )
         return {"removed": removed, "since": since} | self.snapshot()
 
@@ -1792,7 +1784,9 @@ class ProviderAccountManager:
                 continue
             if str(item.get("label") or "").casefold() == folded:
                 raise ProviderAccountConflict(
-                    f"another {provider} account is already called '{item.get('label')}'"
+                    ui_message(
+                        "provider_accounts.0337c4e53d", value1=provider, value2=item.get("label")
+                    )
                 )
 
     async def rename(
@@ -1872,7 +1866,9 @@ class ProviderAccountManager:
         provider = _provider(provider_value)
         running = self._login.get(provider)
         if running is not None and running.get("state") == "running":
-            raise ProviderAccountConflict(f"a {provider} sign-in is already running")
+            raise ProviderAccountConflict(
+                ui_message("provider_accounts.da57c542af", value1=provider)
+            )
         if replace_id:
             # Validate before spawning anything: a bad `replace_id` should be a
             # rejected request, not a browser window the operator then has to
@@ -1926,12 +1922,14 @@ class ProviderAccountManager:
                 # the cancellation as a terminal state rather than leaving a
                 # "running" that no process backs, then let the cancellation
                 # continue to the supervisor.
-                self._finish_login(provider, error=f"{provider} sign-in cancelled")
+                self._finish_login(
+                    provider, error=ui_message("provider_accounts.ff1953364c", value1=provider)
+                )
                 raise
             except Exception as exc:  # noqa: BLE001 - the record is the error's only home
                 log.warning(
                     "provider_login_failed",
-                    extra={"provider": provider, "error": str(exc)},
+                    extra={"provider": provider, "error": error_text(exc)},
                 )
                 self._finish_login(provider, error=str(exc))
                 return
@@ -2105,7 +2103,7 @@ class ProviderAccountManager:
         try:
             outcome = await run_bounded(
                 command,
-                label=f"provider-{provider}",
+                label=ui_message("provider_accounts.d88bb7c230", value1=provider),
                 timeout_seconds=timeout_seconds,
                 output_limit=MAX_COMMAND_OUTPUT_BYTES,
                 stderr_limit=MAX_COMMAND_OUTPUT_BYTES,
@@ -2274,10 +2272,7 @@ class ProviderAccountManager:
             "session": None,
             "weekly": None,
             "status": "conflict",
-            "error": (
-                "this slot holds the same provider account as "
-                f"{conflict['primary_id']}; quota polling is suspended"
-            ),
+            "error": (ui_message("provider_accounts.20b459c0ec", value1=conflict["primary_id"])),
             "attempted_at": time.time(),
         }
         self._write()
@@ -2398,7 +2393,7 @@ class ProviderAccountManager:
                         "rotation_skipped",
                         provider=provider,
                         account_id=account_id,
-                        detail="slot credential changed during refresh",
+                        detail=ui_message("provider_accounts.08c4aa38f2"),
                     )
                 else:
                     # Same backup + audit trail as every other credential write.
@@ -2433,7 +2428,7 @@ class ProviderAccountManager:
             quota.update(
                 {
                     "status": "stale" if retained else "error",
-                    "error": str(exc),
+                    "error": error_text(exc),
                     "attempted_at": now,
                 }
             )

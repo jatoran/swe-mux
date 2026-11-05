@@ -1,3 +1,5 @@
+import { codeLabel } from './localization/codeLabels.ts'
+import { t } from './localization/index.ts'
 // The sidebar row's field engine: (session, config, fleet context) -> tokens.
 //
 // Pure and DOM-free so the notability rules are testable without rendering. The
@@ -264,23 +266,23 @@ const HUMAN_PROMPT_MARK = '⌨'
  */
 export function formatRowDuration(seconds: number): string {
   const total = Math.max(0, Math.floor(seconds))
-  if (total < 60) return `${total}s`
+  if (total < 60) return t("sessionRowFields.6732456ec2", { value1: total })
   const minutes = Math.floor(total / 60)
   if (minutes < 60) {
     // Sub-ten-minute values keep their seconds: a turn that took 72s and one
     // that took 110s are meaningfully different, and both read "1m" without it.
     const rest = total % 60
-    return minutes < 10 && rest ? `${minutes}m${String(rest).padStart(2, '0')}` : `${minutes}m`
+    return minutes < 10 && rest ? t("sessionRowFields.3d3314d914", { value1: minutes, value2: String(rest).padStart(2, '0') }) : t("sessionRowFields.10767db0b0", { value1: minutes })
   }
   const hours = Math.floor(minutes / 60)
   if (hours < 24) {
     const rest = minutes % 60
-    return hours < 10 && rest ? `${hours}h${String(rest).padStart(2, '0')}` : `${hours}h`
+    return hours < 10 && rest ? t("sessionRowFields.85de4e3387", { value1: hours, value2: String(rest).padStart(2, '0') }) : t("sessionRowFields.9f42db020f", { value1: hours })
   }
   const days = Math.floor(hours / 24)
   const restHours = hours % 24
-  if (days > 99) return '99d+'
-  return days < 10 && restHours ? `${days}d${restHours}h` : `${days}d`
+  if (days > 99) return t("sessionRowFields.f926002f6f")
+  return days < 10 && restHours ? t("sessionRowFields.56047208d8", { value1: days, value2: restHours }) : t("sessionRowFields.eb20d8f12a", { value1: days })
 }
 
 /**
@@ -417,7 +419,7 @@ function durationToken(session: Session, context: SessionRowContext): { text: st
   if (isEnded(session)) {
     const lifetime = Math.max(0, (session.state_since || context.now) - (session.created_at || 0))
     return session.created_at
-      ? { text: formatRowDuration(lifetime), title: `session lifetime ${formatRowDuration(lifetime)}`, seconds: lifetime }
+      ? { text: formatRowDuration(lifetime), get title() { return t("sessionRowFields.23942ca45b", { value1: formatRowDuration(lifetime) }) }, seconds: lifetime }
       : null
   }
   if (session.state === 'idle') {
@@ -428,27 +430,27 @@ function durationToken(session: Session, context: SessionRowContext): { text: st
     if (running) {
       const label = formatRowDuration(running.seconds)
       const title = running.anchor === 'work'
-        ? `work has been running ${label} — the turn ended, its agents did not`
-        : `${label} since you prompted — the turn ended, its agents did not`
+        ? t("sessionRowFields.8f2c21e1bc", { value1: label })
+        : t("sessionRowFields.9cc22b9535", { value1: label })
       return { text: label, title, seconds: running.seconds }
     }
     if (typeof session.last_turn_ms !== 'number' || session.last_turn_ms < MIN_REPORTABLE_TURN_MS) return null
     const seconds = session.last_turn_ms / 1000
-    return { text: formatRowDuration(seconds), title: `last turn took ${formatRowDuration(seconds)}`, seconds }
+    return { text: formatRowDuration(seconds), get title() { return t("sessionRowFields.0325e028d0", { value1: formatRowDuration(seconds) }) }, seconds }
   }
   if (session.turn_started_at) {
     const effectiveNow = session.interrupt_pending_at ?? context.now
     const seconds = ageOf(session.turn_started_at, effectiveNow)
     if (seconds === null) return null
     const title = session.interrupt_pending_at
-      ? `turn ran ${formatRowDuration(seconds)} before interruption was requested`
-      : `this turn has run ${formatRowDuration(seconds)}`
+      ? t("sessionRowFields.0d727878e6", { value1: formatRowDuration(seconds) })
+      : t("sessionRowFields.dfc008e2c5", { value1: formatRowDuration(seconds) })
     return { text: formatRowDuration(seconds), title, seconds }
   }
   if (!session.state_since) return null
   const seconds = ageOf(session.state_since, context.now)
   if (seconds === null) return null
-  return { text: formatRowDuration(seconds), title: `${session.state} for ${formatRowDuration(seconds)}`, seconds }
+  return { text: formatRowDuration(seconds), get title() { return t("sessionRowFields.551f6bdf12", { state: codeLabel(session.state), value2: formatRowDuration(seconds) }) }, seconds }
 }
 
 function durationIsNotable(session: Session, seconds: number): boolean {
@@ -467,7 +469,7 @@ function durationIsNotable(session: Session, seconds: number): boolean {
 /** What the session is doing, minus the state word the indicator already carries. */
 function detailText(session: Session, context: SessionRowContext): { text: string; tone: RowTone } | null {
   if (isAgentBackend(session.backend) && !isObservedHarness(session.backend)) {
-    return { text: 'not observed by mux', tone: 'muted' }
+    return { get text() { return t("sessionRowFields.86fdf36145") }, tone: 'muted' }
   }
   if (session.state === 'awaiting') {
     // How long it has been blocked on you, which the duration column used to
@@ -491,10 +493,10 @@ function detailText(session: Session, context: SessionRowContext): { text: strin
     // "ready · turn complete" is the state said twice. Only the idle reason that
     // contradicts "finished" is worth the room.
     return session.idle_reason === 'waiting_on_background'
-      ? { text: 'background work running', tone: 'default' }
+      ? { get text() { return t("sessionRowFields.cbc3bae7db") }, tone: 'default' }
       : null
   }
-  if (session.state === 'starting') return { text: 'starting agent…', tone: 'muted' }
+  if (session.state === 'starting') return { get text() { return t("sessionRowFields.6f58d4e6b0") }, tone: 'muted' }
   return null
 }
 
@@ -598,7 +600,7 @@ function accountToken(session: Session, labels: Record<string, string>): { text:
     const text = [...label].length > ACCOUNT_TOKEN_CHARS ? `${[...label].slice(0, ACCOUNT_TOKEN_CHARS - 1).join('')}…` : label
     // "Spawned under", never "using": mux stamps what it had selected when the process
     // started and cannot see a `/login` typed inside the pane.
-    return { text, title: `spawned under ${session.spawn_provider || 'provider'} account ${label}` }
+    return { text, get title() { return t("sessionRowFields.0d44508ba0", { value1: session.spawn_provider || 'provider', label: label }) } }
   }
   const entries = Object.entries(session.provider_account_hashes || {})
   if (!entries.length) return null
@@ -606,7 +608,7 @@ function accountToken(session: Session, labels: Record<string, string>): { text:
   if (!hash) return null
   // omp records a pseudonymous hash, not a friendly account name, so this answers
   // "is this the same account as that row?" and nothing more.
-  return { text: hash.slice(0, 6), title: `${provider} account ${hash}` }
+  return { text: hash.slice(0, 6), get title() { return t("sessionRowFields.a468edea1a", { provider: provider, hash: hash }) } }
 }
 
 /**
@@ -625,7 +627,7 @@ function checkoutShare(session: Session, context: SessionRowContext): number {
 }
 
 const sharedNote = (share: number): string =>
-  share > 1 ? ` — shared checkout, ${share} live sessions report it` : ''
+  share > 1 ? t("sessionRowFields.bad0930f90", { value1: share }) : ''
 
 /**
  * The hook vocabulary both Claude and Codex emit, in row-sized words. An
@@ -633,12 +635,12 @@ const sharedNote = (share: number): string =>
  * fact worth showing and not a reason to go quiet.
  */
 const PERMISSION_MODE_LABELS: Record<string, string> = {
-  default: 'default',
-  acceptEdits: 'accept edits',
-  plan: 'plan',
-  dontAsk: 'don’t ask',
-  bypassPermissions: 'bypass',
-  auto: 'auto',
+  get default() { return t("sessionRowFields.37a8eec1ce") },
+  get acceptEdits() { return t("sessionRowFields.2cf2648c8a") },
+  get plan() { return t("sessionRowFields.64879f7d6b") },
+  get dontAsk() { return t("sessionRowFields.c263e162a8") },
+  get bypassPermissions() { return t("sessionRowFields.f271a122bf") },
+  get auto() { return t("sessionRowFields.929260ad9b") },
 }
 
 /** Modes under which the harness acts without asking: the ones worth amber. */
@@ -659,11 +661,11 @@ function limitCandidate(
   if (!window || typeof window.used_pct !== 'number' || !Number.isFinite(window.used_pct)) return null
   const pct = Math.max(0, Math.round(window.used_pct))
   const resets = typeof window.resets_at === 'number' && window.resets_at > now
-    ? `, resets in ${formatRowDuration(window.resets_at - now)}`
+    ? t("sessionRowFields.9bd44902b8", { value1: formatRowDuration(window.resets_at - now) })
     : ''
   return {
-    text: `${mark} ${pct}%`,
-    title: `${name} limit ${pct}% used${resets}`,
+    get text() { return t("sessionRowFields.027a28600d", { mark: mark, pct: pct }) },
+    get title() { return t("sessionRowFields.bb50f3210f", { name: name, pct: pct, resets: resets }) },
     tone: limitTone(pct),
     notable: pct >= LIMIT_NOTABLE_PCT,
   }
@@ -703,7 +705,7 @@ function candidateFor(
       return isAgentBackend(session.backend) ? make({ kind: 'glyph', text: session.backend }, true) : null
     case 'broadcast':
       return session.broadcast
-        ? make({ kind: 'broadcast', text: '⇶', title: 'In the broadcast set — keystrokes mirror here while broadcast input is on' }, true)
+        ? make({ kind: 'broadcast', text: '⇶', get title() { return t("sessionRowFields.85f39ed489") } }, true)
         : null
     case 'voice': {
       // A pending terminal has no conversation to read from, and a shell has no
@@ -714,10 +716,10 @@ function candidateFor(
       if (mode === 'off') return null
       return make({
         kind: 'voice',
-        text: `read aloud: ${voiceModeLabel(mode)}`,
+        get text() { return t("sessionRowFields.37f4255270", { value1: voiceModeLabel(mode) }) },
         title: mode === 'auto'
-          ? 'Read aloud · every completed reply becomes audio automatically · change it in the voice panel’s tts tab'
-          : 'Read aloud · on demand: audio is made when you ask for it · change it in the voice panel’s tts tab',
+          ? t("sessionRowFields.1ae263f968")
+          : t("sessionRowFields.1c09b2efcf"),
         voice: mode,
       }, true)
     }
@@ -742,11 +744,11 @@ function candidateFor(
       return make(
         {
           kind: 'text',
-          text: mode === 'allow_all' ? 'auto ALL' : 'auto',
+          text: mode === 'allow_all' ? t("sessionRowFields.52cf7d46f4") : t("sessionRowFields.929260ad9b"),
           tone: 'warn',
           title:
-            `swe-mux is answering this conversation's approval requests (${MODE_LABELS[mode]})` +
-            `; ${answered} answered so far`,
+            t("sessionRowFields.489fad9a4c", { value1: MODE_LABELS[mode] }) +
+            t("sessionRowFields.d707941c1a", { value1: answered }),
         },
         true,
       )
@@ -758,10 +760,10 @@ function candidateFor(
       return make(
         {
           kind: 'draft',
-          text: 'unsent input',
+          get text() { return t("sessionRowFields.115f7044b9") },
           title: age === null
-            ? 'unsent text is sitting in this session’s composer'
-            : `unsent text is sitting in this session’s composer, from ${formatRowDuration(age)} ago`,
+            ? t("sessionRowFields.b395c16403")
+            : t("sessionRowFields.d6aa67f1ac", { value1: formatRowDuration(age) }),
         },
         true,
       )
@@ -800,7 +802,7 @@ function candidateFor(
           text: label,
           prefix: HUMAN_PROMPT_MARK,
           tone: 'muted',
-          title: `you last prompted this session ${label} ago`,
+          get title() { return t("sessionRowFields.75a97509d1", { label: label }) },
         },
         notable,
       )
@@ -811,7 +813,7 @@ function candidateFor(
       const seconds = ageOf(session.state_since, context.now)
       if (seconds === null) return null
       return make(
-        { kind: 'text', text: formatRowDuration(seconds), tone: 'muted', title: `idle for ${formatRowDuration(seconds)}` },
+        { kind: 'text', text: formatRowDuration(seconds), tone: 'muted', get title() { return t("sessionRowFields.dd3969cf7a", { value1: formatRowDuration(seconds) }) } },
         seconds >= IDLE_FOR_NOTABLE_SECONDS,
       )
     }
@@ -826,8 +828,8 @@ function candidateFor(
           prefix: WORKED_MARK,
           tone: 'muted',
           title:
-            `this session has worked ${label} in total, summed over its completed turns` +
-            (session.turn_started_at ? ' plus the turn running now' : ''),
+            t("sessionRowFields.7a0c0a106b", { value1: label }) +
+            (session.turn_started_at ? t("sessionRowFields.37baf93fd4") : ''),
         },
         seconds >= WORKED_NOTABLE_SECONDS,
       )
@@ -850,12 +852,12 @@ function candidateFor(
           {
             kind: 'text',
             text: label,
-            title: `context ${label}`,
+            get title() { return t("sessionRowFields.186d524d2c", { label: label }) },
             tone: gauge.band === 'calm' ? 'default' : gauge.band,
           },
           notable,
         )
-        : make({ kind: 'gauge', text: label, title: `context ${label}`, gauge }, notable)
+        : make({ kind: 'gauge', text: label, get title() { return t("sessionRowFields.186d524d2c", { label: label }) }, gauge }, notable)
     }
     case 'branch': {
       const branch = session.git?.branch
@@ -866,21 +868,21 @@ function candidateFor(
       if (worktree && worktree === branch) return null
       const text = config.gitGlyphs ? `⎇ ${branch}` : branch
       const notable = branch !== context.defaultBranch[session.project_id]
-      return make({ kind: 'text', text, title: `branch ${branch}` }, notable)
+      return make({ kind: 'text', text, get title() { return t("sessionRowFields.de09ee68fc", { branch: branch }) } }, notable)
     }
     case 'worktree': {
       const worktree = session.git?.worktree
       if (!worktree) return null
       const text = config.gitGlyphs ? `⌂ ${worktree}` : worktree
-      return make({ kind: 'text', text, title: `linked worktree ${worktree}` }, true)
+      return make({ kind: 'text', text, get title() { return t("sessionRowFields.8c8a966f43", { worktree: worktree }) } }, true)
     }
     case 'diff': {
       const added = session.git?.added, removed = session.git?.removed
       if (typeof added !== 'number' || typeof removed !== 'number') return null
       const share = checkoutShare(session, context)
-      const title = `+${added} -${removed} uncommitted lines against HEAD${sharedNote(share)}`
+      const title = t("sessionRowFields.9837165458", { value1: added, value2: removed, value3: sharedNote(share) })
       return make(
-        { kind: 'diff', text: `+${added} -${removed}`, title, diff: { added, removed }, shared: share > 1 },
+        { kind: 'diff', get text() { return t("sessionRowFields.ee028fe0b3", { added: added, removed: removed }) }, title, diff: { added, removed }, shared: share > 1 },
         added + removed > 0,
       )
     }
@@ -890,7 +892,7 @@ function candidateFor(
       return make(
         {
           kind: 'count', text: String(dirty), count: dirty, shared: share > 1,
-          title: `${dirty} changed file${dirty === 1 ? '' : 's'} in the working tree${sharedNote(share)}`,
+          get title() { return t("sessionRowFields.f6f5d02119", { dirty: dirty, value2: (dirty === 1) ? 'yes' : 'no', value3: sharedNote(share) }) },
         },
         dirty > 0,
       )
@@ -903,11 +905,11 @@ function candidateFor(
       const added = session.git?.compare_added, removed = session.git?.compare_removed
       if (typeof added !== 'number' || typeof removed !== 'number') return null
       const share = checkoutShare(session, context)
-      const base = session.git?.compare_ref || 'its base'
-      const title = `+${added} -${removed} lines vs ${base}, committed and uncommitted${sharedNote(share)}`
+      const base = session.git?.compare_ref || t("sessionRowFields.6fb4dc0ade")
+      const title = t("sessionRowFields.d5f126aeb3", { value1: added, value2: removed, value3: base, value4: sharedNote(share) })
       return make(
         {
-          kind: 'diff', text: `+${added} -${removed}`, title, prefix: BRANCH_SCOPE_MARK,
+          kind: 'diff', get text() { return t("sessionRowFields.ee028fe0b3", { added: added, removed: removed }) }, title, prefix: BRANCH_SCOPE_MARK,
           diff: { added, removed }, shared: share > 1,
         },
         added + removed > 0,
@@ -917,33 +919,33 @@ function candidateFor(
       const files = session.git?.compare_files
       if (typeof files !== 'number') return null
       const share = checkoutShare(session, context)
-      const base = session.git?.compare_ref || 'its base'
+      const base = session.git?.compare_ref || t("sessionRowFields.6fb4dc0ade")
       return make(
         {
           kind: 'count', text: String(files), count: files,
           prefix: BRANCH_SCOPE_MARK, shared: share > 1,
-          title: `${files} file${files === 1 ? '' : 's'} changed vs ${base}${sharedNote(share)}`,
+          get title() { return t("sessionRowFields.c76c646f4b", { files: files, value2: (files === 1) ? 'yes' : 'no', base: base, value4: sharedNote(share) }) },
         },
         files > 0,
       )
     }
     case 'sync': {
       const ahead = session.git?.ahead || 0, behind = session.git?.behind || 0
-      if (!ahead && !behind) return make({ kind: 'text', text: '↕0', tone: 'muted', title: 'in sync with upstream' }, false)
+      if (!ahead && !behind) return make({ kind: 'text', text: '↕0', tone: 'muted', get title() { return t("sessionRowFields.f5d140e165") } }, false)
       const text = `${ahead ? `↑${ahead}` : ''}${behind ? `↓${behind}` : ''}`
-      return make({ kind: 'text', text, title: `${ahead} ahead, ${behind} behind upstream` }, true)
+      return make({ kind: 'text', text, get title() { return t("sessionRowFields.377763844b", { ahead: ahead, behind: behind }) } }, true)
     }
     case 'queue': {
       const depth = context.queueDepth[session.id] || 0
       return make(
-        { kind: 'count', text: `⋮${depth}`, count: depth, title: `${depth} queued message${depth === 1 ? '' : 's'}` },
+        { kind: 'count', get text() { return t("sessionRowFields.4e8a739ea7", { depth: depth }) }, count: depth, get title() { return t("sessionRowFields.1a78e5d844", { depth: depth, value2: (depth === 1) ? 'yes' : 'no' }) } },
         depth > 0,
       )
     }
     case 'model': {
       const model = session.model
       if (!model) return null
-      return make({ kind: 'text', text: displayModelName(model), title: `model ${model}` }, model !== context.defaultModel[session.project_id])
+      return make({ kind: 'text', text: displayModelName(model), get title() { return t("sessionRowFields.329ec12292", { model: model }) } }, model !== context.defaultModel[session.project_id])
     }
     case 'account': {
       const account = accountToken(session, context.accountLabels)
@@ -951,7 +953,7 @@ function candidateFor(
     }
     case 'compactions': {
       const count = session.compaction_count || 0
-      return make({ kind: 'text', text: `×${count}`, tone: 'muted', title: `compacted ${count} time${count === 1 ? '' : 's'}` }, count > 0)
+      return make({ kind: 'text', get text() { return t("sessionRowFields.816c0b505e", { count: count }) }, tone: 'muted', get title() { return t("sessionRowFields.9d8d06815e", { count: count, value2: (count === 1) ? 'yes' : 'no' }) } }, count > 0)
     }
     case 'cost': {
       // Nothing rather than `$0.00`: only a harness that reports its own cost
@@ -960,13 +962,13 @@ function candidateFor(
       // wearing the shape of one - the same rule the duration states at length.
       const cost = session.cost_usd || 0
       if (!(cost > 0)) return null
-      return make({ kind: 'text', text: `$${cost < 10 ? cost.toFixed(2) : Math.round(cost)}`, tone: 'muted', title: `spent $${cost.toFixed(4)}` }, cost >= COST_NOTABLE_USD)
+      return make({ kind: 'text', get text() { return t("sessionRowFields.5a7528d5e3", { value1: cost < 10 ? cost.toFixed(2) : Math.round(cost) }) }, tone: 'muted', get title() { return t("sessionRowFields.4ff9ba20fe", { value1: cost.toFixed(4) }) } }, cost >= COST_NOTABLE_USD)
     }
     case 'effort': {
       const effort = session.harness_status?.effort
       if (!effort) return null
       return make(
-        { kind: 'text', text: effort, tone: 'muted', title: `reasoning effort ${effort}` },
+        { kind: 'text', text: effort, tone: 'muted', get title() { return t("sessionRowFields.6db9bc5804", { effort: effort }) } },
         effort !== context.defaultEffort[session.project_id],
       )
     }
@@ -981,8 +983,8 @@ function candidateFor(
           text: label,
           tone: unattended ? 'warn' : mode === 'default' ? 'muted' : 'default',
           title: unattended
-            ? `permission mode ${label} (${mode}): the agent acts without asking`
-            : `permission mode ${label} (${mode})`,
+            ? t("sessionRowFields.fd431c75b5", { value1: label, value2: mode })
+            : t("sessionRowFields.36e4aeb7c4", { value1: label, value2: mode }),
         },
         mode !== 'default',
       )

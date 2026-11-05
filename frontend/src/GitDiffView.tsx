@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import type { ComponentType } from 'preact'
 import { Diff, getChangeKey, parseDiff, type ChangeData, type HunkData } from 'react-diff-view'
 import 'react-diff-view/style/index.css'
@@ -34,7 +35,7 @@ function slicedHunks(hunks:HunkData[],limit:number):{hunks:HunkData[];omitted:bo
 
 export function GitDiffView(props:GitDiffViewProps) {
   const files=parseDiff(props.patch,{nearbySequences:'zip'})
-  if(!files.length)return <p class="git-diff-state">The patch contains no renderable hunks.</p>
+  if(!files.length)return <p class="git-diff-state">{t("GitDiffView.1a1a9d38f2")}</p>
   return <div class={`git-diff-render ${props.wrap?'wrap':'nowrap'}`}>
     {files.map((file,fileIndex)=>{
       const sliced=slicedHunks(file.hunks,props.rowLimit??Number.MAX_SAFE_INTEGER)
@@ -58,10 +59,10 @@ export function GitDiffView(props:GitDiffViewProps) {
           widgets={widgets}
           renderGutter={({change,side,renderDefault}:any)=>{
             const line=lineFor(change,side)
-            return line===null?renderDefault():<button class="git-diff-gutter-button" aria-label={`Annotate ${side} line ${line}`} onClick={(event:MouseEvent)=>{event.preventDefault();event.stopPropagation();props.onGutter?.(side,line,event.shiftKey)}}>{renderDefault()}</button>
+            return line===null?renderDefault():<button class="git-diff-gutter-button" aria-label={t("GitDiffView.333e410942", { side: side, line: line })} onClick={(event:MouseEvent)=>{event.preventDefault();event.stopPropagation();props.onGutter?.(side,line,event.shiftKey)}}>{renderDefault()}</button>
           }}
         />
-        {sliced.omitted&&<p class="git-diff-omitted">Additional hunks omitted from this preview.</p>}
+        {sliced.omitted && <p class="git-diff-omitted">{t("GitDiffView.d9a1efa7a9")}</p>}
       </div>
     })}
   </div>

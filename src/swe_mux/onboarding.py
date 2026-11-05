@@ -21,6 +21,7 @@ from typing import Any, cast
 from uuid import uuid4
 
 from .config import Config
+from .ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 STEPS = (
@@ -108,12 +109,12 @@ def _read_state(config: Config, identity: str) -> dict[str, Any]:
     try:
         state = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(state, dict) or state.get("version") != 1:
-            raise ValueError("unsupported onboarding record")
+            raise ValueError(ui_message("onboarding.843d4cac78"))
         validate_patch({key: state[key] for key in EDITABLE})
         if type(state["revision"]) is not int or state["revision"] < 0:
-            raise ValueError("invalid revision")
+            raise ValueError(ui_message("onboarding.42ec8e6bf7"))
         if not isinstance(state["installation"], str):
-            raise ValueError("invalid installation identity")
+            raise ValueError(ui_message("onboarding.7d7368de3b"))
     except FileNotFoundError:
         state = initial_state(config, identity)
         write_state(config, state)
@@ -168,16 +169,16 @@ DRAFT_KEYS = frozenset(
 
 def validate_patch(patch: dict[str, Any]) -> None:
     if set(patch) - EDITABLE:
-        raise ValueError("unknown onboarding field")
+        raise ValueError(ui_message("onboarding.8a1f98803d"))
     for key, choices in (("step", STEPS), ("status", STATUSES), ("tour_status", TOUR_STATUSES)):
         if key in patch and patch[key] not in choices:
-            raise ValueError(f"invalid {key}")
+            raise ValueError(ui_message("onboarding.6223be6a8b", value1=key))
     if "hidden" in patch and not isinstance(patch["hidden"], bool):
-        raise ValueError("hidden must be a boolean")
+        raise ValueError(ui_message("onboarding.6f76c22845"))
     if "tour_step" in patch and (
         not isinstance(patch["tour_step"], str) or len(patch["tour_step"]) > 64
     ):
-        raise ValueError("invalid tour step")
+        raise ValueError(ui_message("onboarding.806625edfd"))
     for key in ("dismissed", "completed"):
         if key in patch:
             value = patch[key]
@@ -186,11 +187,11 @@ def validate_patch(patch: dict[str, Any]) -> None:
                 or any(item not in QUESTS for item in value)
                 or len(value) != len(set(value))
             ):
-                raise ValueError(f"invalid {key}")
+                raise ValueError(ui_message("onboarding.6223be6a8b", value1=key))
     if "draft" in patch:
         draft = patch["draft"]
         if not isinstance(draft, dict) or set(draft) - DRAFT_KEYS:
-            raise ValueError("invalid setup draft; credentials cannot be stored here")
+            raise ValueError(ui_message("onboarding.6aa81fd2c9"))
         for key, choices in (
             ("tier", ("terminal", "deterministic", "automations")),
             ("applied_experience", ("terminal", "deterministic", "automations")),
@@ -198,10 +199,10 @@ def validate_patch(patch: dict[str, Any]) -> None:
             ("fleet_access", ("default", "mcp", "cli", "none")),
         ):
             if key in draft and draft[key] not in choices:
-                raise ValueError(f"invalid draft {key}")
+                raise ValueError(ui_message("onboarding.7c8b941fa2", value1=key))
         for key in ("theme", "keymap", "keymap_applied", "default_harness"):
             if key in draft and (not isinstance(draft[key], str) or len(draft[key]) > 100):
-                raise ValueError(f"invalid draft {key}")
+                raise ValueError(ui_message("onboarding.7c8b941fa2", value1=key))
         for key in (
             "scan_history",
             "rail_desktop",
@@ -210,16 +211,16 @@ def validate_patch(patch: dict[str, Any]) -> None:
             "model_features_pending",
         ):
             if key in draft and not isinstance(draft[key], bool):
-                raise ValueError(f"invalid draft {key}")
+                raise ValueError(ui_message("onboarding.7c8b941fa2", value1=key))
         for key in ("project_id", "project_path", "project_name", "project_filter"):
             if key in draft and (not isinstance(draft[key], str) or len(draft[key]) > 2048):
-                raise ValueError(f"invalid draft {key}")
+                raise ValueError(ui_message("onboarding.7c8b941fa2", value1=key))
         if "provider_return" in draft and draft["provider_return"] not in (
             "permissions",
             "extras",
             "voice",
         ):
-            raise ValueError("invalid provider return step")
+            raise ValueError(ui_message("onboarding.eb53f8ff42"))
         if "selected_projects" in draft:
             selected = draft["selected_projects"]
             if (
@@ -227,7 +228,7 @@ def validate_patch(patch: dict[str, Any]) -> None:
                 or len(selected) > 200
                 or any(not isinstance(path, str) or len(path) > 2048 for path in selected)
             ):
-                raise ValueError("invalid selected projects")
+                raise ValueError(ui_message("onboarding.b8e22627e0"))
         if "voice" in draft:
             validate_voice_draft(draft["voice"])
         if "provider" in draft:
@@ -239,9 +240,9 @@ def validate_patch(patch: dict[str, Any]) -> None:
                 not isinstance(draft[key], dict)
                 or any(not isinstance(value, bool) for value in draft[key].values())
             ):
-                raise ValueError(f"invalid draft {key}")
+                raise ValueError(ui_message("onboarding.7c8b941fa2", value1=key))
         if len(json.dumps(draft)) > 128000:
-            raise ValueError("setup draft too large")
+            raise ValueError(ui_message("onboarding.cfa44830b2"))
 
 
 def validate_voice_draft(voice: Any) -> None:
@@ -252,12 +253,12 @@ def validate_voice_draft(voice: Any) -> None:
         "stt_engine": ("sapi", "whisper"),
     }
     if not isinstance(voice, dict) or set(voice) - flags - choices.keys():
-        raise ValueError("invalid voice setup draft")
+        raise ValueError(ui_message("onboarding.783441a631"))
     for key, value in voice.items():
         if (key in flags and not isinstance(value, bool)) or (
             key in choices and value not in choices[key]
         ):
-            raise ValueError(f"invalid voice setup {key}")
+            raise ValueError(ui_message("onboarding.06f83c6117", value1=key))
 
 
 def validate_autonomy_draft(overrides: Any) -> None:
@@ -269,7 +270,7 @@ def validate_autonomy_draft(overrides: Any) -> None:
         or set(overrides) - keys
         or any(type(value) is not int or value < 1 for value in overrides.values())
     ):
-        raise ValueError("invalid automatic-delivery limits")
+        raise ValueError(ui_message("onboarding.18693bf610"))
 
 
 def validate_provider_draft(provider: Any) -> None:
@@ -285,24 +286,24 @@ def validate_provider_draft(provider: Any) -> None:
         "openrouter_standard_model",
     }
     if not isinstance(provider, dict) or set(provider) - strings - {"automation_daily_budget"}:
-        raise ValueError("invalid provider setup draft; credentials cannot be stored here")
+        raise ValueError(ui_message("onboarding.fbb9852e54"))
     if any(
         not isinstance(value, str) or len(value) > 2048
         for key, value in provider.items()
         if key in strings
     ):
-        raise ValueError("invalid provider setup field")
+        raise ValueError(ui_message("onboarding.1adb911ca2"))
     if "llm_provider" in provider and provider["llm_provider"] not in ("openrouter", "custom"):
-        raise ValueError("invalid model provider")
+        raise ValueError(ui_message("onboarding.023efc62bf"))
     if "automation_daily_budget" in provider:
         value = provider["automation_daily_budget"]
         if not isinstance(value, dict) or set(value) != {"tokens", "usd", "mode"}:
-            raise ValueError("invalid setup spending limit")
+            raise ValueError(ui_message("onboarding.26883ab1b8"))
         if value["mode"] not in ("tokens", "usd", "either") or any(
             number is not None and (type(number) not in (int, float) or not math.isfinite(number))
             for number in (value["tokens"], value["usd"])
         ):
-            raise ValueError("invalid setup spending limit")
+            raise ValueError(ui_message("onboarding.26883ab1b8"))
         spec = BUDGET_FIELDS["automation_daily_budget"]
         errors: dict[str, str] = {}
         validate(
@@ -323,7 +324,7 @@ def change_state(config: Config, patch: dict[str, Any], revision: int) -> dict[s
     with _STATE_LOCK:
         current = read_state(config)
         if revision != current["revision"]:
-            raise ValueError("onboarding changed on another client; reload and try again")
+            raise ValueError(ui_message("onboarding.ad92d995ce"))
         state = {
             **copy.deepcopy(current),
             **patch,

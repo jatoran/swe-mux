@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 export type AgentContextStatus = 'available' | 'missing' | 'disabled' | 'unsupported' | 'unreadable' | 'too_large'
 export type AgentContextComparison = 'linked' | 'in_sync' | 'different' | 'missing'
 export type AgentContextDirection = string
@@ -108,23 +109,23 @@ export interface AgentContextLinkPreview {
   diff_truncated: boolean
 }
 export function comparisonLabel(value: AgentContextComparison): string {
-  if (value === 'in_sync') return 'In sync'
-  if (value === 'different') return 'Different'
-  if (value === 'linked') return 'Linked'
-  return 'One or both missing'
+  if (value === 'in_sync') return t("agentContext.5701958c09")
+  if (value === 'different') return t("agentContext.e9cdbd4dd5")
+  if (value === 'linked') return t("agentContext.bfda026e6c")
+  return t("agentContext.ff3b3c64a0")
 }
 
 export function statusLabel(value: AgentContextStatus): string {
-  return value === 'too_large' ? 'too large' : value
+  return value === 'too_large' ? t("agentContext.0d8bc99256") : value
 }
 
 export function backupAction(backup: AgentContextBackup): string {
-  if (backup.entry_kind === 'symlink') return `Restore link for ${backup.target}`
-  return backup.existed ? `Restore ${backup.target}` : `Remove created ${backup.target}`
+  if (backup.entry_kind === 'symlink') return t("agentContext.a49a66ce95", { value1: backup.target })
+  return backup.existed ? `Restore ${backup.target}` : t("agentContext.aac4fc6e3b", { value1: backup.target })
 }
 
 export function canonicalLinkLabel(option: AgentContextSyncOption): string {
-  return `Use ${option.source} as canonical`
+  return t("agentContext.42f46107fe", { source: option.source })
 }
 
 export function memoryFileCount(providers: AgentContextProvider[]): number {

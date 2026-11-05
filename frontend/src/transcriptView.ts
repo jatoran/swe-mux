@@ -1,3 +1,5 @@
+import { dateTimeFormatter } from './localization/index.ts'
+import { t } from './localization/index.ts'
 // The drawer's Transcript tab: shared types, its scroll memory, and the pure
 // helpers behind reading and copying.
 //
@@ -210,13 +212,13 @@ function transcriptTimestampDate(value: TranscriptTimestamp): Date | null {
 // One formatter for every transcript timestamp. `toLocaleString` with options builds a
 // new `Intl.DateTimeFormat` per call - locale negotiation and pattern compilation each
 // time - and a column of a few hundred messages paid that a few hundred times a render.
-let timestampFormat: Intl.DateTimeFormat | null = null
+let timestampFormat: ReturnType<typeof dateTimeFormatter> | null = null
 
 /** Full local date and time shared by live and historical transcript messages. */
 export function transcriptTimestampLabel(value: TranscriptTimestamp): string {
   const date = transcriptTimestampDate(value)
   if (!date) return ''
-  timestampFormat ??= new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+  timestampFormat ??= dateTimeFormatter({ dateStyle: 'medium', timeStyle: 'short' })
   return timestampFormat.format(date)
 }
 
@@ -480,7 +482,7 @@ export function transcriptIndexingLabel(progress: TranscriptIndexProgress | unde
   const total = progress?.total_bytes || 0
   const read = Math.min(total, progress?.read_bytes || 0)
   const share = total > 0 ? ` (${Math.floor((read / total) * 100)}%)` : ''
-  return `Reading this long conversation for the first time${share}…`
+  return t("transcriptView.fbc5f2d8f0", { share: share })
 }
 
 // The last few conversations read, so returning to one draws it at once and then asks
@@ -538,7 +540,7 @@ export const transcriptSpeaker = (role: TranscriptMessage['role']): string => ro
  * second one continuing the first and answering it. */
 export function transcriptToolBoundaryLabel(count: number): string {
   if (!Number.isFinite(count) || count < 1) return ''
-  return `${count} tool call${count === 1 ? '' : 's'}`
+  return t("transcriptView.7d2bf6c2b9", { count: count, value2: (count === 1) ? 'yes' : 'no' })
 }
 
 /** Human-readable native input for one collapsed tool-call disclosure. */
@@ -602,18 +604,18 @@ export function groupTranscriptMessages(messages: readonly TranscriptMessage[]):
 /** What a fold says about itself, in messages rather than records. */
 export function transcriptAbandonedLabel(count: number): string {
   return count === 1
-    ? '1 message from a branch this conversation left'
-    : `${count} messages from a branch this conversation left`
+    ? t("transcriptView.aa9218b323")
+    : t("transcriptView.c39b524f59", { value1: count })
 }
 
 /** The sentence shown in place of a conversation, per daemon-reported reason. */
 export function transcriptEmptyMessage(reason: TranscriptReason, backend?: string): string {
-  if (reason === 'agent_bridge_unavailable') return 'Transcript following is unavailable across this terminal boundary.'
+  if (reason === 'agent_bridge_unavailable') return t("transcriptView.7dade03f10")
   if (reason === 'not_agent') return backend === 'shell'
-    ? 'This is a shell session, so it has no agent conversation to read.'
-    : 'This session has no agent conversation to read.'
-  if (reason === 'no_transcript') return 'This agent has not written its first message yet.'
-  if (reason === 'unreadable') return 'The native transcript could not be read just now. Retrying.'
+    ? t("transcriptView.56ba915983")
+    : t("transcriptView.29f1dba965")
+  if (reason === 'no_transcript') return t("transcriptView.a400917c65")
+  if (reason === 'unreadable') return t("transcriptView.529dae9cd4")
   if (reason === 'indexing') return transcriptIndexingLabel(undefined)
-  return 'Nothing has been said in this conversation yet.'
+  return t("transcriptView.c2da52d0f0")
 }

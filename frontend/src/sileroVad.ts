@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { VAD_FRAME_SAMPLES, VAD_SAMPLE_RATE } from './audioFrames.ts'
 
 /**
@@ -80,9 +81,9 @@ export class SileroVad {
   async probability(frame: Float32Array): Promise<number> {
     const ort = this.ort
     const session = this.session
-    if (!ort || !session || !this.rate) throw new Error('Silero VAD is not loaded')
+    if (!ort || !session || !this.rate) throw new Error(t("sileroVad.388d79804a"))
     if (frame.length !== VAD_FRAME_SAMPLES) {
-      throw new Error(`Silero VAD needs ${VAD_FRAME_SAMPLES}-sample frames, got ${frame.length}`)
+      throw new Error(t("sileroVad.b716321e73", { VAD_FRAME_SAMPLES: VAD_FRAME_SAMPLES, length: frame.length }))
     }
     const output = await session.run({
       input: new ort.Tensor('float32', frame, [1, frame.length]),

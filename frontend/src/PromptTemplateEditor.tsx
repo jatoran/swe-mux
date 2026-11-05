@@ -1,3 +1,4 @@
+import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { Dropdown } from './Dropdown'
@@ -100,9 +101,7 @@ export function usePromptDraft({ template, project, owners = [], resetKey, persi
   const handlers = { onSaved, onDeleted }
   const ownerKey = owners.map(item => item.id).join(' ')
   const initial = useMemo(
-    () => draftOf(template, project, owners),
-    [template?.key, template?.project_id, template?.revision, project?.id, ownerKey, resetKey],
-  )
+    () => draftOf(template, project, owners), [template?.key, template?.project_id, template?.revision, project?.id, ownerKey, resetKey, uiLocale.value, catalogRevision.value])
   const stashKey = persistKey ? `mux.prompt-draft.${persistKey}` : null
   const stashRevision = template?.revision || ''
   const dropStash = () => { if (stashKey) try { sessionStorage.removeItem(stashKey) } catch { /* best effort */ } }
@@ -134,7 +133,7 @@ export function usePromptDraft({ template, project, owners = [], resetKey, persi
   useLayoutEffect(() => setDraft(restored(initial)), [initial, stashKey])
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial)
-  const variables = useMemo(() => promptTemplateVariables(draft.body), [draft.body])
+  const variables = useMemo(() => promptTemplateVariables(draft.body), [draft.body, uiLocale.value, catalogRevision.value])
 
   useEffect(() => {
     if (!stashKey) return
@@ -148,7 +147,7 @@ export function usePromptDraft({ template, project, owners = [], resetKey, persi
     // management view edits templates belonging to Projects it is not inside.
     const projectId = draft.scope === 'project' ? draft.projectId || project?.id || null : project?.id || null
     if (draft.scope === 'project' && !projectId) {
-      setMessage('Choose a Project for a Project-scoped template.')
+      setMessage(t("PromptTemplateEditor.053c64edcc"))
       return null
     }
     const body = {
@@ -167,7 +166,7 @@ export function usePromptDraft({ template, project, owners = [], resetKey, persi
         : await api<PromptTemplate>('POST', '/api/prompts', body)
       notifyPromptLibraryChanged()
       dropStash()
-      setMessage('Saved.')
+      setMessage(t("PromptTemplateEditor.fca046ccd5"))
       latest.current.onSaved?.(saved)
       return saved
     } catch (cause) {
@@ -225,32 +224,22 @@ export function PromptDraftFields({ state, owners = [], compact }: {
   const { draft, set, template } = state
   const owner = owners.find(item => item.id === draft.projectId)
   return <div class={`prompt-draft-fields${compact ? ' compact' : ''}`}>
-    <label>Title
-      <input value={draft.title} placeholder="Name this template" onInput={event => set({ title: event.currentTarget.value })} />
-    </label>
+    <label>{rich("PromptTemplateEditor.a3799a0eb4", { value1: <input value={draft.title} placeholder={t("PromptTemplateEditor.53fc63a0b1")} onInput={event => set({ title: event.currentTarget.value })} /> })}</label>
     <div class="prompt-draft-row">
-      <label>Scope
-        <Dropdown value={draft.scope} disabled={Boolean(template)} onChange={value => {
+      <label>{rich("PromptTemplateEditor.7b6e706e8f", { value1: <Dropdown value={draft.scope} disabled={Boolean(template)} onChange={value => {
           const scope = value as PromptDraft['scope']
           set({ scope, projectId: scope === 'project' ? draft.projectId || owners[0]?.id || null : null })
         }} options={[
-          { value: 'global', label: 'Global' },
-          ...(owners.length > 0 ? [{ value: 'project', label: 'Project' }] : []),
-        ]}/>
-      </label>
-      {draft.scope === 'project' && <label>Project
-        {template
-          ? <input value={owner?.name || draft.projectId || 'unknown'} readOnly />
-          : <Dropdown value={draft.projectId || ''} disabled={owners.length < 2} onChange={value => set({ projectId: value })}
-            filter filterPlaceholder="Filter Projects…"
-            options={projectDropdownOptions(owners, item => ({ value: item.id, label: item.name }))}/>}
-      </label>}
+          { value: 'global', get label() { return t("PromptTemplateEditor.a258b30f88") } },
+          ...(owners.length > 0 ? [{ value: 'project', get label() { return t("PromptTemplateEditor.9859597853") } }] : []),
+        ]}/> })}</label>
+      {draft.scope === 'project' && <label>{rich("PromptTemplateEditor.5d3d71aabe", { value1: template ? <input value={owner?.name || draft.projectId || 'unknown'} readOnly /> : <Dropdown value={draft.projectId || ''} disabled={owners.length < 2} onChange={value => set({ projectId: value })}
+            filter filterPlaceholder={t("PromptTemplateEditor.2e0060c45e")}
+            options={projectDropdownOptions(owners, item => ({ value: item.id, label: item.name }))}/> })}</label>}
     </div>
-    <label>Tags
-      <input value={draft.tags} placeholder="review, git, planning" onInput={event => set({ tags: event.currentTarget.value })} />
-    </label>
+    <label>{rich("PromptTemplateEditor.4e355eefd2", { value1: <input value={draft.tags} placeholder={t("PromptTemplateEditor.c09e55c8b7")} onInput={event => set({ tags: event.currentTarget.value })} /> })}</label>
     <fieldset>
-      <legend>Compatible backends</legend>
+      <legend>{t("PromptTemplateEditor.a583bbf3bd")}</legend>
       {allBackendNames().map(value => <label class="check" key={value}>
         <span>{value}</span>
         <input
@@ -264,15 +253,13 @@ export function PromptDraftFields({ state, owners = [], compact }: {
         />
       </label>)}
     </fieldset>
-    <label>Template body
-      <textarea
+    <label>{rich("PromptTemplateEditor.786be0df7e", { value1: <textarea
         rows={compact ? 8 : 14}
         value={draft.body}
-        placeholder="Use {{variable_name}} placeholders."
+        placeholder={t("PromptTemplateEditor.81dbcba7b4")}
         onInput={event => set({ body: event.currentTarget.value })}
-      />
-    </label>
-    {state.variables.length > 0 && <p class="prompt-draft-note">Fields: {state.variables.join(', ')}</p>}
+      /> })}</label>
+    {state.variables.length > 0 && <p class="prompt-draft-note">{rich("PromptTemplateEditor.63ec0bfaa5", { value1: state.variables.join(', ') })}</p>}
   </div>
 }
 
@@ -287,14 +274,14 @@ export function PromptDraftActions({ state, onCancel, cancelLabel = 'Cancel' }: 
   useEffect(() => setConfirmDelete(false), [state.template?.key])
   return <div class="prompt-actions prompt-draft-actions">
     <button class="primary" disabled={!state.dirty || state.busy} onClick={() => void state.save()}>
-      {state.busy ? 'Saving…' : state.template ? 'Save' : 'Create'}
+      {state.busy ? t("PromptTemplateEditor.23e39291d6") : state.template ? t("PromptTemplateEditor.1509f561f2") : t("PromptTemplateEditor.4759498ac2")}
     </button>
-    {state.dirty && <button disabled={state.busy} onClick={state.revert}>Revert</button>}
+    {state.dirty && <button disabled={state.busy} onClick={state.revert}>{t("PromptTemplateEditor.0026c50534")}</button>}
     {onCancel && <button disabled={state.busy} onClick={onCancel}>{cancelLabel}</button>}
-    {state.template && !confirmDelete && <button class="danger" disabled={state.busy} onClick={() => setConfirmDelete(true)}>Delete</button>}
+    {state.template && !confirmDelete && <button class="danger" disabled={state.busy} onClick={() => setConfirmDelete(true)}>{t("PromptTemplateEditor.e2d0a54968")}</button>}
     {state.template && confirmDelete && <>
-      <button class="danger" disabled={state.busy} onClick={() => void state.remove()}>Confirm delete</button>
-      <button disabled={state.busy} onClick={() => setConfirmDelete(false)}>Keep</button>
+      <button class="danger" disabled={state.busy} onClick={() => void state.remove()}>{t("PromptTemplateEditor.da00fa968b")}</button>
+      <button disabled={state.busy} onClick={() => setConfirmDelete(false)}>{t("PromptTemplateEditor.183f00f483")}</button>
     </>}
   </div>
 }

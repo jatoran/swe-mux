@@ -1,3 +1,4 @@
+import { catalogRevision, locale as uiLocale } from './localization/index.ts'
 // The sidebar row's body, with the ageing clock inside it rather than above it.
 //
 // A sidebar row is the only thing in the app that has to re-read the wall clock on
@@ -37,9 +38,7 @@ function SessionRowLiveImpl({ session, config, facts, identityOnly }: SessionRow
     () => {
       const context = { ...facts, now }
       return identityOnly ? identityRowTokens(session, config, context) : buildSessionRowTokens(session, config, context)
-    },
-    [session, config, facts, identityOnly, now],
-  )
+    }, [session, config, facts, identityOnly, now, uiLocale.value, catalogRevision.value])
   return <SessionRowBody session={session} tokens={tokens} config={config} />
 }
 

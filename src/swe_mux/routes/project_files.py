@@ -31,6 +31,7 @@ from ..project_files import (
 )
 from ..recent_files import read_recent_files
 from ..runtime_config import apply_runtime_config
+from ..ui_messages import error_text, ui_message
 from .support import _project_file_root, _registered_identity, _request_project
 
 log = logging.getLogger(__name__)
@@ -63,16 +64,16 @@ async def post_project_resource(request: web.Request) -> web.Response:
     project = _request_project(request)
     body = await request.json()
     if not isinstance(body, dict):
-        raise ValueError("project resource body must be an object")
+        raise ValueError(ui_message("project_files.8572a02621"))
     parent = body.get("parent", "")
     name = body.get("name")
     kind = body.get("kind")
     if not isinstance(parent, str):
-        raise ValueError("project resource parent must be a string")
+        raise ValueError(ui_message("project_files.38b80c133b"))
     if not isinstance(name, str):
-        raise ValueError("project resource name must be a string")
+        raise ValueError(ui_message("project_files.e624711e74"))
     if not isinstance(kind, str):
-        raise ValueError("project resource kind must be a string")
+        raise ValueError(ui_message("project_files.9eeebf3287"))
 
     result = await asyncio.to_thread(
         create_project_resource,
@@ -223,7 +224,7 @@ async def put_project_file(request: web.Request) -> web.Response:
         )
     except ValueError as exc:
         if "changed externally" in str(exc):
-            return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+            return json_response({"error": error_text(exc), "code": "revision_conflict"}, 409)
         raise
     return json_response(result)
 
@@ -234,7 +235,7 @@ async def reveal_project_resource(request: web.Request) -> web.Response:
     root = await _project_file_root(project.root, body.get("worktree"))
     target = project_path(root, str(body.get("path") or ""))
     if not target.exists():
-        raise ValueError("project resource does not exist")
+        raise ValueError(ui_message("project_files.65ee48282e"))
     await asyncio.to_thread(open_in_file_manager, target)
     return json_response({"ok": True})
 
@@ -244,11 +245,11 @@ async def ignore_project_resource(request: web.Request) -> web.Response:
     body = await request.json()
     scope = str(body.get("scope") or "")
     if scope not in {"global", "project"}:
-        raise ValueError("ignore scope must be global or project")
+        raise ValueError(ui_message("project_files.846242ad6e"))
     root = Path(project.root).resolve()
     target = project_path(root, str(body.get("path") or ""))
     if target == root or not target.exists():
-        raise ValueError("project resource does not exist")
+        raise ValueError(ui_message("project_files.65ee48282e"))
     relative = target.relative_to(root).as_posix()
     pattern = target.name if scope == "global" else relative
 
@@ -269,7 +270,7 @@ async def ignore_project_resource(request: web.Request) -> web.Response:
     identity = _registered_identity(project)
     current = await read_project_config(project.root, project=identity)
     if current["status"] == "malformed":
-        raise ValueError("project config is malformed; fix it before adding an ignore")
+        raise ValueError(ui_message("project_files.75d7008951"))
     values = dict(current["values"])
     patterns = list(values.get("ignore_patterns", []))
     added = pattern not in patterns
@@ -284,10 +285,10 @@ async def put_project_watch(request: web.Request) -> web.Response:
     body = await request.json()
     raw_paths = body.get("paths", [])
     if not isinstance(raw_paths, list) or not all(isinstance(item, str) for item in raw_paths):
-        raise ValueError("paths must be an array of project-relative directories")
+        raise ValueError(ui_message("project_files.02aba9062c"))
     watch_id = body.get("watch_id")
     if watch_id is not None and (not isinstance(watch_id, str) or len(watch_id) > 100):
-        raise ValueError("watch_id must be a string of 100 characters or fewer")
+        raise ValueError(ui_message("project_files.7d58ed7075"))
     project = _request_project(request)
     root = await _project_file_root(project.root, body.get("worktree"))
     lease = await request.app[keys.PROJECT_WATCHER].register_async(

@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { useEffect, useState } from 'preact/hooks'
 import { ProcessFleetView } from './ProcessFleetView'
 import type { Preview, ProjectScope } from './processFleet'
@@ -63,9 +64,9 @@ export function ProcessesTab({
     />
     <div class="processes-footnote">
       <button
-        title="Open the same view as a full-width dialog, at this tab's current scope"
+        title={t("ProcessesTab.b4941d79b6")}
         onClick={() => { onOpenInspector(scope || null); onDone() }}
-      >Open full width</button>
+      >{t("ProcessesTab.7b6b61dc36")}</button>
     </div>
   </div>
 }

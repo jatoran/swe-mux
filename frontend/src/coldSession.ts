@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import type { Session } from './types'
 
 /**
@@ -28,8 +29,8 @@ export function isInactiveSession(session: Session): boolean {
 export function inactiveSessionSummary(session: Session): string {
   if (!isInactiveSession(session)) return ''
   return session.backend === 'shell'
-    ? 'Inactive - no process is running. Restart the terminal to use it again.'
-    : 'Inactive - no process is running. Resume to continue this conversation.'
+    ? t("coldSession.d0d525b59a")
+    : t("coldSession.7d751176f9")
 }
 
 /** Whether a recovered shell can be restarted from its recorded command. */
@@ -50,14 +51,14 @@ export function missingContentReason(session: Session): string | null {
   switch (session.cold_terminal_skipped) {
     case 'alternate_screen_harness':
     case 'alternate_screen':
-      return 'Full-screen interfaces cannot be replayed without the process that drew them.'
+      return t("coldSession.66c77ac241")
     case 'repaints_scrollback':
-      return 'This harness repaints its transcript rather than writing scrollback, so there was nothing to keep.'
+      return t("coldSession.7fc390f10f")
     case null:
     case undefined:
       return null
     default:
-      return 'No terminal content was captured.'
+      return t("coldSession.259b15983a")
   }
 }
 
@@ -70,18 +71,18 @@ export function missingContentReason(session: Session): string | null {
  */
 export function checkpointAge(capturedAt: number, now: number): string {
   const seconds = Math.max(0, Math.round(now / 1000 - capturedAt))
-  if (seconds < 90) return 'seconds before the shutdown'
+  if (seconds < 90) return t("coldSession.07720b3202")
   const minutes = Math.round(seconds / 60)
-  if (minutes < 90) return `${minutes} minute${minutes === 1 ? '' : 's'} before this restart`
+  if (minutes < 90) return t("coldSession.2c5cff824e", { value1: minutes, value2: (minutes === 1) ? 'yes' : 'no' })
   const hours = Math.round(minutes / 60)
-  if (hours < 36) return `${hours} hour${hours === 1 ? '' : 's'} before this restart`
-  return `${Math.round(hours / 24)} day${Math.round(hours / 24) === 1 ? '' : 's'} before this restart`
+  if (hours < 36) return t("coldSession.e06650a01f", { value1: hours, value2: (hours === 1) ? 'yes' : 'no' })
+  return t("coldSession.8ad118cc76", { value1: Math.round(hours / 24), value2: (Math.round(hours / 24) === 1) ? 'yes' : 'no' })
 }
 
 /** One line explaining a recovered row, for a tooltip. */
 export function coldSessionSummary(session: Session, now: number = Date.now()): string {
   const content = session.cold_terminal_at
-    ? `Terminal content is from ${checkpointAge(session.cold_terminal_at, now)}.`
-    : missingContentReason(session) ?? 'No terminal content was captured.'
-  return `Recovered after an unexpected shutdown — the process is gone. ${content}`
+    ? t("coldSession.6f834a759f", { value1: checkpointAge(session.cold_terminal_at, now) })
+    : missingContentReason(session) ?? t("coldSession.259b15983a")
+  return t("coldSession.6f203cf379", { content: content })
 }

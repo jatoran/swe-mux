@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 /**
  * What the Windows desktop shell publishes into its own page.
  *
@@ -53,11 +54,11 @@ export function captureFailureNote(message: string, report: DesktopMediaReport |
   if (!report) return message
   const suffix =
     report.state === 'granted'
-      ? `The desktop app had already granted the microphone to ${report.origin}, so this is not a permission refusal.`
+      ? t("desktopShell.7da24730ef", { value1: report.origin })
       : report.state === 'armed'
-        ? `The desktop app is ready to grant the microphone to ${report.origin} but WebView2 never asked for it, so the refusal came from outside the app - check Windows microphone privacy for desktop apps.`
+        ? t("desktopShell.ab8a359677", { value1: report.origin })
         : report.state === 'pending'
-          ? 'The desktop app is still starting its WebView2 host; try again in a moment.'
+          ? t("desktopShell.41d7021edc")
           : report.detail
   return suffix ? `${message} ${suffix}` : message
 }

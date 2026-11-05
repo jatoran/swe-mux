@@ -61,6 +61,7 @@ from .agent_environment import McpServerConfig, safe_endpoint
 from .harness import Backend, descriptor, require_backend
 from .mcp_contract import READ_TOOL_NAMES, WRITE_TOOL_NAMES
 from .subprocess_flags import background_creation_flags, reap_process_tree
+from .ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -630,9 +631,7 @@ def _transport_kind(config: dict[str, Any]) -> str:
 def http_auth_required(config: dict[str, Any]) -> bool:
     """Whether an HTTP entry carries credentials, and so must not be dialled."""
     headers = config.get("headers")
-    if isinstance(headers, dict) and any(
-        str(key).casefold() in _AUTH_HEADERS for key in headers
-    ):
+    if isinstance(headers, dict) and any(str(key).casefold() in _AUTH_HEADERS for key in headers):
         return True
     return bool(config.get("oauth") or config.get("authorization_token"))
 
@@ -758,9 +757,7 @@ async def _claude_list(server: str, transport: Any, client_factory: Any) -> McpT
         note=tier_note("parallel_probe"),
         diagnostic="" if tools else "The server connected and published no tools.",
         observed_at=time.time(),
-        ttl_seconds=(
-            min(ttl_ms / 1000, MAX_TTL_SECONDS) if ttl_ms > 0 else DEFAULT_TTL_SECONDS
-        ),
+        ttl_seconds=(min(ttl_ms / 1000, MAX_TTL_SECONDS) if ttl_ms > 0 else DEFAULT_TTL_SECONDS),
         cache_scope="private" if scope == "private" else "public",
         server_version=version,
     )
@@ -983,10 +980,10 @@ def normalize_live_snapshot(body: Any) -> dict[str, Any]:
     place in a drawer that lists names.
     """
     if not isinstance(body, dict):
-        raise ValueError("runtime inventory must be a JSON object")
+        raise ValueError(ui_message("mcp_tools.0e674a8590"))
     raw_tools = body.get("tools")
     if not isinstance(raw_tools, list):
-        raise ValueError("runtime inventory must carry a tools array")
+        raise ValueError(ui_message("mcp_tools.5bc1a82e21"))
     tools: list[dict[str, str]] = []
     for raw in raw_tools[:MAX_SNAPSHOT_TOOLS]:
         if not isinstance(raw, dict):

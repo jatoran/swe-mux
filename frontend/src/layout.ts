@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 export type PaneLeafKind = 'terminal' | 'note' | 'preview' | 'history' | 'queue' | 'changemap'
 export type SplitDirection = 'horizontal' | 'vertical'
 export type PaneDirection = 'left'|'right'|'up'|'down'
@@ -41,7 +42,7 @@ export const resourceLeaf = (kind: PaneLeafKind, id: string): PaneLeaf => ({ typ
 export const paneStack=(children:PaneLeaf[],activeId=children[0]?.id||'',id=groupId()):PaneStack=>({type:'stack',id,children,active_child_id:children.some(child=>child.id===activeId)?activeId:children[0]?.id||''})
 
 export function noteResourceId(kind: NoteLeafIdentity['kind'], id: string): string {
-  if (kind === 'worktree-file') throw new Error('use worktreeFileResourceId')
+  if (kind === 'worktree-file') throw new Error(t("layout.3bbd6419f3"))
   return `${kind}:${encodeURIComponent(id)}`
 }
 

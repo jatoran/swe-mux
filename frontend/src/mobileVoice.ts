@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 export type MobileVoiceSetup = {
   status:'ready'|'configured_unverified'|'authorization_required'|'error'
   url?:string|null
@@ -15,9 +16,9 @@ export async function enableMobileVoice():Promise<MobileVoiceSetup>{
   const result=await response.json() as MobileVoiceSetup&{error?:string}
   if(!response.ok){
     if(result.authorization_url){location.assign(result.authorization_url);return result}
-    throw new Error(result.diagnostic||result.error||'Could not enable secure mobile voice.')
+    throw new Error(result.diagnostic||result.error||t("mobileVoice.599178e2c0"))
   }
-  if(!result.url)throw new Error(result.diagnostic||'Tailscale did not return a secure URL.')
+  if(!result.url)throw new Error(result.diagnostic||t("mobileVoice.b6b538ecbb"))
   return result
 }
 

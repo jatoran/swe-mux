@@ -16,6 +16,7 @@ from ..assistant import (
     action_snapshot,
 )
 from ..http_support import json_response
+from ..ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -63,7 +64,7 @@ async def assistant_turn(request: web.Request) -> web.Response:
     assistant: AssistantService = request.app[keys.ASSISTANT]
     body = await request.json()
     if not isinstance(body, dict):
-        raise ValueError("turn request body must be an object")
+        raise ValueError(ui_message("assistant.621ce368ac"))
     client_context = body.get("client_context")
     turn_id = await assistant.start_turn(
         request.match_info["dialog_id"],
@@ -72,9 +73,7 @@ async def assistant_turn(request: web.Request) -> web.Response:
     )
     # `queued` distinguishes accepted-and-waiting from accepted-and-running. It
     # replaces a refusal that used to lose whatever the operator said mid-turn.
-    return json_response(
-        {"turn_id": turn_id, "queued": assistant.turn_queued(turn_id)}, 202
-    )
+    return json_response({"turn_id": turn_id, "queued": assistant.turn_queued(turn_id)}, 202)
 
 
 async def assistant_interrupt(request: web.Request) -> web.Response:
@@ -108,7 +107,7 @@ async def assistant_ui_result(request: web.Request) -> web.Response:
     assistant: AssistantService = request.app[keys.ASSISTANT]
     body = await request.json()
     if not isinstance(body, dict):
-        raise ValueError("ui-result body must be an object")
+        raise ValueError(ui_message("assistant.0abe89a09d"))
     accepted = assistant.report_ui_result(request.match_info["action_id"], body)
     return json_response({"accepted": accepted})
 

@@ -39,6 +39,7 @@ from .lifecycle import ledger
 from .logsetup import enable_crash_tracebacks
 from .process_reaper import process_in_job
 from .subprocess_flags import popen_outside_job
+from .ui_messages import configure_native_language, native_label, native_text, ui_message
 
 CONTROL_TOKEN_ENV = "SWE_MUX_DESKTOP_CONTROL_TOKEN"
 #: Opt-in CDP port for the shell's WebView2. Unset means no port at all.
@@ -312,8 +313,8 @@ def _ask_yes_no(title: str, message: str) -> bool:
         return False
     result = ctypes.windll.user32.MessageBoxW(
         None,
-        message,
-        title,
+        native_text(message),
+        native_text(title),
         MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND | MB_TOPMOST,
     )
     return int(result) == ID_YES
@@ -324,8 +325,8 @@ def show_desktop_warning(title: str, message: str) -> None:
     if sys.platform == "win32":
         ctypes.windll.user32.MessageBoxW(
             None,
-            message,
-            title,
+            native_text(message),
+            native_text(title),
             MB_OK | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST,
         )
     else:
@@ -335,7 +336,7 @@ def show_desktop_warning(title: str, message: str) -> None:
 class WindowsSingleInstance:
     def __init__(self, key: str) -> None:
         if sys.platform != "win32":
-            raise RuntimeError("the swe-mux desktop shell currently supports Windows only")
+            raise RuntimeError(ui_message("desktop.afd6c8f499"))
         self.kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         self.kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p]
         self.kernel32.CreateMutexW.restype = ctypes.c_void_p
@@ -385,6 +386,7 @@ class WindowsSingleInstance:
 class DesktopRuntime:
     def __init__(self, config: Config, *, hidden: bool = False) -> None:
         self.config = config
+        configure_native_language(config.config_path)
         self.hidden = hidden
         self.url = local_url(config)
         self.child: subprocess.Popen[bytes] | None = None
@@ -457,9 +459,12 @@ class DesktopRuntime:
             code = self.child.poll()
             if code is not None:
                 raise RuntimeError(
-                    f"The swe-mux daemon exited during startup (code {code}) after "
-                    f"{time.monotonic() - started:.1f}s. See "
-                    f"{self.config.data_dir / 'desktop-daemon.log'}."
+                    ui_message(
+                        "desktop.03d33454ca",
+                        value1=code,
+                        value2=time.monotonic() - started,
+                        value3=self.config.data_dir / "desktop-daemon.log",
+                    )
                 )
             time.sleep(0.15)
         ledger(
@@ -732,10 +737,8 @@ class DesktopRuntime:
             )
             if not report.ok:
                 show_desktop_warning(
-                    "Shortcuts not written",
-                    "swe-mux could not finish writing its shortcuts. See "
-                    f"{self.config.data_dir / 'lifecycle.log'} for what happened; "
-                    "`swemux install-shortcut` retries it.",
+                    ui_message("desktop.48ccb0e0f1"),
+                    ui_message("desktop.7bdad06c40", value1=self.config.data_dir / "lifecycle.log"),
                 )
         except Exception as exc:  # noqa: BLE001 - never take the tray down for this
             ledger(self.config.data_dir, f"first-run shortcut offer failed: {exc}")
@@ -767,7 +770,7 @@ class DesktopRuntime:
             self._restart_daemon()
         except Exception as exc:  # noqa: BLE001 - the tray would otherwise drop it unseen
             ledger(self.config.data_dir, f"tray restart failed: {type(exc).__name__}: {exc}")
-            show_desktop_warning("Restart failed", str(exc) or type(exc).__name__)
+            show_desktop_warning(ui_message("desktop.b8864cf013"), str(exc) or type(exc).__name__)
         finally:
             if pause is not None:
                 pause.clear()
@@ -786,9 +789,8 @@ class DesktopRuntime:
             if not request_daemon_shutdown(self.url, self.token, mode="restart"):
                 ledger(self.config.data_dir, "tray restart: the daemon refused the restart request")
                 show_desktop_warning(
-                    "Restart failed",
-                    "The daemon did not accept the restart request. It may not have "
-                    "been started with desktop control.",
+                    ui_message("desktop.b8864cf013"),
+                    ui_message("desktop.418a860ca9"),
                 )
                 return
             deadline = time.monotonic() + 15
@@ -805,12 +807,11 @@ class DesktopRuntime:
         try:
             if not self.ensure_daemon(wait_seconds=DAEMON_RESTART_WAIT_SECONDS):
                 show_desktop_warning(
-                    "Daemon still starting",
-                    "The replacement daemon has not answered its health check yet. "
-                    "The window reconnects on its own once it does.",
+                    ui_message("desktop.bd3f3ccdf6"),
+                    ui_message("desktop.848a6e20b7"),
                 )
         except RuntimeError as exc:
-            show_desktop_warning("Restart failed", str(exc))
+            show_desktop_warning(ui_message("desktop.b8864cf013"), str(exc))
 
     def _reap_supervisor(self) -> None:
         """Reap supervised sessions ourselves when the daemon runs out of budget.
@@ -839,9 +840,9 @@ class DesktopRuntime:
         stopped = request_daemon_shutdown(self.url, self.token, mode="quit")
         if stopped:
             deadline = time.monotonic() + 15
-            while time.monotonic() < deadline and health_snapshot(
-                self.url, timeout=0.25
-            ) is not None:
+            while (
+                time.monotonic() < deadline and health_snapshot(self.url, timeout=0.25) is not None
+            ):
                 time.sleep(0.1)
             if (
                 health_snapshot(self.url, timeout=0.25) is not None
@@ -857,9 +858,8 @@ class DesktopRuntime:
                 self.child.terminate()
         elif self.child is None and health_snapshot(self.url) is not None:
             show_desktop_warning(
-                "Daemon still running",
-                "This daemon was not started with desktop control. The desktop window will "
-                "close, but the existing daemon and its terminals will remain running.",
+                ui_message("desktop.42bcb230f0"),
+                ui_message("desktop.fcf68aed85"),
             )
         elif self.child is not None and self.child.poll() is None:
             self.child.terminate()
@@ -899,9 +899,12 @@ class DesktopRuntime:
                     "ever answered health",
                 )
                 show_desktop_warning(
-                    "swe-mux daemon stopped",
-                    f"The daemon exited during startup (code {child.returncode}). "
-                    f"See {self.config.data_dir / 'desktop-daemon.log'}.",
+                    ui_message("desktop.bb892d4a33"),
+                    ui_message(
+                        "desktop.9102e72e8f",
+                        value1=child.returncode,
+                        value2=self.config.data_dir / "desktop-daemon.log",
+                    ),
                 )
                 return
             time.sleep(DAEMON_HEALTH_POLL_SECONDS)
@@ -984,15 +987,23 @@ class DesktopRuntime:
         self.window.events.restored += self.window_state_recorder.restored
         self.window.events.minimized += self.hide_minimized
         menu_items = [
-            pystray.MenuItem("Open swe-mux", self.show, default=True),
-            pystray.MenuItem("Open in browser", self.open_external),
+            pystray.MenuItem(
+                native_label("desktop.b13472970c", self.config.config_path), self.show, default=True
+            ),
+            pystray.MenuItem(
+                native_label("desktop.62a2dc1bd5", self.config.config_path), self.open_external
+            ),
             # Reachable when the page itself is not: it terminates the page's renderer
             # rather than asking a hung one to navigate, and reloads with Preview
             # documents paused so a restored tab cannot freeze it again.
-            pystray.MenuItem("Reload window (previews paused)", self.reload_window),
+            pystray.MenuItem(
+                native_label("desktop.9c0d730e70", self.config.config_path), self.reload_window
+            ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(
-                "Start with Windows", self.toggle_startup, checked=self.startup_enabled
+                native_label("desktop.0bfcd9317d", self.config.config_path),
+                self.toggle_startup,
+                checked=self.startup_enabled,
             ),
         ]
         if self.config.pty_supervisor_enabled:
@@ -1004,12 +1015,16 @@ class DesktopRuntime:
             # `/api/daemon/restart` refuses it with 409, which is the honest
             # order: the route knows the runtime state and the tray does not.
             menu_items.append(
-                pystray.MenuItem("Restart daemon (keep sessions)", self.restart_daemon)
+                pystray.MenuItem(
+                    native_label("desktop.d601877331", self.config.config_path), self.restart_daemon
+                )
             )
         menu_items.extend(
             [
                 pystray.Menu.SEPARATOR,
-                pystray.MenuItem("Quit swe-mux", self.quit),
+                pystray.MenuItem(
+                    native_label("desktop.5a49dba90b", self.config.config_path), self.quit
+                ),
             ]
         )
         self.icon = pystray.Icon(
@@ -1019,9 +1034,7 @@ class DesktopRuntime:
             menu=pystray.Menu(*menu_items),
         )
         threading.Thread(target=self.icon.run, name="swe-mux-tray", daemon=True).start()
-        threading.Thread(
-            target=self.activation_loop, name="swe-mux-activate", daemon=True
-        ).start()
+        threading.Thread(target=self.activation_loop, name="swe-mux-activate", daemon=True).start()
         # After the tray exists, so the app the dialog is talking about is
         # visibly running behind it, and on its own thread so a dialog left
         # unanswered costs nothing.
@@ -1045,7 +1058,7 @@ class DesktopRuntime:
 
 def show_error(message: str) -> None:
     if sys.platform == "win32":
-        ctypes.windll.user32.MessageBoxW(None, message, "swe-mux", 0x10)
+        ctypes.windll.user32.MessageBoxW(None, native_text(message), "swe-mux", 0x10)
     elif sys.stderr is not None:
         print(f"swe-mux: {message}", file=sys.stderr)
 
@@ -1137,15 +1150,19 @@ def report_launch_failure(message: str, exception: BaseException | None = None) 
         show_error(message)
         return
     show_error(
-        f"{message}\n\nDetails: {data_dir / GUI_LOG_NAME}"
-        f"\nHistory: {data_dir / 'lifecycle.log'}"
+        ui_message(
+            "desktop.501013cd66",
+            value1=message,
+            value2=data_dir / GUI_LOG_NAME,
+            value3=data_dir / "lifecycle.log",
+        )
     )
 
 
 def desktop_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="swe-mux", description="swe-mux desktop shell")
+    parser = argparse.ArgumentParser(prog="swe-mux", description=ui_message("desktop.1329db8aaa"))
     parser.add_argument("--config", type=Path)
-    parser.add_argument("--hidden", action="store_true", help="start in the system tray")
+    parser.add_argument("--hidden", action="store_true", help=ui_message("desktop.2e71f4c457"))
     return parser
 
 

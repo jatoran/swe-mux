@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { createPortal } from 'preact/compat'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from './api'
@@ -10,18 +11,18 @@ import { combinedResourceTotals } from './resourceTotals'
 
 /** RAM at rail width: `1.4G` / `512M`, since `1.4 GiB` does not fit. */
 export const compactMemoryLabel=(bytes:number)=>
-  bytes>=1073741824?`${(bytes/1073741824).toFixed(1)}G`:`${Math.round(bytes/1048576)}M`
+  bytes>=1073741824?t("ResourceUsage.20f1a166fc", { value1: (bytes/1073741824).toFixed(1) }):t("ResourceUsage.cf0d24d173", { value1: Math.round(bytes/1048576) })
 
 // The session count leads because it is the one figure here that is always knowable:
 // it is counted from the fleet the sidebar is already rendering, while every other
 // figure comes from process inspection that can be unavailable outright.
 const resourceSummaryLabel=(snapshot:FleetSnapshot|null,liveSessions:number)=>{
-  const sessions=`${liveSessions} live session${liveSessions===1?'':'s'}`
-  if(!snapshot)return `${sessions}, loading resource usage - click to see usage details`
-  if(!snapshot.available)return `${sessions}, resource usage unavailable - click to see usage details`
+  const sessions=t("ResourceUsage.c740adf8dd", { value1: liveSessions, value2: (liveSessions===1) ? 'yes' : 'no' })
+  if(!snapshot)return t("ResourceUsage.dbc4af4281", { sessions: sessions })
+  if(!snapshot.available)return t("ResourceUsage.a3e21dd4e1", { sessions: sessions })
   const total=combinedResourceTotals(snapshot)
-  const cpu=typeof snapshot.system_cpu_pct==='number'?`${Math.round(snapshot.system_cpu_pct)}% cpu`:'cpu sampling'
-  return `${sessions}, ${cpu}, ${memoryLabel(total.memory_bytes)} ram - click to see usage details`
+  const cpu=typeof snapshot.system_cpu_pct==='number'?`${Math.round(snapshot.system_cpu_pct)}% cpu`:t("ResourceUsage.8a1b73005f")
+  return t("ResourceUsage.28077e3041", { sessions: sessions, cpu: cpu, value3: memoryLabel(total.memory_bytes) })
 }
 
 const CpuIcon=()=>
@@ -91,31 +92,29 @@ export function ResourceUsageSummary({snapshot,sessions,compact=false,onRefresh,
     window.addEventListener('resize',reposition);window.addEventListener('scroll',reposition,true);window.addEventListener('pointerdown',dismiss);window.addEventListener('keydown',key)
     return()=>{window.removeEventListener('resize',reposition);window.removeEventListener('scroll',reposition,true);window.removeEventListener('pointerdown',dismiss);window.removeEventListener('keydown',key)}
   },[open])
-  const popup=open&&<div ref={popover} class="account-popover resource-usage-popover ui-portal" style={popoverStyle} role="dialog" aria-label="Swe-mux resource usage">
-    <header><div><strong>RESOURCE USAGE</strong><span>system CPU · swe-mux process tree</span></div><button aria-label="Close resource usage" onClick={()=>setOpen(false)}>×</button></header>
-    {!snapshot&&<p class="resource-usage-empty">Loading resource usage…</p>}
-    {snapshot&&!snapshot.available&&<p class="resource-usage-empty">{snapshot.diagnostic||'Process resource inspection is unavailable.'}</p>}
-    {snapshot?.available&&<section class="resource-usage-total">
-      <article><span>SYSTEM CPU</span><strong>{systemCpu}</strong></article>
+  const popup=open&&<div ref={popover} class="account-popover resource-usage-popover ui-portal" style={popoverStyle} role="dialog" aria-label={t("ResourceUsage.a9c0f43076")}>
+    <header><div><strong>{t("ResourceUsage.2e399e922e")}</strong><span>{t("ResourceUsage.7f58886ef7")}</span></div><button aria-label={t("ResourceUsage.71a30368ba")} onClick={()=>setOpen(false)}>×</button></header>
+    {!snapshot && <p class="resource-usage-empty">{t("ResourceUsage.626ae6db5e")}</p>}
+    {snapshot&&!snapshot.available && <p class="resource-usage-empty">{snapshot.diagnostic || t("ResourceUsage.9dd0f9baea")}</p>}
+    {snapshot?.available && <section class="resource-usage-total">
+      <article><span>{t("ResourceUsage.fa5497bf3e")}</span><strong>{systemCpu}</strong></article>
       {/* One RAM figure for the whole swe-mux tree (daemon + every project's processes):
           the reclaimable (unique-set) reading when the open-panel sample carries it, the
           working set otherwise. */}
-      <article><span>RAM</span><strong>{memoryLabel(reclaimableRam??combined.memory_bytes)}</strong></article>
-      <article><span>PROCESSES</span><strong>{combined.processes}</strong></article>
+      <article><span>{t("ResourceUsage.bf4b0c03c6")}</span><strong>{memoryLabel(reclaimableRam??combined.memory_bytes)}</strong></article>
+      <article><span>{t("ResourceUsage.dae2c8cbe1")}</span><strong>{combined.processes}</strong></article>
     </section>}
-    <footer><button onClick={onRefresh}>refresh</button><button onClick={()=>{setOpen(false);onOpenFleet()}}>open process fleet…</button></footer>
+    <footer><button onClick={onRefresh}>{t("ResourceUsage.d6cc0a088c")}</button><button onClick={()=>{setOpen(false);onOpenFleet()}}>{t("ResourceUsage.39a6f8361b")}</button></footer>
   </div>
-  return <div ref={root} class={`resource-usage-control ${compact?'compact':''}`}>{compact
-    ? <button class="resource-usage-compact" onClick={toggle} aria-expanded={open} aria-label={summaryTitle} title={summaryTitle}>
-        <span aria-hidden="true">ws</span><strong>{snapshot?.available?compactMemoryLabel(combined.memory_bytes):'—'}</strong>
-      </button>
-    : <button class="resource-usage-summary" onClick={toggle} aria-expanded={open} aria-label={summaryTitle} title={summaryTitle}>
+  return <div ref={root} class={`resource-usage-control ${compact?'compact':''}`}>{compact ? <button class="resource-usage-compact" onClick={toggle} aria-expanded={open} aria-label={summaryTitle} title={summaryTitle}>
+        <span aria-hidden="true">{t("ResourceUsage.50a66195d3")}</span><strong>{snapshot?.available ? compactMemoryLabel(combined.memory_bytes) : '—'}</strong>
+      </button> : <button class="resource-usage-summary" onClick={toggle} aria-expanded={open} aria-label={summaryTitle} title={summaryTitle}>
         {/* Sessions first: the operator's own unit of work leads, and the machine's
             reading of it follows. It carries no em-dash fallback because it never needs
             one — nothing about it depends on the process snapshot having arrived. The
             process count is left to the popover, which is where it is worth reading. */}
         <span class="resource-session-count" aria-hidden="true"><SessionsIcon/>{liveSessions}</span>
         <span class="resource-summary-metric" aria-hidden="true"><CpuIcon/><strong>{summaryCpu}</strong></span>
-        <span class="resource-summary-metric" aria-hidden="true"><RamIcon/><strong>{snapshot?.available?memoryLabel(combined.memory_bytes):'—'}</strong></span>
-      </button>}{popup&&createPortal(popup,document.body)}</div>
+        <span class="resource-summary-metric" aria-hidden="true"><RamIcon/><strong>{snapshot?.available ? memoryLabel(combined.memory_bytes) : '—'}</strong></span>
+      </button>}{popup && createPortal(popup,document.body)}</div>
 }

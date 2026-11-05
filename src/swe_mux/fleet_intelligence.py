@@ -20,19 +20,19 @@ from .models import MuxEvent
 from .processes import OwnedProcess, PreviewRegistry, ProcessInspector
 from .session import Session, SessionManager
 from .transcript_view import conversation_is_readable, parse_transcript_cached
+from .ui_messages import ui_message
 
 # The claim check only reads the tail of a turn, so it never needs the whole
 # conversation and must not pay for one on a long-running session.
 _CLAIM_CHECK_MAX_BYTES = 256 * 1024
 
 
-def _read_recent(
-    path: Path | None, backend: str, native_id: str | None
-) -> list[dict[str, Any]]:
+def _read_recent(path: Path | None, backend: str, native_id: str | None) -> list[dict[str, Any]]:
     """Positional `parse_transcript_cached`, since `asyncio.to_thread` takes no keywords."""
     return parse_transcript_cached(
         path, backend, max_bytes=_CLAIM_CHECK_MAX_BYTES, native_id=native_id
     )
+
 
 STALL_SECONDS = 300
 UNATTENDED_SECONDS = 15
@@ -126,9 +126,7 @@ class FleetIntelligence:
 
     async def _consume_one(self, event: MuxEvent) -> None:
         session = (
-            self.sessions.sessions.get(event.session_id)
-            if event.session_id is not None
-            else None
+            self.sessions.sessions.get(event.session_id) if event.session_id is not None else None
         )
         self.readiness.observe(event, session)
         if event.type in {"terminal_attached", "terminal_input"}:
@@ -204,8 +202,11 @@ class FleetIntelligence:
             # how a generic "command failed" ended up quoting an unrelated repo's
             # fix into this run's notes — the trust-poisoning failure the design
             # calls out by name.
-            if detail and session and session.record.agent_run_id and (
-                scope := session.record.trusted_scope_id
+            if (
+                detail
+                and session
+                and session.record.agent_run_id
+                and (scope := session.record.trusted_scope_id)
             ):
                 matches = await self.store.experiences(
                     error=detail,
@@ -242,9 +243,7 @@ class FleetIntelligence:
         if not session:
             return
         native_id = session.record.native_session_id
-        if not conversation_is_readable(
-            session.transcript_path, session.record.backend, native_id
-        ):
+        if not conversation_is_readable(session.transcript_path, session.record.backend, native_id):
             return
         try:
             messages = await asyncio.wait_for(
@@ -341,8 +340,8 @@ class FleetIntelligence:
                     session_id=None,
                     rule_id=None,
                     kind="attention_digest",
-                    title="Attention digest",
-                    message=f"{len(items)} unread attention records across the active fleet.",
+                    title=ui_message("fleet_intelligence.5630bc4f84"),
+                    message=ui_message("fleet_intelligence.f827214c7d", value1=len(items)),
                     severity="info",
                     evidence=evidence,
                 )
@@ -474,9 +473,14 @@ class FleetIntelligence:
                     },
                 ],
                 now,
-                title="Port collision",
+                title=ui_message("fleet_intelligence.18b86292a1"),
                 message=(
-                    f"{self._labels(sorted(session_ids))} are all listening on {host}:{port}."
+                    ui_message(
+                        "fleet_intelligence.acecce417a",
+                        value1=self._labels(sorted(session_ids)),
+                        value2=host,
+                        value3=port,
+                    )
                 ),
             )
         providers_by_port: dict[int, set[str]] = defaultdict(set)

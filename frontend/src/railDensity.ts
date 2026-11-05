@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { watchDeviceMode } from './deviceMode.ts'
 /**
  * Rail density: how tightly the Action rail packs, per device class.
@@ -26,9 +27,9 @@ export type RailDensity = (typeof RAIL_DENSITIES)[number]
 export const DEFAULT_RAIL_DENSITY: RailDensity = 'comfortable'
 
 const LABELS: Record<RailDensity, string> = {
-  comfortable: 'Comfortable  (today’s spacing)',
-  compact: 'Compact',
-  dense: 'Dense',
+  get comfortable() { return t("railDensity.e756a904a0") },
+  get compact() { return t("railDensity.99452646e3") },
+  get dense() { return t("railDensity.0710262cd7") },
 }
 
 export const railDensityLabel = (density: RailDensity): string => LABELS[density]

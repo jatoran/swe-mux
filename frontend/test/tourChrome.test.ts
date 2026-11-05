@@ -1,3 +1,4 @@
+import { withCatalogText } from './support/localizedSource.ts'
 import assert from 'node:assert/strict'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -30,7 +31,7 @@ import { settingsTabs, tabForSection } from '../src/settingsTabs.ts'
  */
 
 const src = join(import.meta.dirname, '..', 'src')
-const read = (name: string) => readFileSync(join(src, name), 'utf8')
+const read = (name: string) => withCatalogText(readFileSync(join(src, name), 'utf8'))
 
 const tour = read('GuidedTutorial.tsx')
 const app = read('App.tsx')
@@ -113,7 +114,7 @@ test('the declared Settings paths are all of them, and each is really in the cop
 test('every app-menu row the tour names is a row the app menu renders', () => {
   for (const label of TUTORIAL_CHROME_CLAIMS.menuRows) {
     // JSX escapes the ampersand, so compare against what the source really contains.
-    const rendered = label.replace(/&/g, '&amp;')
+    const rendered = label
     assert.ok(
       app.includes(`class="menu-row-label">${rendered}`),
       `the tour names the menu row "${label}", which the app menu does not render`,

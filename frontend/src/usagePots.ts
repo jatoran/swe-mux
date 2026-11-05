@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { usageWindow } from './analyticsPresentation.ts'
 import { sumUsageRows, type UsageRow, type UsageSource } from './usageAnalytics'
 import type { ProviderQuotaWindows, QuotaWindowDisplay } from './providerAccountDisplay'
@@ -62,9 +63,9 @@ export type QuotaHeadroom = {
 }
 
 const WINDOW_LABELS: Record<QuotaHeadroom['window'], string> = {
-  session: '5h',
-  weekly: 'weekly',
-  fable: 'Fable weekly',
+  get session() { return t("usagePots.3c4e417f8d") },
+  get weekly() { return t("usagePots.8850eced98") },
+  get fable() { return t("usagePots.a50981a78c") },
 }
 
 export const quotaWindowLabel = (window: QuotaHeadroom['window']) => WINDOW_LABELS[window]

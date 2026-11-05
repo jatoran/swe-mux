@@ -1,3 +1,5 @@
+import { t } from './localization/index.ts'
+import { locale as uiLocale } from './localization/index.ts'
 import { noteServerDate } from './serverClock.ts'
 
 export type ApiError = Error & {
@@ -27,7 +29,7 @@ export async function api<T>(method: string, path: string, body?: unknown, optio
   try {
     const response = await fetch(path, {
       method,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Accept-Language': uiLocale.peek() },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: controller ? controller.signal : options.signal,
     })
@@ -37,7 +39,7 @@ export async function api<T>(method: string, path: string, body?: unknown, optio
     noteServerDate(response.headers.get('Date'), sentAt, Date.now())
     if (!response.ok) {
       const detail = await response.json().catch(() => ({ error: response.statusText }))
-      const error = new Error(detail.error || `${method} ${path} failed`) as ApiError
+      const error = new Error(detail.error || t("api.313d8ba848", { value1: method, value2: path })) as ApiError
       error.fields = detail.fields
       error.status = response.status
       error.detail = detail
@@ -46,7 +48,7 @@ export async function api<T>(method: string, path: string, body?: unknown, optio
     return await response.json() as T
   } catch (cause) {
     if (!timedOut) throw cause
-    const error = new Error('The daemon did not respond in time.') as ApiError
+    const error = new Error(t("api.d1901c2d54")) as ApiError
     error.timeout = true
     throw error
   } finally {
@@ -66,12 +68,12 @@ export async function uploadTerminalAttachment<T>(path: string, body: FormData):
     })
     if (!response.ok) {
       const detail = await response.json().catch(() => ({ error: response.statusText }))
-      throw new Error(detail.error || `POST ${path} failed`)
+      throw new Error(detail.error || t("api.fcd405a456", { value1: path }))
     }
     return response.json()
   } catch (cause) {
     if (!(cause instanceof Error) || cause.name !== 'AbortError') throw cause
-    throw new Error('The attachment upload timed out.')
+    throw new Error(t("api.ef3888d51a"))
   } finally {
     clearTimeout(timer)
   }

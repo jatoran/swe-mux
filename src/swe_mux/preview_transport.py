@@ -26,6 +26,7 @@ from .network_usage import (
 from .project_files import (
     read_static_preview_file,
 )
+from .ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -91,7 +92,11 @@ def _bridge_template() -> str:
     template = PREVIEW_BRIDGE_PATH.read_text(encoding="utf-8")
     for placeholder in (_BRIDGE_PREFIX_PLACEHOLDER, _BRIDGE_ROUTES_PLACEHOLDER):
         if template.count(placeholder) != 1:
-            raise RuntimeError(f"{PREVIEW_BRIDGE_PATH} must contain {placeholder} exactly once")
+            raise RuntimeError(
+                ui_message(
+                    "preview_transport.c1f886edd2", value1=PREVIEW_BRIDGE_PATH, value2=placeholder
+                )
+            )
     return template
 
 
@@ -426,9 +431,9 @@ async def _serve_static_preview(
 def preview_target(item: Any, tail: str, query: str = "") -> tuple[str, str]:
     parsed = urlsplit(item.url)
     if parsed.scheme not in {"http", "https"} or parsed.hostname not in {"127.0.0.1", "::1"}:
-        raise ValueError("preview registration is no longer a valid loopback destination")
+        raise ValueError(ui_message("preview_transport.814c2c07cf"))
     if parsed.username or parsed.password or parsed.fragment:
-        raise ValueError("preview registration is invalid")
+        raise ValueError(ui_message("preview_transport.2f915e4854"))
     path = f"{parsed.path.rstrip('/')}/{tail.lstrip('/')}"
     target = urlunsplit((parsed.scheme, parsed.netloc, path, query, ""))
     origin = urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
@@ -501,7 +506,7 @@ async def preview_revision(item: Any, paths: list[str]) -> dict[str, Any]:
         if parsed is not None:
             requested.append((value, *parsed))
     if not requested:
-        raise ValueError("a revision check needs at least one page path")
+        raise ValueError(ui_message("preview_transport.8073134cd0"))
     semaphore = asyncio.Semaphore(PREVIEW_REVISION_CONCURRENCY)
     unreachable = 0
     timeout = ClientTimeout(total=None, sock_connect=5, sock_read=10)
@@ -661,9 +666,7 @@ async def preview_proxy(request: web.Request) -> web.StreamResponse:
     routes_for_project = getattr(previews, "routes_for_project", None)
     project_routes = routes_for_project(item.project_id) if routes_for_project else {}
     if static:
-        return await _serve_static_preview(
-            request, item, f"/preview/{preview_id}/", project_routes
-        )
+        return await _serve_static_preview(request, item, f"/preview/{preview_id}/", project_routes)
     target, origin = preview_target(item, tail, request.query_string)
     if request.headers.get("Upgrade", "").casefold() == "websocket":
         return await _proxy_websocket(request, target, origin)
@@ -809,4 +812,3 @@ async def preview_proxy(request: web.Request) -> web.StreamResponse:
         raise web.HTTPBadGateway(text=f"preview unavailable: {exc}") from exc
     finally:
         semaphore.release()
-

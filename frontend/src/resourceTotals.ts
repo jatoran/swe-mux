@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 export type ResourceProcess={cpu_pct:number;memory_bytes:number;exited_at?:number;command?:string;memory_unique_bytes?:number|null}
 export type ResourceBucket={processes:number;cpu_pct:number;memory_bytes:number}
 /**
@@ -48,7 +49,7 @@ export function projectResourceTotals(snapshot:ResourceSnapshot|null,sessions:Re
     const projectId=group.project_id||sessionsById.get(group.session_id)?.project_id||'unassigned'
     const processes=(group.processes||[]).filter(process=>!process.exited_at)
     if(!processes.length)continue
-    const current=totals.get(projectId)||{project_id:projectId,label:projectsById.get(projectId)?.name||'Unassigned',processes:0,cpu_pct:0,memory_bytes:0,memory_unique_bytes:0}
+    const current=totals.get(projectId)||{project_id:projectId,label:projectsById.get(projectId)?.name||t("resourceTotals.14d33bd014"),processes:0,cpu_pct:0,memory_bytes:0,memory_unique_bytes:0}
     current.processes+=processes.length
     current.cpu_pct+=processes.reduce((sum,process)=>sum+(Number(process.cpu_pct)||0),0)
     current.memory_bytes+=processes.reduce((sum,process)=>sum+(Number(process.memory_bytes)||0),0)

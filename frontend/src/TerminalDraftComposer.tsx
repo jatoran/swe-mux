@@ -1,3 +1,5 @@
+import { locale as uiLocale } from './localization/index.ts'
+import { t } from './localization/index.ts'
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { holdSoftKeyboard } from './mobileKeyboard'
 import { MOBILE_TERMINAL_DRAFT_MAX_CHARS } from './mobileTerminalDraft'
@@ -91,17 +93,17 @@ export function MobileTerminalDraft({
     ? 'Inserting...'
     : copyState === 'done'
       ? 'Copied'
-      : `${text.length.toLocaleString()} · device-local`
-  const notice = error || (copyState === 'failed' ? 'The draft could not be copied on this device.' : '')
-  return <section class="mobile-terminal-draft" aria-label={`Draft message for ${sessionName}`}>
+      : `${text.length.toLocaleString(uiLocale.value)} · device-local`
+  const notice = error || (copyState === 'failed' ? t("TerminalDraftComposer.39e44ac971") : '')
+  return <section class="mobile-terminal-draft" aria-label={t("TerminalDraftComposer.810054f83f", { sessionName: sessionName })}>
     <header aria-hidden="true" />
     <textarea
       ref={input}
       value={text}
       maxLength={MOBILE_TERMINAL_DRAFT_MAX_CHARS}
       disabled={busy}
-      aria-label="Persistent terminal draft"
-      placeholder="Write here without sending to the terminal..."
+      aria-label={t("TerminalDraftComposer.7ec3b7207e")}
+      placeholder={t("TerminalDraftComposer.977c4041df")}
       onInput={event => { setCopyState(''); onInput(event.currentTarget.value) }}
       onKeyDown={event => {
         if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
@@ -113,9 +115,9 @@ export function MobileTerminalDraft({
     {notice && <p class="mobile-terminal-draft-error" role="alert">{notice}</p>}
     <footer>
       <span>{status}</span>
-      <button type="button" disabled={busy || !text} onMouseDown={holdSoftKeyboard} onClick={onClear}>Clear</button>
-      <button type="button" class="icon" disabled={busy || !text} aria-label="Copy draft" title="Copy the whole draft to the clipboard" onMouseDown={holdSoftKeyboard} onClick={() => void copy()}><CopyIcon /></button>
-      <button type="button" class="icon primary" disabled={busy || !text} aria-label="Insert" title="Insert into the agent composer without submitting" onMouseDown={holdSoftKeyboard} onClick={insert}><InsertArrowIcon /></button>
+      <button type="button" disabled={busy || !text} onMouseDown={holdSoftKeyboard} onClick={onClear}>{t("TerminalDraftComposer.83b12c2216")}</button>
+      <button type="button" class="icon" disabled={busy || !text} aria-label={t("TerminalDraftComposer.42af91ff5c")} title={t("TerminalDraftComposer.4d29495c46")} onMouseDown={holdSoftKeyboard} onClick={() => void copy()}><CopyIcon /></button>
+      <button type="button" class="icon primary" disabled={busy || !text} aria-label={t("TerminalDraftComposer.8aa318eb7e")} title={t("TerminalDraftComposer.48e26cc034")} onMouseDown={holdSoftKeyboard} onClick={insert}><InsertArrowIcon /></button>
     </footer>
   </section>
 }

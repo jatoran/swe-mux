@@ -1,3 +1,4 @@
+import { withCatalogText } from './support/localizedSource.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -12,7 +13,7 @@ test('resource creation targets a folder or a file sibling without accepting a n
 })
 
 test('Files creation is available only through context menus and guarded touch long-press', () => {
-  const source = readFileSync(join(import.meta.dirname, '..', 'src', 'ProjectResource.tsx'), 'utf8')
+  const source = withCatalogText(readFileSync(join(import.meta.dirname, '..', 'src', 'ProjectResource.tsx'), 'utf8'))
   assert.match(source, />New file…<\/button>/)
   assert.match(source, />New folder…<\/button>/)
   assert.match(source, /event\.pointerType==='touch'/)

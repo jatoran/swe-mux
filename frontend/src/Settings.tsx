@@ -1,3 +1,7 @@
+import { codeLabel } from './localization/codeLabels.ts'
+import { sourceText, applyLanguagePreference } from './localization/index.ts'
+import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
+import { LanguagePicker } from './LanguagePicker'
 import { deviceMode, watchDeviceMode } from './deviceMode'
 import { ProviderConnectionFields, providerKeyOperation } from './ProviderSetup'
 import { ExperiencePreview } from './ExperiencePreview'
@@ -5,7 +9,7 @@ import { Fragment } from 'preact'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api, type ApiError } from './api'
 import { saveFailureStatus, type SettingsApplyResponse } from './settingsSave'
-import { commandCategoryLabel, displayChord, shortcutMatches, UNBOUND_CHORD, type Command } from './commands'
+import { commandCategoryLabel, displayChord, shortcutMatches, unboundChord, type Command } from './commands'
 import { isFocusTraversalKey, keyChord } from './keys'
 import { hostQuery } from './hostProfile.ts'
 import { KeyboardProbe } from './KeyboardProbe.tsx'
@@ -86,6 +90,7 @@ import {
 } from './modelRouting'
 
 type Config = {
+  ui_language?:string
   revision:number; host:string; port:number; data_dir:string; requires_auth:boolean; access_mode:string; tailnet_enabled:boolean
   startup_cwd:string; default_backend:string; default_harness:string; shell_exe:string
   harness_exe:Record<string,string>; scrollback_bytes:number; attach_replay_bytes:number; history_limit:number
@@ -279,7 +284,7 @@ type KeybindingsResponse = {
 type CloseIntent = 'close'|'usage'|'automation'|'tutorial'
 /** The two in-flight statuses, named because the footer and the dialogs both test for them. */
 const SAVING = 'saving…'
-const RESTORING = 'restoring defaults…'
+const RESTORING = "restoring defaults\u2026"
 /** The one atomic-save answer: the new config, the keybindings as re-read, and what committed. */
 type SettingsApplyResult = SettingsApplyResponse<Config, KeybindingsResponse>
 
@@ -344,7 +349,7 @@ const NO_SECTIONS: SettingsRailSection[] = []
 // the chords Chromium claims first (Ctrl+R, Ctrl+K, …): the default browser-safe
 // policy releases those unless an explicit override reclaims one.
 const NOTE_CHORDS = listShortcutBindings()
-const CHORD_PARTS:Record<string,string> = {mod:'Mod',ctrl:'Ctrl',meta:'Meta',alt:'Alt',shift:'Shift'}
+const CHORD_PARTS:Record<string,string> = {mod:'Mod',ctrl:'Ctrl',meta:'Meta',get alt() { return t("Settings.c91da2e020") },shift:'Shift'}
 const noteChordLabel = (chord:string) => chord.split('+').map(part=>
   CHORD_PARTS[part] ?? (part.length===1?part.toUpperCase():part.replace(/^arrow/,'').replace(/^./,head=>head.toUpperCase()))
 ).join('+')
@@ -382,20 +387,20 @@ function ProviderReadiness({readiness}:{readiness?:LlmReadiness|null}){
  * because the default stack is not a claim anybody made.
  */
 function TerminalFontAvailability({family}:{family:string}){
-  const readings=useMemo(()=>terminalFontAvailability(family,canvasTextMeasurer()),[family])
+  const readings=useMemo(()=>terminalFontAvailability(family,canvasTextMeasurer()), [family, uiLocale.value, catalogRevision.value])
   if(!readings.length)return null
   return <p class="settings-hint terminal-font-availability" aria-live="polite">{readings.map(reading=>
     <span key={reading.name} class={reading.available===false?'warn':''}>
       <code>{reading.name}</code>{' '}
-      {reading.available===null?'cannot be checked here':reading.available?'is installed on this device':'is not installed on this device, so the default draws instead'}
+      {reading.available===null ? t("Settings.2220b037d0") : reading.available ? t("Settings.2435b40050") : t("Settings.353dc0a50d")}
     </span>)}</p>
 }
 
 function VerificationBadge({entry}:{entry:LlmProviderEntry}){
-  if(entry.verification.verified) return <em class="project-setting-chip">verified</em>
-  if(entry.verification.stale) return <em class="project-setting-chip spends">endpoint changed</em>
-  if(!entry.requires_verification) return <em class="project-setting-chip">no verification needed</em>
-  return <em class="project-setting-chip spends">not verified</em>
+  if(entry.verification.verified) return <em class="project-setting-chip">{t("Settings.1c34f88707")}</em>
+  if(entry.verification.stale) return <em class="project-setting-chip spends">{t("Settings.51c3ffce97")}</em>
+  if(!entry.requires_verification) return <em class="project-setting-chip">{t("Settings.face7ae8db")}</em>
+  return <em class="project-setting-chip spends">{t("Settings.64f365a9a9")}</em>
 }
 
 
@@ -465,11 +470,16 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   // keep one checkbox live is a bad trade for a value only this panel changes.
   const [deviceAutoplay, setDeviceAutoplay] = useState(() => autoplayEnabled())
   const [latencyReport, setLatencyReport] = useState<LatencyReportPayload | null>(null)
-  const completeVoiceCatalog=useMemo(()=>completeVoiceReference(voiceCommands,draft?.voice_commands||[]),[voiceCommands,draft?.voice_commands])
-  const [usageRefreshMessage, setUsageRefreshMessage] = useState('')
+  const completeVoiceCatalog=useMemo(()=>completeVoiceReference(voiceCommands,draft?.voice_commands||[]), [voiceCommands, draft?.voice_commands, uiLocale.value, catalogRevision.value])
+  const [usageRefreshText, setUsageRefreshText] = useState<(() => string) | null>(null)
+  const usageRefreshMessage = usageRefreshText?.() || ''
+  const setUsageRefreshMessage = (render: () => string) => setUsageRefreshText(() => render)
+  const [usageRefreshBusy, setUsageRefreshBusy] = useState(false)
+  const [usageRefreshFailed, setUsageRefreshFailed] = useState(false)
   const [remote, setRemote] = useState<RemoteStatus | null>(null)
   const [mobileVoiceBusy,setMobileVoiceBusy]=useState(false)
   const [mobileVoiceMessage,setMobileVoiceMessage]=useState('')
+  const [mobileVoiceFailed,setMobileVoiceFailed]=useState(false)
   const [firewall,setFirewall]=useState<FirewallStatus | null>(null)
   const [firewallBusy,setFirewallBusy]=useState(false)
   const [firewallMessage,setFirewallMessage]=useState('')
@@ -580,7 +590,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     setKeymapHost({host:data.host||'browser',platform:data.platform||'win'})
     setKeymapWarnings(data.undeliverable||[])
     setBindingError(Object.keys(data.rejected||{}).length
-      ? `Ignored saved shortcuts · ${Object.entries(data.rejected).map(([keys,message])=>`${displayChord(keys,data.platform)}: ${message}`).join(' · ')}`
+      ? t("Settings.c3554b7e29", { value1: Object.entries(data.rejected).map(([keys,message])=>`${displayChord(keys,data.platform)}: ${message}`).join(' · ') })
       : '')
   },[])
   const [status, setStatus] = useState('loading…')
@@ -644,6 +654,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   /** A section chosen on a tab that was not on screen, scrolled to once its rail exists. */
   const pendingSection = useRef('')
   const wasSearching = useRef(false)
+  const localizationCache = useRef('')
   const confirmPanel = useRef<HTMLElement>(null)
   const resetPanel = useRef<HTMLElement>(null)
   const themeFile = useRef<HTMLInputElement>(null)
@@ -676,10 +687,10 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       )
       adoptConfig(next)
       setTierStatus(next.restart_required.length
-        ? 'Applied. Instrumentation changes take effect at the next daemon reload (sessions survive).'
-        : 'Applied.')
+        ? t("Settings.8621e92324")
+        : t("Settings.954b4955ec"))
     } catch (cause) {
-      setTierStatus(`Could not apply: ${cause instanceof Error ? cause.message : String(cause)}`)
+      setTierStatus(t("Settings.7fa716b353", { value1: cause instanceof Error ? cause.message : String(cause) }))
       if(['provider_required','models_required','model_verification_required'].includes(String((cause as {detail?:{code?:string}}).detail?.code)))window.dispatchEvent(new Event('mux:setup-provider'))
     }
   }
@@ -694,6 +705,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const adoptConfig = useCallback((next: Config) => {
     setConfig(next)
     setDraft(next)
+    applyLanguagePreference(next.ui_language)
     setTierChoice(next.experience_tier)
     setHarnessArgs(Object.fromEntries(Object.entries(next.harness_args).map(([name,args])=>[name,formatCommandLine(args)])))
     configureCustomTheme(next.custom_theme)
@@ -722,12 +734,12 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       // would let a Save overwrite their file with empty defaults. (The rules
       // file left this transaction: the Automation dashboard owns its editor.)
       if (!keyData) {
-        setStatus(bundle.errors.keybindings?`keybindings: ${bundle.errors.keybindings}`:'settings payload incomplete')
+        setStatus(bundle.errors.keybindings?t("Settings.10cc0c58dc", { value1: bundle.errors.keybindings }):t("Settings.3bd15ed78f"))
         return
       }
       adoptConfig(next)
       adoptKeybindings(keyData)
-      setStatus('ready')
+      setStatus(t("Settings.b24d6d3373"))
       // Both halves of the profile payload are kept. `detected` seeds "restore
       // detected"; `profiles` carries the daemon's *derived* capabilities, which
       // /api/config does not (it returns the stored list, which is now vestigial).
@@ -845,13 +857,13 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       // being harmless once the sidebar kept the answer.
       if(content.dataset.settingsTab!==activeTab)return
       const headings=[...content.querySelectorAll<HTMLElement>('h3')]
-      const sections=pagedSubpages?declaredSubpages:railSectionIds(headings.map(heading=>heading.textContent||''))
+      const sections=pagedSubpages?declaredSubpages:railSectionIds(headings.map(heading=>heading.textContent||''),headings.map(heading=>heading.dataset.headingMessage?sourceText(heading.dataset.headingMessage):heading.textContent||''))
       let at=0
       const claimed=new Set<HTMLElement>()
       for(const heading of headings){
         const label=(heading.textContent||'').trim()
         if(!label)continue
-        const id=pagedSubpages?settingsSubpageId(activeTab,label):(sections[at]?.id||'')
+        const id=pagedSubpages?settingsSubpageId(activeTab,heading.dataset.headingMessage?sourceText(heading.dataset.headingMessage):label):(sections[at]?.id||'')
         heading.dataset.settingsSection=id
         const owner=heading.closest<HTMLElement>('section')
         // First heading wins. A section is named by the heading that opens it;
@@ -869,9 +881,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     }
     read()
     const observer=new MutationObserver(()=>{ if(!frame)frame=requestAnimationFrame(read) })
-    observer.observe(content,{childList:true,subtree:true})
+    observer.observe(content,{childList:true,subtree:true,characterData:true})
     return()=>{observer.disconnect();if(frame)window.cancelAnimationFrame(frame)}
-  },[activeTab,draft!==null,pagedSubpages,declaredSubpages])
+  },[activeTab,draft!==null,pagedSubpages,declaredSubpages,uiLocale.value,catalogRevision.value])
 
   // A declared subpage is a page, not a scroll anchor. The Settings form remains one
   // atomic draft, but only the selected top-level section participates in layout. This
@@ -1027,7 +1039,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     !sameDraftValue(config,draft)
     ||Object.entries(config.harness_args).some(([name,args])=>harnessArgs[name]!==formatCommandLine(args))
     ||!sameDraftValue(bindingRules,savedBindings)
-  )),[config,draft,harnessArgs,bindingRules,savedBindings])
+  )), [config, draft, harnessArgs, bindingRules, savedBindings, uiLocale.value, catalogRevision.value])
 
   // A write to the daemon is in flight, or the last one was refused. Both are things the
   // footer has to say over the dirty hint, and `errors` is exactly the failure's lifetime:
@@ -1073,30 +1085,30 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
 
   const setupMobileVoice=async()=>{
     if(mobileVoiceBusy)return
-    setMobileVoiceBusy(true);setMobileVoiceMessage('Creating and verifying the private HTTPS address…')
+    setMobileVoiceFailed(false);setMobileVoiceBusy(true);setMobileVoiceMessage(t("Settings.34862d91a2"))
     try{
       const result=await enableMobileVoice()
-      if(!result.url){setMobileVoiceMessage('Complete the one-time Tailscale approval, then tap Enable secure mobile voice again.');return}
+      if(!result.url){setMobileVoiceFailed(true);setMobileVoiceMessage(t("Settings.e748f0ba4a"));return}
       setMobileVoiceMessage(result.diagnostic)
       setRemote(current=>current&&{...current,mobile_voice_configured:true,mobile_voice_url:result.url,mobile_voice_https_port:result.https_port||443,serve_configured:false,serve_url:null,diagnostic:result.diagnostic})
-    }catch(cause){setMobileVoiceMessage(cause instanceof Error?cause.message:String(cause))}
+    }catch(cause){setMobileVoiceFailed(true);setMobileVoiceMessage(cause instanceof Error?cause.message:String(cause))}
     finally{setMobileVoiceBusy(false)}
   }
 
   const repairFirewall=async()=>{
     if(firewallBusy)return
-    setFirewallBusy(true);setFirewallMessage('Requesting an elevated firewall repair; approve the Windows prompt.')
+    setFirewallBusy(true);setFirewallMessage(t("Settings.39082c27d5"))
     try{
       // Raw fetch (not the api helper) so the explicit user-gesture header the
       // daemon requires before triggering a UAC prompt is sent.
       const response=await fetch('/api/remote/firewall/repair',{method:'POST',headers:{'Content-Type':'application/json','X-Mux-User-Gesture':'firewall-repair'}})
       const result=await response.json().catch(()=>({}))
       if(response.ok&&result.ok){
-        setFirewallMessage('Added a scoped inbound Allow rule. Rechecking…')
+        setFirewallMessage(t("Settings.5edc7c8f56"))
         setFirewall(await api<FirewallStatus>('GET','/api/remote/firewall'))
-        setFirewallMessage('Windows Defender Firewall now allows phone connections.')
+        setFirewallMessage(t("Settings.d22a72ac6f"))
       }else{
-        setFirewallMessage(result.reason==='cancelled'?'The Windows elevation prompt was declined; no rule was changed.':result.reason==='unsupported'?'Firewall repair is only available in the packaged Windows app.':'The firewall repair did not complete.')
+        setFirewallMessage(result.reason==='cancelled'?t("Settings.4c10b44589"):result.reason==='unsupported'?t("Settings.3cffd0ae81"):t("Settings.81c939c069"))
       }
     }catch(cause){setFirewallMessage(cause instanceof Error?cause.message:String(cause))}
     finally{setFirewallBusy(false)}
@@ -1109,7 +1121,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
 
   const probeWsl=async()=>{
     if(wslProbing)return
-    setWslProbing(true);setWslMessage('Checking distributions; a stopped one is being started.')
+    setWslProbing(true);setWslMessage(t("Settings.76781be616"))
     try{await refreshWsl(true);setWslMessage('')}
     finally{setWslProbing(false)}
   }
@@ -1119,54 +1131,54 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     // one-switch decision with its own explanation, and burying it in a Save
     // button would leave the panel's other actions acting on a state the daemon
     // does not have yet.
-    setWslMessage(enabled?'Enabling…':'Disabling…')
+    setWslMessage(enabled?t("Settings.e22c24238e"):t("Settings.fb7bdec372"))
     try{
       // `PATCH /api/config` with a flat field map. It was `PUT` with a `{values:{…}}`
       // wrapper, which is neither the method the daemon routes nor the body it parses,
       // so this switch answered 405 every time it was pressed.
       await api('PATCH','/api/config',{wsl_bridge_enabled:enabled})
       await refreshWsl(false)
-      setWslMessage(enabled?'Enabled. Restart the daemon so it binds the WSL adapter.':'Disabled.')
+      setWslMessage(enabled?t("Settings.830c380805"):t("Settings.fe05fa4611"))
     }catch(cause){setWslMessage(cause instanceof Error?cause.message:String(cause))}
   }
 
   const installWslBridge=async(distro:string)=>{
     if(wslBusy)return
-    setWslBusy(distro);setWslMessage(`Installing the bridge into ${distro}…`)
+    setWslBusy(distro);setWslMessage(t("Settings.e5a1b0bbf9", { value1: distro }))
     try{
       // Raw fetch for the user-gesture header the daemon requires before it will
       // write into a distribution.
       const response=await fetch('/api/wsl/bridge/install',{method:'POST',headers:{'Content-Type':'application/json','X-Mux-User-Gesture':'wsl-bridge-install'},body:JSON.stringify({distro})})
       const result=await response.json().catch(()=>({}))
-      if(response.ok&&result.ok){await refreshWsl(true);setWslMessage(`Installed the bridge into ${distro}.`)}
-      else setWslMessage(result.reason||`The bridge could not be installed into ${distro}.`)
+      if(response.ok&&result.ok){await refreshWsl(true);setWslMessage(t("Settings.bd2463d48f", { value1: distro }))}
+      else setWslMessage(result.reason||t("Settings.3954429732", { value1: distro }))
     }catch(cause){setWslMessage(cause instanceof Error?cause.message:String(cause))}
     finally{setWslBusy('')}
   }
 
   const repairWslFirewall=async()=>{
     if(wslBusy)return
-    setWslBusy('firewall');setWslMessage('Requesting an elevated firewall rule; approve the Windows prompt.')
+    setWslBusy('firewall');setWslMessage(t("Settings.b669af169d"))
     try{
       const response=await fetch('/api/wsl/bridge/firewall/repair',{method:'POST',headers:{'Content-Type':'application/json','X-Mux-User-Gesture':'wsl-firewall-repair'}})
       const result=await response.json().catch(()=>({}))
-      if(response.ok&&result.ok){await refreshWsl(true);setWslMessage('Added an inbound rule scoped to the WSL subnet.')}
-      else setWslMessage(result.reason==='cancelled'?'The Windows elevation prompt was declined; no rule was changed.':result.reason==='no_wsl_adapter'?'No WSL virtual adapter was found, so there is no subnet to scope a rule to.':result.reason==='unsupported'?'Firewall changes are only available in the packaged Windows app.':'The firewall rule could not be added.')
+      if(response.ok&&result.ok){await refreshWsl(true);setWslMessage(t("Settings.e491550b52"))}
+      else setWslMessage(result.reason==='cancelled'?t("Settings.4c10b44589"):result.reason==='no_wsl_adapter'?t("Settings.b46df5474d"):result.reason==='unsupported'?t("Settings.1a459add2c"):t("Settings.4ac6454068"))
     }catch(cause){setWslMessage(cause instanceof Error?cause.message:String(cause))}
     finally{setWslBusy('')}
   }
 
   const exportDiagnostics=async()=>{
     if(diagnosticsBusy)return
-    setDiagnosticsBusy(true);setDiagnosticsMessage('Collecting diagnostics…')
+    setDiagnosticsBusy(true);setDiagnosticsMessage(t("Settings.f2464951b4"))
     try{
       const bundle=await api<unknown>('GET','/api/diagnostics/export')
       const text=JSON.stringify(bundle,null,2)
       setDiagnosticsText(text)
       // Clipboard write needs a secure context; over plain-HTTP tailnet it can
       // reject, so the copy failure falls back to the textarea below.
-      try{await navigator.clipboard.writeText(text);setDiagnosticsMessage('Diagnostics copied to the clipboard.')}
-      catch{setDiagnosticsMessage('Could not copy automatically; select the text below and copy it.')}
+      try{await navigator.clipboard.writeText(text);setDiagnosticsMessage(t("Settings.764ad7529b"))}
+      catch{setDiagnosticsMessage(t("Settings.9b24d678be"))}
     }catch(cause){setDiagnosticsMessage(cause instanceof Error?cause.message:String(cause))}
     finally{setDiagnosticsBusy(false)}
   }
@@ -1197,7 +1209,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       liveTabEntries.set(activeTab,[...mounted].flatMap(node=>harvestSettings(domVNode(node),activeTab,label,index)))
     },450)
     return()=>window.clearTimeout(timer)
-  },[activeTab,draft!==null])
+  },[activeTab,draft!==null,uiLocale.value,catalogRevision.value])
 
   // Reveal a picked search result once its tab has rendered. Landing on the right
   // tab is not enough on the long ones — the control is often several screens
@@ -1320,19 +1332,19 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
    */
   async function captureBinding(event:KeyboardEvent,commandId:string) {
     const chord=keyChord(event)
-    if(!chord){setBindingError('That key cannot be part of a shortcut.');return}
+    if(!chord){setBindingError(t("Settings.a4eca39cae"));return}
     const sequence=[...captureSequence,chord]
     const keys=sequence.join(' ')
     const continues=bindingRules.some(rule=>rule.keys!==keys&&rule.keys.startsWith(`${keys} `))
     if(continues&&sequence.length<(bindingPolicy?.max_sequence??3)){
       setCaptureSequence(sequence)
-      setBindingError(`${displayChord(keys,keymapHost.platform)} starts other shortcuts. Keep typing to make a longer one, or press Escape.`)
+      setBindingError(t("Settings.29f1e32ee1", { value1: displayChord(keys,keymapHost.platform) }))
       return
     }
     const conflict=bindingRules.find(rule=>rule.keys===keys&&rule.command!==commandId&&!rule.host&&!rule.platform)
     if(conflict){
       const label=bindingCommands.find(command=>command.id===conflict.command)?.label||conflict.command
-      setBindingError(`${displayChord(keys,keymapHost.platform)} is already assigned to ${label}. Clear or change that shortcut first.`)
+      setBindingError(t("Settings.d3057c783d", { value1: displayChord(keys,keymapHost.platform), value2: label }))
       return
     }
     // The rule keeps this host's scope only when the recording device is the one it
@@ -1358,7 +1370,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     const chords=new Map<string,string>()
     for(const rule of bindingRules)if(rule.command&&!chords.has(rule.command))chords.set(rule.command,rule.keys)
     return chords
-  },[bindingRules])
+  }, [bindingRules, uiLocale.value, catalogRevision.value])
   const bindingForCommand=(commandId:string)=>commandChords.get(commandId)
 
   // Which shortcut rows the filter leaves showing. Rows are *hidden*, never dropped
@@ -1367,7 +1379,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   // same predicate and hands the query to this filter.
   const visibleShortcuts=useMemo(()=>new Set(bindingCommands
     .filter(command=>shortcutMatches(command,commandChords.get(command.id),shortcutQuery,keymapHost.platform))
-    .map(command=>command.id)),[bindingCommands,commandChords,shortcutQuery,keymapHost.platform])
+    .map(command=>command.id)), [bindingCommands, commandChords, shortcutQuery, keymapHost.platform, uiLocale.value, catalogRevision.value])
   const clearBinding=(commandId:string)=>{
     setBindingRules(current=>current.filter(rule=>rule.command!==commandId))
     if(capturingCommand===commandId){setCapturingCommand(null);setCaptureSequence([])}
@@ -1480,7 +1492,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       adoptConfig(next); setErrors({})
       if (result.keybindings) adoptKeybindings(result.keybindings)
       else setSavedBindings(bindingRules)
-      setStatus(next.restart_required.length ? `saved · restart required: ${next.restart_required.join(', ')}` : 'saved · hot applied')
+      setStatus(next.restart_required.length ? t("Settings.552eb2b36b", { value1: next.restart_required.join(', ') }) : t("Settings.3a6c0e6211"))
       return true
     } catch (error) {
       const typed = error as ApiError
@@ -1495,13 +1507,13 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     try {
       adoptConfig(await api<Config>('POST','/api/config/reset',{}))
       setErrors({})
-      setStatus('defaults restored')
+      setStatus(t("Settings.cc441de714"))
     } catch (error) {
       // A failed reset used to be an unhandled rejection: the button reported nothing,
       // and the panel went on showing a draft that no longer matched the daemon.
       const typed = error as ApiError
       setErrors(typed.fields || {settings:typed.message})
-      setStatus(`restore failed · ${typed.message}`)
+      setStatus(t("Settings.4b70d8d894", { message: typed.message }))
     }
   }
   const exportConfig = () => {
@@ -1519,7 +1531,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     try {
       const custom = JSON.parse(await file.text()) as CustomTheme
       change('custom_theme',custom); change('theme','custom'); configureCustomTheme(custom); applyTheme('custom'); setErrors({})
-    } catch { setErrors({custom_theme:'theme file must contain valid JSON semantic tokens'}) }
+    } catch { setErrors({get custom_theme() { return t("Settings.c53fae7495") }}) }
   }
   const updateProfile = (index:number, changes:Partial<LaunchProfile>) => {
     const previous=draft!.shell_profiles[index]
@@ -1534,13 +1546,13 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   }
   const addProfile = (source?:LaunchProfile, backend:ProjectBackend='shell') => {
     const base:LaunchProfile = source || (backend==='shell'
-      ? {id:'shell',label:'New shell',executable:'',args:[],env:{},platforms:['windows'],cwd_strategy:'native',marker:'sh',capabilities:['interactive'],cwd_integration:false,enabled:true,backend:'shell'}
+      ? {id:'shell',get label() { return t("Settings.8a926ed734") },executable:'',args:[],env:{},platforms:['windows'],cwd_strategy:'native',marker:'sh',capabilities:['interactive'],cwd_integration:false,enabled:true,backend:'shell'}
       // An agent profile leaves `executable` empty so it inherits `harness_exe`, and
       // carries no shell capabilities: it contributes arguments, not a command line.
       // `platforms` is empty rather than ['windows'] because nothing about an
       // argument list is platform-specific, and a stray default would make the
       // profile unavailable on a host it would have worked on.
-      : {id:backend,label:`New ${harnessDescriptor(backend)?.display_name||backend} profile`,executable:'',args:[],env:{},platforms:[],cwd_strategy:'native',marker:'ag',capabilities:[],cwd_integration:false,enabled:true,backend})
+      : {id:backend,get label() { return t("Settings.cc0601a4a7", { value1: harnessDescriptor(backend)?.display_name||backend }) },executable:'',args:[],env:{},platforms:[],cwd_strategy:'native',marker:'ag',capabilities:[],cwd_integration:false,enabled:true,backend})
     let id=base.id, suffix=2
     while(draft!.shell_profiles.some(profile=>profile.id===id)) id=`${base.id}-${suffix++}`
     change('shell_profiles',[...draft!.shell_profiles,{...base,id,args:[...base.args],env:{...base.env},capabilities:[...base.capabilities]}])
@@ -1603,7 +1615,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   }
   const startHistoryScan = async ():Promise<void> => {
     try { setScanJob((await api<{job:HistoryScanJob}>('POST','/api/history/scan')).job) }
-    catch(cause){ setStatus(`Scan could not start: ${cause instanceof Error?cause.message:String(cause)}`) }
+    catch(cause){ setStatus(t("Settings.165390f773", { value1: cause instanceof Error?cause.message:String(cause) })) }
   }
   const cancelHistoryScan = async ():Promise<void> => {
     try { setScanJob((await api<{job:HistoryScanJob}>('DELETE','/api/history/scan')).job) }
@@ -1631,7 +1643,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const moveProfile = (index:number,offset:number) => { const items=[...draft!.shell_profiles],target=index+offset;if(target<0||target>=items.length)return;[items[index],items[target]]=[items[target],items[index]];change('shell_profiles',items) }
   const restoreDetected = () => { const existing=new Set(draft!.shell_profiles.map(profile=>profile.id));change('shell_profiles',[...draft!.shell_profiles,...detectedProfiles.filter(profile=>!existing.has(profile.id)).map(profile=>({...profile,configured:undefined}))]) }
   const refreshUsage = async () => {
-    setUsageRefreshMessage('Refreshing agent usage in the background…')
+    setUsageRefreshBusy(true)
+    setUsageRefreshFailed(false)
+    setUsageRefreshMessage(() => t("Settings.c42ff1d4f4"))
     setErrors(current=>{const next={...current};delete next.ccusage;return next})
     try {
       // The daemon answers at once and runs the contained scan in the background;
@@ -1642,25 +1656,28 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
         status=>{
           setUsage(status)
           const activity=describeUsageActivity(status.collector,Date.now()/1000)
-          if(status.refreshing)setUsageRefreshMessage(`Refreshing agent usage… ${activity??''}`.trim())
+          if(status.refreshing)setUsageRefreshMessage(() => t("Settings.4268b76361", { value1: activity??'' }).trim())
         },
       )
       if(next.collector.error)throw new Error(next.collector.error)
-      setUsageRefreshMessage(`Refresh finished · ${next.collector.id} ${next.collector.status}${describeLastRun(next.collector.last_run)?` · ${describeLastRun(next.collector.last_run)}`:''}`)
+      setUsageRefreshMessage(() => t("Settings.505493b917", { value1: next.collector.id, value2: codeLabel(next.collector.status), value3: describeLastRun(next.collector.last_run)?` · ${describeLastRun(next.collector.last_run)}`:'' }))
     } catch (error) {
       const message=(error as Error).message
-      setUsageRefreshMessage(`Refresh failed · ${message}`)
+      setUsageRefreshMessage(() => t("Settings.bab4005814", { value1: message }))
+      setUsageRefreshFailed(true)
       setErrors(current=>({...current,ccusage:message}))
+    } finally {
+      setUsageRefreshBusy(false)
     }
   }
   const clearUsage = async () => {
     try { setUsage(await api<UsageStatus>('DELETE','/api/usage/cache')) }
-    catch (error) { setUsageRefreshMessage(`Clear failed · ${(error as Error).message}`) }
+    catch (error) { setUsageRefreshFailed(true); setUsageRefreshMessage(() => t("Settings.a54468e4c9", { value1: (error as Error).message })) }
   }
   const providerKeyAction=async(operation:'test'|'set'|'clear',target:'openrouter'|'custom'='openrouter')=>{
     const key=target==='custom'?customKey:openRouterKey
     const label=target==='custom'?'Endpoint':'OpenRouter'
-    setProviderMessage(operation==='clear'?'Clearing key…':operation==='set'?'Testing and storing key…':'Testing key…')
+    setProviderMessage(operation==='clear'?t("Settings.ae46205194"):operation==='set'?t("Settings.e74bd3fc97"):t("Settings.cb874cc434"))
     try{
       const result=await providerKeyOperation(operation,target,key)
       // The whole payload is refetched rather than patched in: storing or clearing a key
@@ -1670,9 +1687,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       forgetLlmProvider()
       await reloadProviderStatus()
       if(target==='custom')setCustomKey('');else if(operation==='set'||operation==='clear')setOpenRouterKey('')
-      setProviderMessage(operation==='clear'?`${label} key cleared.`:operation==='set'?`${label} key tested and stored in the platform credential store.`:`${label} connection succeeded.`)
+      setProviderMessage(operation==='clear'?t("Settings.353dbe46b0", { value1: label }):operation==='set'?t("Settings.7b7ebb8dc4", { value1: label }):t("Settings.c5c2a4482c", { value1: label }))
       void result
-    }catch(error){setProviderMessage(`${label} error · ${(error as Error).message}`)}
+    }catch(error){setProviderMessage(t("Settings.90b756f119", { value1: label, value2: (error as Error).message }))}
   }
   const reloadProviderStatus=async()=>{
     try{setProvider(await api<ProviderStatus>('GET','/api/automation/provider'))}catch{/* the banner already reports it */}
@@ -1696,8 +1713,8 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     }finally{setVerifying('')}
   }
   const refreshModels=async()=>{
-    setProviderMessage('Refreshing OpenRouter model catalog…')
-    try{const models=await api<ProviderStatus['models']>('POST','/api/automation/provider/models/refresh',{});setProvider(current=>current?{...current,models}:current);setProviderMessage(`Model catalog ready · ${models.models.length} structured-output text models.`)}catch(error){setProviderMessage(`Model refresh failed · ${(error as Error).message}`)}
+    setProviderMessage(t("Settings.257a35d3de"))
+    try{const models=await api<ProviderStatus['models']>('POST','/api/automation/provider/models/refresh',{});setProvider(current=>current?{...current,models}:current);setProviderMessage(t("Settings.f3b44d4b91", { value1: models.models.length }))}catch(error){setProviderMessage(t("Settings.48282261e1", { value1: (error as Error).message }))}
   }
   const discardAndLeave=()=>{
     if(!closeIntent)return
@@ -1750,13 +1767,11 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   // the thing the docked column would otherwise have been showing. Both it and the
   // hamburger open the section drawer, because the title is where the eye already is.
   const heading = <div class="settings-heading">
-    <span>{narrow?'SETTINGS':'CONFIG::V6'}</span>
-    {narrow
-      ? <h2><button type="button" class="settings-heading-trigger" aria-expanded={navOpen} aria-controls="settings-tab-nav" onClick={toggleNav}>{activeTabLabel}<i aria-hidden="true">▾</i></button></h2>
-      : <h2>Settings</h2>}
+    <span>{narrow ? t("Settings.02f6ea1281") : t("Settings.0590b57a08")}</span>
+    {narrow ? <h2><button type="button" class="settings-heading-trigger" aria-expanded={navOpen} aria-controls="settings-tab-nav" onClick={toggleNav}>{activeTabLabel}<i aria-hidden="true">▾</i></button></h2> : <h2 data-heading-message="Settings.74a883a037">{t("Settings.74a883a037")}</h2>}
   </div>
   const navTrigger = narrow
-    ? <button type="button" class="settings-nav-trigger" aria-label="Settings sections" aria-expanded={navOpen} aria-controls="settings-tab-nav" onClick={toggleNav}>
+    ? <button type="button" class="settings-nav-trigger" aria-label={t("Settings.e26d51d367")} aria-expanded={navOpen} aria-controls="settings-tab-nav" onClick={toggleNav}>
         <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><line x1="2.5" y1="4" x2="13.5" y2="4"/><line x1="2.5" y1="8" x2="13.5" y2="8"/><line x1="2.5" y1="12" x2="13.5" y2="12"/></svg>
       </button>
     : null
@@ -1767,8 +1782,8 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   // closed it is `visibility:hidden` rather than `aria-hidden`, which is what keeps its
   // buttons out of the focus order without hiding elements that are still focusable.
   const renderTabNav = (previews:Map<SettingsTab,SettingsRailSection[]>) => <Fragment>
-    <nav ref={tabNavRef} id="settings-tab-nav" class={`settings-tabs${narrow?' settings-tabs-drawer':''}${narrow&&navOpen?' open':''}`} role="tablist" aria-label="Settings sections">
-      {settingsTabGroups.map(group=><div class="settings-tab-group" role="presentation" key={group.group}>
+    <nav ref={tabNavRef} id="settings-tab-nav" class={`settings-tabs${narrow?' settings-tabs-drawer':''}${narrow&&navOpen?' open':''}`} role="tablist" aria-label={t("Settings.e26d51d367")}>
+      {settingsTabGroups().map(group=><div class="settings-tab-group" role="presentation" key={group.group}>
         <span aria-hidden="true">{group.group}</span>
         {group.tabs.map(tab=>{
           // A paged tab lists its declared pages. An unpaged tab lists the sections it
@@ -1792,18 +1807,16 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
                   whatever selected on it, and the demo drives this nav to show the keymap
                   presets. */}
               <button role="tab" data-settings-tab={tab.id} aria-selected={activeTab===tab.id} class={activeTab===tab.id?'active':''} onClick={()=>selectTab(tab.id)}>{tab.label}</button>
-              {!!entries.length&&<button type="button" data-settings-tab-expand={tab.id} class="settings-tab-expand" aria-label={`${expanded?'Collapse':'Expand'} ${tab.label} pages`} aria-expanded={expanded} onClick={()=>toggleTabExpanded(tab.id)}>{expanded?'▾':'▸'}</button>}
+              {!!entries.length && <button type="button" data-settings-tab-expand={tab.id} class="settings-tab-expand" aria-label={t("Settings.9a6d5164b0", { value1: (expanded) ? 'yes' : 'no', label: tab.label })} aria-expanded={expanded} onClick={()=>toggleTabExpanded(tab.id)}>{expanded ? '▾' : '▸'}</button>}
             </div>
-            {expanded&&<div class="settings-subtabs" role="group" aria-label={`${tab.label} pages`}>
-              {pages.length
-                ?pages.map(page=><button key={page.id} type="button" data-settings-subpage-nav={page.id} class={activeTab===tab.id&&selectedSubpage===page.id?'active':''} onClick={()=>selectSubpage(tab.id,page.id)}>{page.label}</button>)
-                :sections.map(section=><button key={section.id} type="button" class={tab.id===activeTab&&activeSection===section.id?'active':''} onClick={()=>openSection(tab.id,section.id)}>{section.label}</button>)}
+            {expanded && <div class="settings-subtabs" role="group" aria-label={t("Settings.05e9eb0145", { label: tab.label })}>
+              {pages.length ? pages.map(page=><button key={page.id} type="button" data-settings-subpage-nav={page.id} class={activeTab===tab.id&&selectedSubpage===page.id?'active':''} onClick={()=>selectSubpage(tab.id,page.id)}>{page.label}</button>) : sections.map(section=><button key={section.id} type="button" class={tab.id===activeTab&&activeSection===section.id?'active':''} onClick={()=>openSection(tab.id,section.id)}>{section.label}</button>)}
             </div>}
           </Fragment>
         })}
       </div>)}
     </nav>
-    {narrow&&navOpen&&<button type="button" class="settings-nav-scrim" aria-label="Close settings sections" onClick={()=>setNavOpen(false)} />}
+    {narrow&&navOpen && <button type="button" class="settings-nav-scrim" aria-label={t("Settings.304028d971")} onClick={()=>setNavOpen(false)} />}
   </Fragment>
   /** Nothing is previewable before the config lands: no tab can be built without it. */
   const NO_PREVIEWS:Map<SettingsTab,SettingsRailSection[]> = new Map()
@@ -1813,16 +1826,16 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   {/* Disabled twin of the real search box: the index needs the config, and a control
       that appears late would shift the chrome out from under a tap. Narrow it lives in
       the header; wide it sits above the section list, at the top of the nav column. */}
-  const loadingSearch = <div class="settings-search"><input type="search" disabled placeholder="Search settings…" aria-label="Search settings (loading)" /></div>
-  if (!draft) return <div class="settings-layer" onMouseDown={event=>event.target===event.currentTarget&&requestClose()}><section class="settings-panel" ref={panel} role="dialog" aria-modal="true" aria-label="Settings">
+  const loadingSearch = <div class="settings-search"><input type="search" disabled placeholder={t("Settings.57054c5a04")} aria-label={t("Settings.9c927bd29c")} /></div>
+  if (!draft) return <div class="settings-layer" onMouseDown={event=>event.target===event.currentTarget&&requestClose()}><section class="settings-panel" ref={panel} role="dialog" aria-modal="true" aria-label={t("Settings.74a883a037")}>
     <header>{navTrigger}{heading}
-      {narrow&&loadingSearch}
-      <button class="settings-close" aria-label="Close Settings" onClick={()=>requestClose()}>×</button></header>
+      {narrow && loadingSearch}
+      <button class="settings-close" aria-label={t("Settings.2da15e4dad")} onClick={()=>requestClose()}>×</button></header>
     <main class="settings-body">
-      {narrow?renderTabNav(NO_PREVIEWS):<div class="settings-nav-col">{loadingSearch}{renderTabNav(NO_PREVIEWS)}</div>}
+      {narrow ? renderTabNav(NO_PREVIEWS) : <div class="settings-nav-col">{loadingSearch}{renderTabNav(NO_PREVIEWS)}</div>}
       <div class="settings-content"><section class="settings-loading" role="status" aria-live="polite">{status}</section></div>
     </main>
-    <footer><span aria-live="polite">{status}</span><button onClick={()=>requestClose()}>Cancel</button></footer>
+    <footer><span aria-live="polite">{status}</span><button onClick={()=>requestClose()}>{t("Settings.19766ed6cc")}</button></footer>
   </section></div>
   const modelOptions=(selected:string)=>includeSelectedModel(provider?.models.models||[],selected)
   // What the *active* endpoint was measured to publish, off the entry for the
@@ -1837,7 +1850,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const endpointOverride=customProviderOverride(draft,catalogKnown)
   /** What one route resolves to right now, for the read-only rows on feature tabs. */
   const routedModel=(key:keyof ModelRoutingConfig)=>
-    resolveRoute(MODEL_ROUTES.find(route=>route.key===key)!,draft,endpointOverride).model||'not set'
+    resolveRoute(MODEL_ROUTES.find(route=>route.key===key)!,draft,endpointOverride).model||t("Settings.1aef939917")
   // Diagnostics reuses the app's own command registry rather than re-implementing
   // the three reload paths, so a change to what "reload daemon" means reaches this
   // panel for free. The registry arrives as a prop; a command that is absent (an
@@ -1851,89 +1864,90 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   // lets the index be derived from the same JSX that renders the form rather than
   // from a hand-maintained duplicate list of every setting.
   const tabContent = (activeTab: SettingsTab) => <Fragment>
-        {activeTab==='general'&&<Fragment>
-          <section><h3>Defaults</h3>
-            <label>Startup directory<input value={draft.startup_cwd} onInput={e=>change('startup_cwd',e.currentTarget.value)} /></label>
-            <label>Default backend<Dropdown value={draft.default_backend} onChange={value=>change('default_backend',value)} options={allBackendNames().map(name=>({value:name,label:name==='shell'?'Shell':harnessDisplayName(name)}))}/></label>
-            <p>What a new session starts as, and where it starts, when nothing more specific applies. A Project's own default overrides both.</p>
+        {activeTab==='general' && <Fragment>
+          <section data-setting="ui_language"><LanguagePicker onSaved={saved=>{setConfig(current=>current?{...current,ui_language:saved.ui_language,revision:saved.revision}:current);setDraft(current=>current?{...current,ui_language:saved.ui_language,revision:saved.revision}:current)}} /></section>
+          <section><h3 data-heading-message="Settings.610b7468ce">{t("Settings.610b7468ce")}</h3>
+            <label data-setting="startup_cwd">{rich("Settings.4093a17a2f", { value1: <input value={draft.startup_cwd} onInput={e=>change('startup_cwd',e.currentTarget.value)} /> })}</label>
+            <label>{rich("Settings.52c56b5713", { value1: <Dropdown value={draft.default_backend} onChange={value=>change('default_backend',value)} options={allBackendNames().map(name=>({value:name,label:name==='shell'?t("Settings.a733285486"):harnessDisplayName(name)}))}/> })}</label>
+            <p>{t("Settings.b97dbb1da6")}</p>
           </section>
 
-          <section data-setting="experience_tier"><h3>Experience tier</h3>
-            <p>The first-run choice of how much swe-mux does: pure terminal (nothing watching), deterministic (transcripts, status, the fleet surface; model-free), or automations (adds the scan timeline and model-backed observers). A tier is a batch of defaults, never a lock - every switch it touches stays individually editable.</p>
-            <label>Tier<Dropdown value={tierChoice} onChange={value=>setTierChoice(value as typeof tierChoice)} options={[...(draft.experience_tier===''?[{value:'',label:'Not chosen'}]:[]),{value:'terminal',label:'Pure terminal'},{value:'deterministic',label:'Deterministic'},{value:'automations',label:'Automations'}]}/></label>
-            {tierChoice&&<ExperiencePreview tier={tierChoice}/>}
-            <div class="settings-tutorial-reset"><div><p>Applying replaces the tier's instrumentation, fleet switches, and global automation defaults. Projects inherit these defaults unless they have an explicit choice. Other customized automation defaults are preserved.</p></div><button disabled={!tierChoice} onClick={()=>void applyExperienceTier()}>Apply tier defaults</button></div>
-            {tierStatus&&<p class="profile-hint" role="status">{tierStatus}</p>}
+          <section data-setting="experience_tier"><h3 data-heading-message="Settings.96d00c9bca">{t("Settings.96d00c9bca")}</h3>
+            <p>{t("Settings.6b8492beae")}</p>
+            <label>{rich("Settings.c55d7900d9", { value1: <Dropdown value={tierChoice} onChange={value=>setTierChoice(value as typeof tierChoice)} options={[...(draft.experience_tier===''?[{value:'',get label() { return t("Settings.2f7b5f0c93") }}]:[]),{value:'terminal',get label() { return t("Settings.95f1428d07") }},{value:'deterministic',get label() { return t("Settings.ec6b656e17") }},{value:'automations',get label() { return t("Settings.ad1fb9ec0c") }}]}/> })}</label>
+            {tierChoice && <ExperiencePreview tier={tierChoice}/>}
+            <div class="settings-tutorial-reset"><div><p>{t("Settings.0bed26d526")}</p></div><button disabled={!tierChoice} onClick={()=>void applyExperienceTier()}>{t("Settings.1d9ec1f990")}</button></div>
+            {tierStatus && <p class="profile-hint" role="status">{tierStatus}</p>}
           </section>
 
           <DesktopIntegrationSection/>
 
-          <section><h3>Getting started tutorial</h3>
-            <div class="settings-tutorial-reset"><div><p>Replay the guided tour of Projects, provider accounts, tabs, pane splits, resources, and the main navigation.</p></div><button onClick={()=>requestClose('tutorial')}>Reset &amp; run tutorial</button></div>
+          <section><h3 data-heading-message="Settings.12f2e0cbaf">{t("Settings.12f2e0cbaf")}</h3>
+            <div class="settings-tutorial-reset"><div><p>{t("Settings.3d59314e38")}</p></div><button onClick={()=>requestClose('tutorial')}>{t("Settings.708bf8b65a")}</button></div>
           </section>
 
           {/* Config-file actions live here rather than in the footer: they act on the
               whole configuration, not the visible tab, so repeating them under every
               tab implied a per-tab scope they never had — and on a phone they pushed
               Cancel/Save into a horizontally scrolling footer. */}
-          <section><h3>Configuration file</h3>
-          <div class="settings-config-actions"><div><p>Stored in <code>{draft.data_dir}</code>. Exports omit credentials. Restore defaults saves immediately and discards this draft.</p></div>
-              <div><button onClick={()=>void api('POST','/api/reveal',{path:draft.data_dir})}>Reveal config directory</button><button onClick={exportConfig}>Export sanitized</button><button class="danger" onClick={()=>setResetIntent(true)}>Restore defaults</button></div>
+          <section><h3 data-heading-message="Settings.f1c216ddf2">{t("Settings.f1c216ddf2")}</h3>
+          <div class="settings-config-actions"><div><p>{rich("Settings.607aa1a896", { value1: <code>{draft.data_dir}</code> })}</p></div>
+              <div><button onClick={()=>void api('POST','/api/reveal',{path:draft.data_dir})}>{t("Settings.1f2df45014")}</button><button onClick={exportConfig}>{t("Settings.cf675af0cc")}</button><button class="danger" onClick={()=>setResetIntent(true)}>{t("Settings.602f8e6370")}</button></div>
             </div>
           </section>
         </Fragment>}
 
-        {activeTab==='usage'&&<section><h3>Canonical activity ledger</h3>
-          <label class="check"><span>Capture native provider telemetry for new sessions</span><input type="checkbox" checked={draft.canonical_telemetry_native_otel_enabled} onChange={e=>change('canonical_telemetry_native_otel_enabled',e.currentTarget.checked)}/></label>
-          <p>Routes supported provider tool, skill, decision, timing, and compaction metadata to this daemon over authenticated loopback.</p>
-          <p>Tool output is hashed and discarded rather than copied into the ledger.</p>
-          <label class="check"><span>Keep the legacy tool table beside the ledger</span><input type="checkbox" checked={draft.canonical_telemetry_legacy_dashboard_enabled} onChange={e=>change('canonical_telemetry_legacy_dashboard_enabled',e.currentTarget.checked)}/></label>
-          <p>Shows the retired operational tool table and its shadow comparison as a Fleet activity tab. Turn it off once the comparison has been reviewed; nothing is deleted either way.</p>
+        {activeTab==='usage' && <section><h3 data-heading-message="Settings.a652bdce64">{t("Settings.a652bdce64")}</h3>
+          <label class="check"><span>{t("Settings.79dd867432")}</span><input type="checkbox" checked={draft.canonical_telemetry_native_otel_enabled} onChange={e=>change('canonical_telemetry_native_otel_enabled',e.currentTarget.checked)}/></label>
+          <p>{t("Settings.9be4b0b3ac")}</p>
+          <p>{t("Settings.9826d8a4ee")}</p>
+          <label class="check"><span>{t("Settings.ea63bde02d")}</span><input type="checkbox" checked={draft.canonical_telemetry_legacy_dashboard_enabled} onChange={e=>change('canonical_telemetry_legacy_dashboard_enabled',e.currentTarget.checked)}/></label>
+          <p>{t("Settings.5b0da44ddc")}</p>
         </section>}
 
         {/* Per-Project options are NOT here: the Projects registry is the single
             per-Project editor (menu → Manage projects, or a Project's context menu →
             Project settings…). This tab is the global half only, and each section
             names the per-Project field it composes with. */}
-        {activeTab==='projects'&&<Fragment>
+        {activeTab==='projects' && <Fragment>
           {/* Where the assistant may create new project folders. Name-only at the tool:
               the model never supplies a path, so this one directory is the whole surface
               a chat message can create a folder in. The Add-project dialog is unaffected. */}
-          <section><h3>New project location</h3>
-            <label data-setting="new_project_parent">Default parent folder<input value={draft.new_project_parent} placeholder={projectParentHint||'e.g. D:\\PROJECTS'} onInput={e=>change('new_project_parent',e.currentTarget.value)}/></label>
-            <p>The only directory the Mux assistant may create new project folders inside; the Add project dialog can use any parent.{projectParentHint&&<Fragment> Most of your projects live in <code>{projectParentHint}</code>.</Fragment>}</p>
+          <section><h3 data-heading-message="Settings.d597f45a94">{t("Settings.d597f45a94")}</h3>
+            <label data-setting="new_project_parent">{rich("Settings.eae5876f47", { value1: <input value={draft.new_project_parent} placeholder={projectParentHint || t("Settings.8535f6ae6a")} onInput={e=>change('new_project_parent',e.currentTarget.value)}/> })}</label>
+            <p>{rich("Settings.2742dd4f3c", { value1: projectParentHint && <Fragment>{rich("Settings.ab34b4cc9f", { value1: <code>{projectParentHint}</code> })}</Fragment> })}</p>
           </section>
 
           {/* Setup commands offered when a Project is registered. They are yours, typed
               here, stored on this machine — nothing is ever read out of a repository, so
               there is no trust prompt and no fingerprint to approve. */}
-          <section><h3>Project setup commands</h3>
+          <section><h3 data-heading-message="Settings.d76e4fae48">{t("Settings.d76e4fae48")}</h3>
             <div class="settings-init-scripts">
-              <div class="settings-init-scripts-head"><div><strong>Offered when you add a Project</strong><p>Offered as unchecked options in Add project. Each selected command opens its own one-shot terminal at the new Project root, started in this order.</p></div><button onClick={addInitScript}>+ Add command</button></div>
+              <div class="settings-init-scripts-head"><div><strong>{t("Settings.b852090eca")}</strong><p>{t("Settings.705dd738d8")}</p></div><button onClick={addInitScript}>{t("Settings.8415a53c5e")}</button></div>
               {initScripts().map((script,index)=><div class="settings-init-script" key={script.id}>
-                <label>Name<input value={script.label} placeholder="Initialize git" onInput={e=>updateInitScript(index,{label:e.currentTarget.value})} /></label>
-                <label>Command<textarea value={script.command} placeholder="git init && git commit --allow-empty -m init" onInput={e=>updateInitScript(index,{command:e.currentTarget.value})} /></label>
+                <label>{rich("Settings.5b326d4444", { value1: <input value={script.label} placeholder={t("Settings.75b7b54fd0")} onInput={e=>updateInitScript(index,{label:e.currentTarget.value})} /> })}</label>
+                <label>{rich("Settings.624ed75acc", { value1: <textarea value={script.command} placeholder={t("Settings.dd1f763fbb")} onInput={e=>updateInitScript(index,{command:e.currentTarget.value})} /> })}</label>
                 <div class="settings-init-script-actions">
-                  <label class="check"><span>Checked by default</span><input type="checkbox" checked={!!script.default_enabled} onChange={e=>updateInitScript(index,{default_enabled:e.currentTarget.checked})} /></label>
+                  <label class="check"><span>{t("Settings.73e88dbcfe")}</span><input type="checkbox" checked={!!script.default_enabled} onChange={e=>updateInitScript(index,{default_enabled:e.currentTarget.checked})} /></label>
                   <button disabled={index===0} onClick={()=>moveInitScript(index,-1)}>↑</button>
                   <button disabled={index===initScripts().length-1} onClick={()=>moveInitScript(index,1)}>↓</button>
-                  <button class="danger" onClick={()=>removeInitScript(index)}>Remove</button>
+                  <button class="danger" onClick={()=>removeInitScript(index)}>{t("Settings.c3812fc4ac")}</button>
                 </div>
               </div>)}
-              {!initScripts().length&&<p>No setup commands yet. Add one to have it offered whenever you register a Project.</p>}
+              {!initScripts().length && <p>{t("Settings.aaf875d75c")}</p>}
             </div>
           </section>
 
-          <section><h3>Global project ignores</h3>
-            <label data-setting="project_ignore_patterns">Ignore patterns<textarea value={draft.project_ignore_patterns.join('\n')} onInput={e=>change('project_ignore_patterns',parseIgnorePatternDraft(e.currentTarget.value))}/></label>
-            <p>One glob per line, matched at any depth. Affects the file tree and resource watchers, not Git. Each Project adds its own list on top under <strong>Manage projects → Repository options</strong>.</p>
+          <section><h3 data-heading-message="Settings.32fd0c7bc8">{t("Settings.32fd0c7bc8")}</h3>
+            <label data-setting="project_ignore_patterns">{rich("Settings.1ef5e70f2c", { value1: <textarea value={draft.project_ignore_patterns.join('\n')} onInput={e=>change('project_ignore_patterns',parseIgnorePatternDraft(e.currentTarget.value))}/> })}</label>
+            <p>{rich("Settings.b4878aeb0e", { value1: <strong>{t("Settings.6388650422")}</strong> })}</p>
           </section>
         </Fragment>}
 
-        {activeTab==='terminals'&&<Fragment>
-          <section><h3>Rendering</h3>
-            <label>Renderer<Dropdown value={draft.terminal_renderer} onChange={value=>change('terminal_renderer',value as Config['terminal_renderer'])} options={[{value:'auto',label:'Auto (WebGL with DOM fallback)'},{value:'webgl',label:'Prefer WebGL'},{value:'dom',label:'DOM compatibility mode'}]}/></label>
-          <p>Mobile and Claude use the DOM renderer. Auto also selects it for terminals that repaint scrollback. Harness width limits are under Harnesses.</p>
+        {activeTab==='terminals' && <Fragment>
+          <section><h3 data-heading-message="Settings.e2fe353986">{t("Settings.e2fe353986")}</h3>
+            <label data-setting="terminal_renderer">{rich("Settings.e57095b0ec", { value1: <Dropdown value={draft.terminal_renderer} onChange={value=>change('terminal_renderer',value as Config['terminal_renderer'])} options={[{value:'auto',get label() { return t("Settings.79003a7b93") }},{value:'webgl',get label() { return t("Settings.54953cd5cd") }},{value:'dom',get label() { return t("Settings.45f5d80817") }}]}/> })}</label>
+          <p>{t("Settings.8e3970531d")}</p>
           </section>
 
           {/* Retention, first replay, and crash checkpoint are three different byte
@@ -1942,90 +1956,90 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               section for that reason, ordered as the bytes travel: what is kept, what
               a fresh attach is handed, what survives losing the daemon and its PTY
               owner together. */}
-          <section><h3>Scrollback</h3>
-            <label>Scrollback bytes<input type="number" min="1024" max="1073741824" value={draft.scrollback_bytes} onInput={e=>change('scrollback_bytes',Number(e.currentTarget.value))} /><small>Output kept per live session for replay after a reconnect; larger costs memory.</small></label>
-            <label data-setting="attach_replay_bytes">Replay bytes on a fresh attach<input type="number" min="1024" max="1073741824" value={draft.attach_replay_bytes} onInput={e=>change('attach_replay_bytes',Number(e.currentTarget.value))} /><small>Handed to a client attaching with no position of its own; every byte is parsed before render, so this is reconnect latency.</small></label>
-            <h4>Crash recovery</h4>
-          <p>These limits cover a full daemon and PTY-supervisor failure. Recovered sessions return as readable ended panes; <code>session_recovery_enabled</code> is a config-file switch.</p>
-            <label data-setting="session_recovery_checkpoint_bytes">Recovery checkpoint bytes<input type="number" min="0" max="67108864" value={draft.session_recovery_checkpoint_bytes} onInput={e=>change('session_recovery_checkpoint_bytes',Number(e.currentTarget.value))} /><small>Terminal bytes kept per session for the recovered pane; 0 keeps recovery on and stores no output.</small></label>
-            <label data-setting="session_recovery_retention_days">Recovery retention days<input type="number" min="0" max="365" value={draft.session_recovery_retention_days} onInput={e=>change('session_recovery_retention_days',Number(e.currentTarget.value))} /><small>How long an <em>ended</em> session's recovery data is kept.</small></label>
-            <label data-setting="session_recovery_max_sessions">Recoverable sessions kept<input type="number" min="0" max="1000" value={draft.session_recovery_max_sessions} onInput={e=>change('session_recovery_max_sessions',Number(e.currentTarget.value))} /><small>Newest first, so repeated crashes cannot accumulate cold rows forever.</small></label>
+          <section><h3 data-heading-message="Settings.e15c93639f">{t("Settings.e15c93639f")}</h3>
+            <label>{rich("Settings.feb4d74fa3", { value1: <input type="number" min="1024" max="1073741824" value={draft.scrollback_bytes} onInput={e=>change('scrollback_bytes',Number(e.currentTarget.value))} />, value2: <small>{t("Settings.55ec2f69cf")}</small> })}</label>
+            <label data-setting="attach_replay_bytes">{rich("Settings.7931662b58", { value1: <input type="number" min="1024" max="1073741824" value={draft.attach_replay_bytes} onInput={e=>change('attach_replay_bytes',Number(e.currentTarget.value))} />, value2: <small>{t("Settings.1210398c67")}</small> })}</label>
+            <h4 data-heading-message="Settings.3aef96e640">{t("Settings.3aef96e640")}</h4>
+          <p>{rich("Settings.d3eaa29455", { value1: <code>{t("Settings.1e768c98f8")}</code> })}</p>
+            <label data-setting="session_recovery_checkpoint_bytes">{rich("Settings.453bc00217", { value1: <input type="number" min="0" max="67108864" value={draft.session_recovery_checkpoint_bytes} onInput={e=>change('session_recovery_checkpoint_bytes',Number(e.currentTarget.value))} />, value2: <small>{t("Settings.d646181b8c")}</small> })}</label>
+            <label data-setting="session_recovery_retention_days">{rich("Settings.e745537ac7", { value1: <input type="number" min="0" max="365" value={draft.session_recovery_retention_days} onInput={e=>change('session_recovery_retention_days',Number(e.currentTarget.value))} />, value2: <small>{rich("Settings.c52d762da9", { value1: <em>{t("Settings.e87ba7a0b7")}</em> })}</small> })}</label>
+            <label data-setting="session_recovery_max_sessions">{rich("Settings.73f599952e", { value1: <input type="number" min="0" max="1000" value={draft.session_recovery_max_sessions} onInput={e=>change('session_recovery_max_sessions',Number(e.currentTarget.value))} />, value2: <small>{t("Settings.6bdbb7f402")}</small> })}</label>
           </section>
 
-          <section><h3>Default profile</h3>
-            <label>Global default terminal profile<Dropdown value={draft.default_shell_profile} onChange={value=>change('default_shell_profile',value)} options={draft.shell_profiles.filter(profile=>profile.enabled&&profile.backend==='shell').map(profile=>({value:profile.id,label:profile.label}))}/></label>
-          <p>A profile names an executable, arguments, and environment. Shell profiles open terminals; agent profiles start a harness variant. Project defaults are under Projects → Options.</p>
+          <section><h3 data-heading-message="Settings.ad30abd187">{t("Settings.ad30abd187")}</h3>
+            <label>{rich("Settings.77a91ae469", { value1: <Dropdown value={draft.default_shell_profile} onChange={value=>change('default_shell_profile',value)} options={draft.shell_profiles.filter(profile=>profile.enabled&&profile.backend==='shell').map(profile=>({value:profile.id,label:profile.label}))}/> })}</label>
+          <p>{t("Settings.04bd3e78d7")}</p>
           </section>
 
-          <section><h3>Typing an agent's name in a terminal</h3>
-            <label class="check" data-setting="agent_shims_on_shell_path"><span>Launch agents through swe-mux <em>· makes a typed <code>claude</code> a real session</em></span><input type="checkbox" checked={draft.agent_shims_on_shell_path} onChange={e=>change('agent_shims_on_shell_path',e.currentTarget.checked)} /></label>
-            <p>On, a terminal's PATH starts with <code>~/.mux/bin</code>, so typing an agent's name launches it through swe-mux: the pane adopts the conversation, gets a name, and joins status detection, history, and the prompt queue.</p>
-            <p class="profile-hint">Off, <code>claude</code> in a terminal means your own <code>claude</code> and the pane stays a shell. Choose this if you use swe-mux purely as a terminal multiplexer. Agents started from the Run menu are unaffected either way — they are spawned straight into their terminal and never go through this. Takes effect on the next daemon restart, for terminals opened after it.</p>
+          <section><h3 data-heading-message="Settings.66907cf217">{t("Settings.66907cf217")}</h3>
+            <label class="check" data-setting="agent_shims_on_shell_path"><span>{rich("Settings.1037accf0f", { value1: <em>{rich("Settings.8277415b2e", { value1: <code>{t("Settings.c857d09db2")}</code> })}</em> })}</span><input type="checkbox" checked={draft.agent_shims_on_shell_path} onChange={e=>change('agent_shims_on_shell_path',e.currentTarget.checked)} /></label>
+            <p>{rich("Settings.85be6ef7a8", { value1: <code>{t("Settings.204fcb78d9")}</code> })}</p>
+            <p class="profile-hint">{rich("Settings.437109e789", { value1: <code>{t("Settings.c857d09db2")}</code>, value2: <code>{t("Settings.c857d09db2")}</code> })}</p>
           </section>
 
-          <section class="profile-settings"><h3>Launch profiles</h3>
+          <section class="profile-settings"><h3 data-heading-message="Settings.1fce70b800">{t("Settings.1fce70b800")}</h3>
           <div class="profile-browser">
-            <div class="profile-index" aria-label="Configured launch profiles">
-              {draft.shell_profiles.map(profile=><button class={selectedProfileId===profile.id?'active':''} onClick={()=>setSelectedProfileId(selectedProfileId===profile.id?null:profile.id)}><span>{profileTag(profile)}</span><strong>{profile.label}</strong><small>{profile.id} · {profile.backend==='shell'?'shell':harnessDisplayName(profile.backend)} · {profile.enabled?'on':'off'}</small></button>)}
-              <div class="profile-index-actions"><button onClick={()=>addProfile()}>+ add shell</button>{harnesses().map(harness=><button key={harness.name} onClick={()=>addProfile(undefined,harness.name)}>+ add {harness.display_name}</button>)}<button onClick={restoreDetected}>restore detected</button></div>
+            <div class="profile-index" aria-label={t("Settings.82016fe5c7")}>
+              {draft.shell_profiles.map(profile=><button class={selectedProfileId===profile.id?'active':''} onClick={()=>setSelectedProfileId(selectedProfileId===profile.id?null:profile.id)}><span>{profileTag(profile)}</span><strong>{profile.label}</strong><small>{profile.id} · {profile.backend==='shell' ? t("Settings.ce635c4eab") : harnessDisplayName(profile.backend)} · {profile.enabled ? t("Settings.b8d31e8527") : t("Settings.b4dc66dde8")}</small></button>)}
+              <div class="profile-index-actions"><button onClick={()=>addProfile()}>{t("Settings.bd6a79817b")}</button>{harnesses().map(harness=><button key={harness.name} onClick={()=>addProfile(undefined,harness.name)}>{rich("Settings.86a86c70f9", { display_name: harness.display_name })}</button>)}<button onClick={restoreDetected}>{t("Settings.63b2db5c07")}</button></div>
             </div>
-            {selectedProfile&&<article class="profile-editor">
-              <header><strong>PROFILE::{selectedProfile.label}</strong><button aria-label="Collapse launch profile" onClick={()=>setSelectedProfileId(null)}>×</button></header>
-              <label>Profile ID<input value={selectedProfile.id} onInput={e=>updateProfile(selectedProfileIndex,{id:e.currentTarget.value})}/></label>
-              <label>Label<input value={selectedProfile.label} onInput={e=>updateProfile(selectedProfileIndex,{label:e.currentTarget.value})}/></label>
-              <label>Backend<Dropdown value={selectedProfile.backend} onChange={value=>updateProfile(selectedProfileIndex,{backend:value as ProjectBackend})} options={[{value:'shell',label:'Shell'},...harnesses().map(harness=>({value:harness.name,label:harness.display_name}))]}/></label>
-              <label>Executable{selectedProfile.backend!=='shell'&&<em> optional</em>}<input value={selectedProfile.executable} placeholder={selectedProfile.backend==='shell'?'':draft.harness_exe[selectedProfile.backend]||''} onInput={e=>updateProfile(selectedProfileIndex,{executable:e.currentTarget.value})}/></label>
-              <label>Arguments<input value={argsText} spellcheck={false} placeholder={selectedProfile.backend==='shell'?'-NoLogo':'--model claude-opus-4-8'} onInput={e=>{const text=e.currentTarget.value;setArgsText(text);updateProfile(selectedProfileIndex,{args:parseCommandLine(text)})}}/></label>
-              <p class="profile-hint">Type it as you would in a terminal. Quote anything containing a space: <code>--append-system-prompt "be terse"</code>. A backslash is literal, so Windows paths need no escaping.</p>
-              {selectedProfile.backend!=='shell'&&reservedConflict(selectedProfile.backend,selectedProfile.args)&&<p class="error" role="alert">{reservedConflict(selectedProfile.backend,selectedProfile.args)} is built by swe-mux for {harnessDisplayName(selectedProfile.backend)} and cannot be set here.</p>}
-              <label>Environment<textarea value={Object.entries(selectedProfile.env).map(([key,value])=>`${key}=${value}`).join('\n')} onInput={e=>updateProfile(selectedProfileIndex,{env:Object.fromEntries(e.currentTarget.value.split('\n').filter(line=>line.includes('=')).map(line=>{const at=line.indexOf('=');return [line.slice(0,at),line.slice(at+1)]}))})}/></label>
-              {selectedProfile.backend==='shell'&&<><label>Cwd strategy<Dropdown value={selectedProfile.cwd_strategy} onChange={value=>updateProfile(selectedProfileIndex,{cwd_strategy:value as LaunchProfile['cwd_strategy']})} options={[{value:'native',label:'native'},{value:'home',label:'home'},{value:'wsl',label:'wsl'}]}/></label>
-              <label class="check"><span>Live cwd telemetry</span><input type="checkbox" checked={selectedProfile.cwd_integration} onChange={e=>updateProfile(selectedProfileIndex,{cwd_integration:e.currentTarget.checked})}/></label></>}
-              <div class="profile-preview"><span>LAUNCHES</span><code>{launchPreview(selectedProfile.executable||(selectedProfile.backend!=='shell'?draft.harness_exe[selectedProfile.backend]||selectedProfile.backend:''),selectedProfile.backend==='shell'?[]:parseCommandLine(harnessArgs[selectedProfile.backend]||''),selectedProfile.args)}</code>
-                <small>{selectedProfile.backend==='shell'?'swe-mux appends its own bootstrap to an interactive PowerShell profile.':'swe-mux adds the conversation id, the per-session settings file, and the MCP registration around these.'}</small>
+            {selectedProfile && <article class="profile-editor">
+              <header><strong>{rich("Settings.ff86ba0777", { label: selectedProfile.label })}</strong><button aria-label={t("Settings.4ffba55e5d")} onClick={()=>setSelectedProfileId(null)}>×</button></header>
+              <label>{rich("Settings.62db5ee889", { value1: <input value={selectedProfile.id} onInput={e=>updateProfile(selectedProfileIndex,{id:e.currentTarget.value})}/> })}</label>
+              <label>{rich("Settings.babe8d3238", { value1: <input value={selectedProfile.label} onInput={e=>updateProfile(selectedProfileIndex,{label:e.currentTarget.value})}/> })}</label>
+              <label>{rich("Settings.5f008d7b9b", { value1: <Dropdown value={selectedProfile.backend} onChange={value=>updateProfile(selectedProfileIndex,{backend:value as ProjectBackend})} options={[{value:'shell',get label() { return t("Settings.a733285486") }},...harnesses().map(harness=>({value:harness.name,label:harness.display_name}))]}/> })}</label>
+              <label>{rich("Settings.85e00278f6", { value1: selectedProfile.backend!=='shell' && <em>{t("Settings.d422020daa")}</em>, value2: <input value={selectedProfile.executable} placeholder={selectedProfile.backend==='shell' ? '' : draft.harness_exe[selectedProfile.backend] || ''} onInput={e=>updateProfile(selectedProfileIndex,{executable:e.currentTarget.value})}/> })}</label>
+              <label>{rich("Settings.dcd9b293a3", { value1: <input value={argsText} spellcheck={false} placeholder={selectedProfile.backend==='shell' ? t("Settings.b90a5d2477") : t("Settings.ece27d0c6a")} onInput={e=>{const text=e.currentTarget.value;setArgsText(text);updateProfile(selectedProfileIndex,{args:parseCommandLine(text)})}}/> })}</label>
+              <p class="profile-hint">{rich("Settings.c12839d10a", { value1: <code>{t("Settings.364d30c5f3")}</code> })}</p>
+              {selectedProfile.backend!=='shell'&&reservedConflict(selectedProfile.backend,selectedProfile.args) && <p class="error" role="alert">{rich("Settings.49b40019aa", { value1: reservedConflict(selectedProfile.backend,selectedProfile.args), value2: harnessDisplayName(selectedProfile.backend) })}</p>}
+              <label>{rich("Settings.8667a37964", { value1: <textarea value={Object.entries(selectedProfile.env).map(([key,value])=>`${key}=${value}`).join('\n')} onInput={e=>updateProfile(selectedProfileIndex,{env:Object.fromEntries(e.currentTarget.value.split('\n').filter(line=>line.includes('=')).map(line=>{const at=line.indexOf('=');return [line.slice(0,at),line.slice(at+1)]}))})}/> })}</label>
+              {selectedProfile.backend==='shell' && <><label>{rich("Settings.779525d2aa", { value1: <Dropdown value={selectedProfile.cwd_strategy} onChange={value=>updateProfile(selectedProfileIndex,{cwd_strategy:value as LaunchProfile['cwd_strategy']})} options={[{value:'native',get label() { return t("Settings.bef32d2c31") }},{value:'home',get label() { return t("Settings.4ea1405881") }},{value:'wsl',get label() { return t("Settings.42bda76ffe") }}]}/> })}</label>
+              <label class="check"><span>{t("Settings.45eb01ad80")}</span><input type="checkbox" checked={selectedProfile.cwd_integration} onChange={e=>updateProfile(selectedProfileIndex,{cwd_integration:e.currentTarget.checked})}/></label></>}
+              <div class="profile-preview"><span>{t("Settings.7276b6d954")}</span><code>{launchPreview(selectedProfile.executable||(selectedProfile.backend!=='shell'?draft.harness_exe[selectedProfile.backend]||selectedProfile.backend:''),selectedProfile.backend==='shell'?[]:parseCommandLine(harnessArgs[selectedProfile.backend]||''),selectedProfile.args)}</code>
+                <small>{selectedProfile.backend==='shell' ? t("Settings.0de2bfdfe9") : t("Settings.8e6876be17")}</small>
               </div>
-              <div class="profile-capabilities"><span>SUPPORTS</span>
+              <div class="profile-capabilities"><span>{t("Settings.f60f612dfe")}</span>
                 {(savedCapabilities(selectedProfile)||[]).map(item=><em key={item}>{item}</em>)}
-                {!(savedCapabilities(selectedProfile)||[]).length&&<em class="muted">nothing yet</em>}
-                <small>{capabilitiesStale(selectedProfile)?'Derived by the daemon; recomputed when you save.':'Derived by the daemon from this profile.'}</small>
+                {!(savedCapabilities(selectedProfile)||[]).length && <em class="muted">{t("Settings.1e17fa46dd")}</em>}
+                <small>{capabilitiesStale(selectedProfile) ? t("Settings.489161eace") : t("Settings.2fa60cb489")}</small>
               </div>
-              <div class="profile-editor-actions"><button onClick={()=>moveProfile(selectedProfileIndex,-1)}>move up</button><button onClick={()=>moveProfile(selectedProfileIndex,1)}>move down</button><button onClick={()=>addProfile(selectedProfile)}>duplicate</button><button onClick={()=>updateProfile(selectedProfileIndex,{enabled:!selectedProfile.enabled})}>{selectedProfile.enabled?'disable':'enable'}</button>{/* The last *shell* profile is what cannot go: `default_shell_profile` must name
+              <div class="profile-editor-actions"><button onClick={()=>moveProfile(selectedProfileIndex,-1)}>{t("Settings.4b6bad1ea4")}</button><button onClick={()=>moveProfile(selectedProfileIndex,1)}>{t("Settings.08bc837a97")}</button><button onClick={()=>addProfile(selectedProfile)}>{t("Settings.e24a5a32c9")}</button><button onClick={()=>updateProfile(selectedProfileIndex,{enabled:!selectedProfile.enabled})}>{selectedProfile.enabled ? t("Settings.e9d8992f34") : t("Settings.e97166b545")}</button>{/* The last *shell* profile is what cannot go: `default_shell_profile` must name
     one, and with none left the select above has no options, so the save would fail
     on a field the user could no longer set. Agent profiles are freely removable. */}
-<button class="danger" disabled={selectedProfile.backend==='shell'&&draft.shell_profiles.filter(profile=>profile.backend==='shell').length===1} onClick={()=>{change('shell_profiles',draft.shell_profiles.filter((_,index)=>index!==selectedProfileIndex));setSelectedProfileId(null)}}>remove</button></div>
-              <small>{selectedProfile.backend==='shell'?'swe-mux wraps this shell process only and never edits your shell profile files.':`These arguments follow the ${harnessDisplayName(selectedProfile.backend)} default args and precede anything the launch itself asks for. Reserved: ${reservedArgs(selectedProfile.backend).join(' ')||'none'}.`}</small>
+<button class="danger" disabled={selectedProfile.backend==='shell'&&draft.shell_profiles.filter(profile=>profile.backend==='shell').length===1} onClick={()=>{change('shell_profiles',draft.shell_profiles.filter((_,index)=>index!==selectedProfileIndex));setSelectedProfileId(null)}}>{t("Settings.7e5608ab61")}</button></div>
+              <small>{selectedProfile.backend==='shell' ? t("Settings.3727d237a1") : t("Settings.15073d5d0f", { value1: harnessDisplayName(selectedProfile.backend), value2: reservedArgs(selectedProfile.backend).join(' ')||'none' })}</small>
             </article>}
-            {!selectedProfile&&<div class="profile-placeholder"><span>TERMINAL::PROFILES</span><strong>Select a profile to inspect or edit it.</strong><p>Nothing is expanded until you choose one.</p></div>}
+            {!selectedProfile && <div class="profile-placeholder"><span>{t("Settings.546d26c986")}</span><strong>{t("Settings.ff0a1d133a")}</strong><p>{t("Settings.4775f76657")}</p></div>}
           </div>
           </section>
         </Fragment>}
 
-        {activeTab==='git'&&<section><h3>Git and worktrees</h3><label>Worktree root<input value={draft.worktree_root} onInput={e=>change('worktree_root',e.currentTarget.value)}/></label><p>New Run worktrees are grouped below this absolute directory by Project and branch. Clear the field to restore <code>{draft.data_dir}{draft.data_dir.includes('\\')?'\\':'/'}worktrees</code>. Existing worktrees and manually edited Run paths are not moved.</p><label>Git poll seconds<input type="number" step=".25" value={draft.git_poll_seconds} onInput={e=>change('git_poll_seconds',Number(e.currentTarget.value))} /></label><label><input type="checkbox" checked={draft.git_swe_mux_prompt_enabled} onChange={e=>change('git_swe_mux_prompt_enabled',e.currentTarget.checked)}/> Show swe-mux repository setup prompts</label><p>The Git Map asks once per unresolved Project whether portable <code>.swe-mux</code> files should remain visible or the whole directory should be ignored. This setting applies across devices.</p><div class="settings-config-actions"><div><strong>Project prompt decisions</strong><p>{Object.keys(draft.git_swe_mux_prompt_decisions||{}).length} Project decision{Object.keys(draft.git_swe_mux_prompt_decisions||{}).length===1?'':'s'} recorded.</p></div><div><button disabled={!Object.keys(draft.git_swe_mux_prompt_decisions||{}).length} onClick={()=>change('git_swe_mux_prompt_decisions',{})}>Reset decisions</button></div></div><p>A Project's own worktree setup command lives in <strong>Manage projects → Git and worktrees</strong>. Which Git fields a session row shows is under <strong>Appearance → Session rows</strong>.</p></section>}
+        {activeTab==='git' && <section><h3 data-heading-message="Settings.71b6da4552">{t("Settings.71b6da4552")}</h3><label>{rich("Settings.f4c6a15182", { value1: <input value={draft.worktree_root} onInput={e=>change('worktree_root',e.currentTarget.value)}/> })}</label><p>{rich("Settings.f8fc2d7627", { value1: <code>{rich("Settings.3889fda2be", { data_dir: draft.data_dir, value2: (draft.data_dir.includes('\\')) ? 'yes' : 'no' })}</code> })}</p><label>{rich("Settings.58f6edf104", { value1: <input type="number" step=".25" value={draft.git_poll_seconds} onInput={e=>change('git_poll_seconds',Number(e.currentTarget.value))} /> })}</label><label>{rich("Settings.cecdecba54", { value1: <input type="checkbox" checked={draft.git_swe_mux_prompt_enabled} onChange={e=>change('git_swe_mux_prompt_enabled',e.currentTarget.checked)}/> })}</label><p>{rich("Settings.9ca0fac057", { value1: <code>{t("Settings.64f9020bac")}</code> })}</p><div class="settings-config-actions"><div><strong>{t("Settings.ae176d3571")}</strong><p>{rich("Settings.aeae0524ec", { length: Object.keys(draft.git_swe_mux_prompt_decisions||{}).length, value2: (Object.keys(draft.git_swe_mux_prompt_decisions||{}).length===1) ? 'yes' : 'no' })}</p></div><div><button disabled={!Object.keys(draft.git_swe_mux_prompt_decisions||{}).length} onClick={()=>change('git_swe_mux_prompt_decisions',{})}>{t("Settings.b9b2de18eb")}</button></div></div><p>{rich("Settings.a5a5938bcf", { value1: <strong>{t("Settings.31c05b41e5")}</strong>, value2: <strong>{t("Settings.0e750756c8")}</strong> })}</p></section>}
 
-        {activeTab==='processes'&&<Fragment>
-          <section><h3>Process evidence</h3><label>Process inspector poll seconds<input type="number" min=".5" max="60" step=".5" value={draft.process_poll_seconds} onInput={e=>change('process_poll_seconds',Number(e.currentTarget.value))}/></label><label>Suspected-orphan grace seconds<input type="number" min="1" max="3600" value={draft.process_orphan_grace_seconds} onInput={e=>change('process_orphan_grace_seconds',Number(e.currentTarget.value))}/></label><label>Process evidence retention days<input type="number" min="1" max="3650" value={draft.process_evidence_retention_days} onInput={e=>change('process_evidence_retention_days',Number(e.currentTarget.value))}/></label><p>Surviving descendants are flagged after the grace period and never killed automatically. What is running right now is the drawer's <strong>Processes</strong> tab.</p>
-            <label>Session process priority<Dropdown value={draft.session_process_priority} onChange={value=>change('session_process_priority',value as Config['session_process_priority'])} options={[{value:'below_normal',label:'Below normal (fleet yields to the daemon)'},{value:'normal',label:'Normal (leave as spawned)'}]}/></label>
-            <label>Daemon process priority<Dropdown value={draft.daemon_process_priority} onChange={value=>change('daemon_process_priority',value as Config['daemon_process_priority'])} options={[{value:'above_normal',label:'Above normal'},{value:'normal',label:'Normal'}]}/></label>
-            <p>Scheduling classes only, and no-ops on an idle host: they decide who waits when every core is busy, so a wave of concurrent builds slows the builds rather than this UI. Session trees are only ever lowered, never raised. Both apply at the next daemon start.</p>
-            <label data-setting="gil_switch_interval_ms">GIL switch interval (ms)<input type="number" min="1" max="20" step=".5" value={draft.gil_switch_interval_ms} onInput={e=>change('gil_switch_interval_ms',Number(e.currentTarget.value))}/><small>How long a thread waiting for the daemon's Python interpreter lock lets the holder keep it. Each time the event loop hands the lock to background work it can wait this long to get it back, so this bounds what busy background work adds to a keystroke. 5 is Python's default and measured as good as anything lower; it is here for measuring a fleet unlike the one it was chosen on. Applies immediately.</small></label>
-            <label class="check" data-setting="worker_process_enabled"><span>Run bulk work in a worker process</span><input type="checkbox" checked={draft.worker_process_enabled} onChange={e=>change('worker_process_enabled',e.currentTarget.checked)}/><small>A second process with its own interpreter, owned by the daemon, so heavy background work cannot hold up the loop that serves your terminals. It ends with the daemon and is restarted if it fails. Off runs the same work inside the daemon. Applies at the next daemon start.</small></label>
-            <label class="check" data-setting="terminal_gateway_enabled"><span>Carry terminals in a gateway process</span><input type="checkbox" checked={draft.terminal_gateway_enabled} onChange={e=>change('terminal_gateway_enabled',e.currentTarget.checked)}/><small>A separate process carries your terminals, so typing keeps echoing while the daemon is busy or restarting. The daemon finds or starts it, and it outlives a daemon restart. On by default; off serves terminals from the daemon itself, which is also what happens whenever the gateway cannot run. Applies at the next daemon start.</small></label>
-            <label data-setting="terminal_gateway_port">Terminal gateway port<input type="number" min="0" max="65535" value={draft.terminal_gateway_port} onInput={e=>change('terminal_gateway_port',Number(e.currentTarget.value))}/><small>0 uses the daemon's port plus one. A browser on another device must be able to reach this port too. Applies at the next daemon start.</small></label></section>
+        {activeTab==='processes' && <Fragment>
+          <section><h3 data-heading-message="Settings.2ed6993b61">{t("Settings.2ed6993b61")}</h3><label>{rich("Settings.977c0a9783", { value1: <input type="number" min=".5" max="60" step=".5" value={draft.process_poll_seconds} onInput={e=>change('process_poll_seconds',Number(e.currentTarget.value))}/> })}</label><label>{rich("Settings.d97a0a476a", { value1: <input type="number" min="1" max="3600" value={draft.process_orphan_grace_seconds} onInput={e=>change('process_orphan_grace_seconds',Number(e.currentTarget.value))}/> })}</label><label>{rich("Settings.93fce66a81", { value1: <input type="number" min="1" max="3650" value={draft.process_evidence_retention_days} onInput={e=>change('process_evidence_retention_days',Number(e.currentTarget.value))}/> })}</label><p>{rich("Settings.4f2826faba", { value1: <strong>{t("Settings.4a81a7ba53")}</strong> })}</p>
+            <label>{rich("Settings.b35161bef3", { value1: <Dropdown value={draft.session_process_priority} onChange={value=>change('session_process_priority',value as Config['session_process_priority'])} options={[{value:'below_normal',get label() { return t("Settings.d28e231ef0") }},{value:'normal',get label() { return t("Settings.ea875c6854") }}]}/> })}</label>
+            <label>{rich("Settings.fa39d2056b", { value1: <Dropdown value={draft.daemon_process_priority} onChange={value=>change('daemon_process_priority',value as Config['daemon_process_priority'])} options={[{value:'above_normal',get label() { return t("Settings.ec47b10a17") }},{value:'normal',get label() { return t("Settings.a7248eeb45") }}]}/> })}</label>
+            <p>{t("Settings.846a31434a")}</p>
+            <label data-setting="gil_switch_interval_ms">{rich("Settings.a10ce4071b", { value1: <input type="number" min="1" max="20" step=".5" value={draft.gil_switch_interval_ms} onInput={e=>change('gil_switch_interval_ms',Number(e.currentTarget.value))}/>, value2: <small>{t("Settings.360031df94")}</small> })}</label>
+            <label class="check" data-setting="worker_process_enabled"><span>{t("Settings.3622b018ac")}</span><input type="checkbox" checked={draft.worker_process_enabled} onChange={e=>change('worker_process_enabled',e.currentTarget.checked)}/><small>{t("Settings.ceef3d6ef2")}</small></label>
+            <label class="check" data-setting="terminal_gateway_enabled"><span>{t("Settings.959667c0c0")}</span><input type="checkbox" checked={draft.terminal_gateway_enabled} onChange={e=>change('terminal_gateway_enabled',e.currentTarget.checked)}/><small>{t("Settings.25da30eeb7")}</small></label>
+            <label data-setting="terminal_gateway_port">{rich("Settings.4dc456a205", { value1: <input type="number" min="0" max="65535" value={draft.terminal_gateway_port} onInput={e=>change('terminal_gateway_port',Number(e.currentTarget.value))}/>, value2: <small>{t("Settings.687ee3f1d6")}</small> })}</label></section>
 
           {/* Its own section rather than another row under process evidence: the sweep
               moves something on screen, which is the one thing here that changes what
               the machine looks like rather than what swe-mux records about it. */}
-          <section><h3>Ghost windows</h3>
-          <p>Headless Chrome can leave a hidden window the compositor still draws over the desktop; the sweep parks those off screen without closing the browser.</p>
-          <label class="check" data-setting="ghost_window_sweep_enabled"><span>Park ghost headless-browser windows off screen</span><input type="checkbox" checked={draft.ghost_window_sweep_enabled} onChange={e=>change('ghost_window_sweep_enabled',e.currentTarget.checked)}/><small>Matches only hidden headless-class windows whose process ran with <code>--headless</code>, so a deliberately shown window is never touched.</small></label>
-          <label data-setting="ghost_window_poll_seconds">Sweep seconds<input type="number" min=".5" max="60" step=".5" value={draft.ghost_window_poll_seconds} onInput={e=>change('ghost_window_poll_seconds',Number(e.currentTarget.value))}/><small>How often the sweep looks. Windows-only and idempotent.</small></label>
+          <section><h3 data-heading-message="Settings.2a8b718d0b">{t("Settings.2a8b718d0b")}</h3>
+          <p>{t("Settings.2680b29635")}</p>
+          <label class="check" data-setting="ghost_window_sweep_enabled"><span>{t("Settings.06c6c793a7")}</span><input type="checkbox" checked={draft.ghost_window_sweep_enabled} onChange={e=>change('ghost_window_sweep_enabled',e.currentTarget.checked)}/><small>{rich("Settings.6fa12cdb55", { value1: <code>{t("Settings.0b991fefcf")}</code> })}</small></label>
+          <label data-setting="ghost_window_poll_seconds">{rich("Settings.f1f3d39c21", { value1: <input type="number" min=".5" max="60" step=".5" value={draft.ghost_window_poll_seconds} onInput={e=>change('ghost_window_poll_seconds',Number(e.currentTarget.value))}/>, value2: <small>{t("Settings.839235ac8e")}</small> })}</label>
           </section>
 
           {/* Detection telemetry rather than process telemetry, but it belongs beside the
               other evidence windows rather than under Usage: it is the per-session record
               an incident is reconstructed from, not a spend or quota figure. */}
-          <section><h3>Detection timeline</h3>
-          <label data-setting="status_timeline_retention_days">Status timeline retention days<input type="number" min="1" max="3650" value={draft.status_timeline_retention_days} onInput={e=>change('status_timeline_retention_days',Number(e.currentTarget.value))}/><small>The per-transition evidence behind past session states; kept shorter than process evidence because active turns write frequently.</small></label>
+          <section><h3 data-heading-message="Settings.88bfa9d4b6">{t("Settings.88bfa9d4b6")}</h3>
+          <label data-setting="status_timeline_retention_days">{rich("Settings.d46fe50b53", { value1: <input type="number" min="1" max="3650" value={draft.status_timeline_retention_days} onInput={e=>change('status_timeline_retention_days',Number(e.currentTarget.value))}/>, value2: <small>{t("Settings.e169612cbb")}</small> })}</label>
           </section>
         </Fragment>}
 
@@ -2033,49 +2047,49 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             Markdown files from Files), so everything here applies to all of them.
             Colours are absent on purpose: the theme already drives the editor's
             colour variables, and a second source for them would fight it. */}
-        {activeTab==='notes'&&<Fragment>
-          <section><h3>Notes workspace</h3>
-            <label class="check" data-setting="note_scratchpad_enabled"><span>Global Scratchpad</span><input type="checkbox" checked={draft.note_scratchpad_enabled} onChange={e=>change('note_scratchpad_enabled',e.currentTarget.checked)}/><small>Show the cross-Project Scratchpad in the Notes rail. Turning it off closes its workspace views but keeps its content.</small></label>
+        {activeTab==='notes' && <Fragment>
+          <section><h3 data-heading-message="Settings.67ba93d745">{t("Settings.67ba93d745")}</h3>
+            <label class="check" data-setting="note_scratchpad_enabled"><span>{t("Settings.b9b69191a6")}</span><input type="checkbox" checked={draft.note_scratchpad_enabled} onChange={e=>change('note_scratchpad_enabled',e.currentTarget.checked)}/><small>{t("Settings.05b557b651")}</small></label>
           </section>
-          <section><h3>Note editor</h3>
-            <label class="check"><span>Spellcheck</span><input type="checkbox" checked={draft.note_spellcheck} onChange={e=>change('note_spellcheck',e.currentTarget.checked)}/><small>The browser's spellchecker; it also underlines code, paths, and identifiers.</small></label>
-            <label class="check"><span>Indent guides</span><input type="checkbox" checked={draft.note_indent_guides} onChange={e=>change('note_indent_guides',e.currentTarget.checked)}/><small>Vertical rules marking each enclosing indent level; the caret's level draws brighter.</small></label>
-            <label>Markdown<Dropdown value={draft.note_syntax} onChange={value=>change('note_syntax',value as Config['note_syntax'])} options={[{value:'markdown',label:'Render Markdown'},{value:'plain',label:'Show raw text'}]}/></label>
-            <p>Raw text keeps every editing feature and only stops the Markdown projection.</p>
-            <label>Tab key<Dropdown value={draft.note_tab_behavior} onChange={value=>change('note_tab_behavior',value as Config['note_tab_behavior'])} options={[{value:'indent',label:'Indent and outdent lines'},{value:'focus',label:'Move focus out of the editor'}]}/></label>
-            <p>Escape then Tab always leaves the editor, so the keyboard is never trapped.</p>
-          </section>
-
-          <section><h3>Note editor typography</h3>
-            <label data-setting="note_font_family">Note font family<input value={draft.note_font_family} placeholder="notes only; editor default: ui-monospace, Cascadia Mono, Consolas" onInput={e=>change('note_font_family',e.currentTarget.value)}/></label>
-            <label>Note font size<input type="number" min="0" max="48" value={draft.note_font_size_px} onInput={e=>change('note_font_size_px',Number(e.currentTarget.value))}/></label>
-            <label>Note line height<input type="number" min="0" max="3" step="0.05" value={draft.note_line_height} onInput={e=>change('note_line_height',Number(e.currentTarget.value))}/></label>
-            <p>These apply to notes and the Scratchpad only; the terminal's font is under <strong>Appearance → Terminal font</strong>. Pixels and a multiplier; zero keeps the editor's own default (16px, 1.55). Saving re-measures open notes in place with no lost undo history.</p>
+          <section><h3 data-heading-message="Settings.2b1a1a8efc">{t("Settings.2b1a1a8efc")}</h3>
+            <label class="check"><span>{t("Settings.8691e20252")}</span><input type="checkbox" checked={draft.note_spellcheck} onChange={e=>change('note_spellcheck',e.currentTarget.checked)}/><small>{t("Settings.6c163dc252")}</small></label>
+            <label class="check"><span>{t("Settings.15da0874d2")}</span><input type="checkbox" checked={draft.note_indent_guides} onChange={e=>change('note_indent_guides',e.currentTarget.checked)}/><small>{t("Settings.749abfbd08")}</small></label>
+            <label>{rich("Settings.470cdab19f", { value1: <Dropdown value={draft.note_syntax} onChange={value=>change('note_syntax',value as Config['note_syntax'])} options={[{value:'markdown',get label() { return t("Settings.62337e12ce") }},{value:'plain',get label() { return t("Settings.0c1575ba8e") }}]}/> })}</label>
+            <p>{t("Settings.d6b0d71e98")}</p>
+            <label>{rich("Settings.99da907ba1", { value1: <Dropdown value={draft.note_tab_behavior} onChange={value=>change('note_tab_behavior',value as Config['note_tab_behavior'])} options={[{value:'indent',get label() { return t("Settings.f0a27473ee") }},{value:'focus',get label() { return t("Settings.8140666b1b") }}]}/> })}</label>
+            <p>{t("Settings.0f94087686")}</p>
           </section>
 
-          <section><h3>Touch command rail</h3>
-            <p>The editor's bottom quick-action strip, which runs each action without dismissing the on-screen keyboard.</p>
-            <label>Show the rail<Dropdown value={draft.note_command_rail} onChange={value=>change('note_command_rail',value as Config['note_command_rail'])} options={[{value:'auto',label:'Automatic: touch devices only'},{value:'on',label:'Always'},{value:'off',label:'Never'}]}/></label>
-            <label>Button size<input type="number" min="0" max="96" value={draft.note_rail_button_size_px} onInput={e=>change('note_rail_button_size_px',Number(e.currentTarget.value))}/><small>Pixels; zero keeps the default 48px button in a 56px rail.</small></label>
-            <div class="keybinding-heading"><div><strong>RAIL::ARRANGEMENT</strong><p>Which buttons appear, and in what order, is chosen from the gear on the rail itself and saved per device, so Cancel does not undo a reset.</p></div><button type="button" onClick={resetNoteRailArrangement}>Reset rail arrangement</button></div>
+          <section><h3 data-heading-message="Settings.1758bbe940">{t("Settings.1758bbe940")}</h3>
+            <label data-setting="note_font_family">{rich("Settings.b0603de3db", { value1: <input value={draft.note_font_family} placeholder={t("Settings.71fb1f9cb5")} onInput={e=>change('note_font_family',e.currentTarget.value)}/> })}</label>
+            <label>{rich("Settings.3323adcfd3", { value1: <input type="number" min="0" max="48" value={draft.note_font_size_px} onInput={e=>change('note_font_size_px',Number(e.currentTarget.value))}/> })}</label>
+            <label>{rich("Settings.146c05dec2", { value1: <input type="number" min="0" max="3" step="0.05" value={draft.note_line_height} onInput={e=>change('note_line_height',Number(e.currentTarget.value))}/> })}</label>
+            <p>{rich("Settings.2c6fabdb76", { value1: <strong>{t("Settings.371fe46d31")}</strong> })}</p>
           </section>
 
-          <section><h3>Editor shortcuts</h3>
-            <label>Policy<Dropdown value={draft.note_shortcut_policy} onChange={value=>change('note_shortcut_policy',value as ShortcutPolicy)} options={[{value:'browser-safe',label:'Browser-safe: leave browser chords alone'},{value:'editor-first',label:'Editor first: claim every chord'},{value:'none',label:'None: no editor shortcuts'}]}/></label>
-            <p>Browser-safe releases the chords Chromium claims (reload, search, DevTools); editor-first suits the desktop app, where those chords are not wanted.</p>
-            <div class="keybinding-heading"><div><strong>EDITOR::CHORDS</strong><p>Per-chord overrides on that policy, applied inside a note only. This app's own shortcuts are on the Input tab.</p></div><button type="button" onClick={()=>change('note_shortcut_overrides',{...DEFAULT_NOTE_SHORTCUT_OVERRIDES})}>Restore editor shortcut defaults</button></div>
-            <input class="note-chord-filter" type="search" value={noteChordQuery} placeholder="Filter chords and commands…" aria-label="Filter editor shortcuts" spellcheck={false} onInput={e=>setNoteChordQuery(e.currentTarget.value)}/>
+          <section><h3 data-heading-message="Settings.95468a8905">{t("Settings.95468a8905")}</h3>
+            <p>{t("Settings.7f69793973")}</p>
+            <label>{rich("Settings.33f513a038", { value1: <Dropdown value={draft.note_command_rail} onChange={value=>change('note_command_rail',value as Config['note_command_rail'])} options={[{value:'auto',get label() { return t("Settings.99da46f473") }},{value:'on',get label() { return t("Settings.de9f057a47") }},{value:'off',get label() { return t("Settings.6300ef800b") }}]}/> })}</label>
+            <label>{rich("Settings.e8bc37b079", { value1: <input type="number" min="0" max="96" value={draft.note_rail_button_size_px} onInput={e=>change('note_rail_button_size_px',Number(e.currentTarget.value))}/>, value2: <small>{t("Settings.fb6ca3312e")}</small> })}</label>
+            <div class="keybinding-heading"><div><strong>{t("Settings.253bcafe6f")}</strong><p>{t("Settings.0ce7deb840")}</p></div><button type="button" onClick={resetNoteRailArrangement}>{t("Settings.3172ed0d7a")}</button></div>
+          </section>
+
+          <section><h3 data-heading-message="Settings.8178e6c324">{t("Settings.8178e6c324")}</h3>
+            <label>{rich("Settings.419ccae7ac", { value1: <Dropdown value={draft.note_shortcut_policy} onChange={value=>change('note_shortcut_policy',value as ShortcutPolicy)} options={[{value:'browser-safe',get label() { return t("Settings.d137c73eca") }},{value:'editor-first',get label() { return t("Settings.90136025f0") }},{value:'none',get label() { return t("Settings.5dcf283732") }}]}/> })}</label>
+            <p>{t("Settings.3ece23954e")}</p>
+            <div class="keybinding-heading"><div><strong>{t("Settings.9ff4ec4a01")}</strong><p>{t("Settings.7dc336aa8b")}</p></div><button type="button" onClick={()=>change('note_shortcut_overrides',{...DEFAULT_NOTE_SHORTCUT_OVERRIDES})}>{t("Settings.6be24d9e75")}</button></div>
+            <input class="note-chord-filter" type="search" value={noteChordQuery} placeholder={t("Settings.a884e0e9dc")} aria-label={t("Settings.d773c44e7f")} spellcheck={false} onInput={e=>setNoteChordQuery(e.currentTarget.value)}/>
             <div class="note-chord-list" data-settings-search="skip">
               {NOTE_CHORDS.filter(binding=>{
                 const needle=noteChordQuery.trim().toLowerCase()
                 return !needle||binding.chord.includes(needle)||binding.command.includes(needle)
               }).map(binding=><article key={binding.chord}>
-                <span class="note-chord"><kbd>{noteChordLabel(binding.chord)}</kbd>{!binding.isBrowserSafe&&<em title="A chord the browser claims first; the browser-safe policy releases it unless it is reclaimed here">browser chord</em>}</span>
+                <span class="note-chord"><kbd>{noteChordLabel(binding.chord)}</kbd>{!binding.isBrowserSafe && <em title={t("Settings.68c64a3df3")}>{t("Settings.1ec18f6e0e")}</em>}</span>
                 <small title={binding.command}>{binding.command}</small>
-                <Dropdown ariaLabel={`Behaviour of ${noteChordLabel(binding.chord)} in the note editor`} value={noteChordState(draft.note_shortcut_overrides,binding.chord)} onChange={value=>setNoteChord(draft.note_shortcut_overrides,binding.chord,binding.command,value as NoteChordState)} options={[
-                  {value:'default',label:'Policy default'},
-                  {value:'bind',label:'Run the command'},
-                  {value:'release',label:'Leave to the browser'},
+                <Dropdown ariaLabel={t("Settings.3097450f6c", { value1: noteChordLabel(binding.chord) })} value={noteChordState(draft.note_shortcut_overrides,binding.chord)} onChange={value=>setNoteChord(draft.note_shortcut_overrides,binding.chord,binding.command,value as NoteChordState)} options={[
+                  {value:'default',get label() { return t("Settings.dfea46e31d") }},
+                  {value:'bind',get label() { return t("Settings.abac1508d2") }},
+                  {value:'release',get label() { return t("Settings.97989ab1cd") }},
                 ]}/>
               </article>)}
             </div>
@@ -2083,30 +2097,30 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
 
         </Fragment>}
 
-        {activeTab==='harnesses'&&<Fragment>
+        {activeTab==='harnesses' && <Fragment>
           {/* Above the per-harness list on purpose: it is the one setting here that
               is about the set rather than about a member of it, and reading it after
               five harness cards would make it look like a property of the last one. */}
-          <section><h3>Default harness</h3>
-          <p>Used when a tool needs an agent and none was named. This is separate from the Run menu default, which may be a shell.</p>
-          <label data-setting="default_harness">Default harness<Dropdown value={draft.default_harness} onChange={value=>change('default_harness',value)} options={[{value:'',label:'Follow detection'},...allHarnessesIncludingDisabled().map(harness=>({value:harness.name,label:harness.display_name}))]}/></label>
-          <p class="profile-hint">Follow detection tracks the available agent automatically. Choose explicitly when several are installed.</p>
+          <section><h3 data-heading-message="Settings.c039f423b8">{t("Settings.c039f423b8")}</h3>
+          <p>{t("Settings.7655b44078")}</p>
+          <label data-setting="default_harness">{rich("Settings.ed99b5afc7", { value1: <Dropdown value={draft.default_harness} onChange={value=>change('default_harness',value)} options={[{value:'',get label() { return t("Settings.1696e54928") }},...allHarnessesIncludingDisabled().map(harness=>({value:harness.name,label:harness.display_name}))]}/> })}</label>
+          <p class="profile-hint">{t("Settings.1a4b9f37fd")}</p>
           </section>
 
           {/* Marked as an *area* rather than per row: the deep link's promise is "the
               switches are these", and there is one per registered harness. The reveal
               focuses the first checkbox inside, which is the right landing. */}
-          <section class="settings-harnesses" data-setting="harness_enabled"><h3>Harnesses</h3>
-          <p>Controls which harnesses appear in launchers and how they start. Disabled harnesses keep existing sessions and searchable history.</p>
+          <section class="settings-harnesses" data-setting="harness_enabled"><h3 data-heading-message="Settings.f817714a1a">{t("Settings.f817714a1a")}</h3>
+          <p>{t("Settings.d9f64bd7ee")}</p>
           {allHarnessesIncludingDisabled().map(harness=><div class="settings-harness" key={harness.name}>
             <div class="settings-harness-head">
               <label class="check"><span>{harness.display_name}</span><input type="checkbox" checked={harnessEnabledDraft(harness.name)} onChange={e=>setHarnessEnabledChoice(harness.name,e.currentTarget.checked)} /></label>
-              <small class={detectedInstalled(harness.name)?'settings-harness-detected':'settings-harness-missing'}>{detectedInstalled(harness.name)?(detectedPath(harness.name)?`Detected: ${detectedPath(harness.name)}`:'Detected (data present)'):'Not detected'}{typeof enablementChoice(harness.name)==='boolean'?` · manually ${enablementChoice(harness.name)?'enabled':'disabled'}`:' · following detection'}</small>
-              {typeof enablementChoice(harness.name)==='boolean'&&<button type="button" onClick={()=>clearHarnessEnabledChoice(harness.name)}>follow detection</button>}
+              <small class={detectedInstalled(harness.name)?'settings-harness-detected':'settings-harness-missing'}>{detectedInstalled(harness.name) ? (detectedPath(harness.name) ? t("Settings.60922bba81", { value1: detectedPath(harness.name) }) : t("Settings.4aa307b579")) : t("Settings.9f4a106271")}{typeof enablementChoice(harness.name)==='boolean' ? t("Settings.c8d4b58277", { value1: (enablementChoice(harness.name)) ? 'yes' : 'no' }) : t("Settings.882a3b849c")}</small>
+              {typeof enablementChoice(harness.name)==='boolean' && <button type="button" onClick={()=>clearHarnessEnabledChoice(harness.name)}>{t("Settings.ea4a192a7d")}</button>}
             </div>
-            {harness.cli_version&&<p class={harness.version_untested?'settings-inline-error':'profile-hint'}>CLI version {harness.cli_version}{harness.version_untested?` · newer than the version mux was tested against (${harness.tested_cli_version}). Features degrade gracefully, but this pairing is untested.`:''}</p>}
-            <label>Executable<input value={draft.harness_exe[harness.name]||''} placeholder={harness.name} onInput={e=>change('harness_exe',{...draft.harness_exe,[harness.name]:e.currentTarget.value})} /></label>
-            <label>Default args<input value={harnessArgs[harness.name]||''} spellcheck={false} placeholder="--model claude-opus-4-8" onInput={e=>setHarnessArgs(current=>({...current,[harness.name]:e.currentTarget.value}))} /></label>
+            {harness.cli_version && <p class={harness.version_untested?'settings-inline-error':'profile-hint'}>{rich("Settings.3edf3221c9", { cli_version: harness.cli_version, value2: harness.version_untested ? t("Settings.d110d389a5", { tested_cli_version: harness.tested_cli_version }) : '' })}</p>}
+            <label>{rich("Settings.a0d21df092", { value1: <input value={draft.harness_exe[harness.name]||''} placeholder={harness.name} onInput={e=>change('harness_exe',{...draft.harness_exe,[harness.name]:e.currentTarget.value})} /> })}</label>
+            <label>{rich("Settings.25e8f75d56", { value1: <input value={harnessArgs[harness.name]||''} spellcheck={false} placeholder={t("Settings.ece27d0c6a")} onInput={e=>setHarnessArgs(current=>({...current,[harness.name]:e.currentTarget.value}))} /> })}</label>
             {(()=>{
               // Fleet access is two *capability* surfaces plus one *instruction*
               // layer, and the split is the model, not decoration: MCP tools
@@ -2124,120 +2138,108 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               const mcpOn=mcpCapable&&harnessDictOn('harness_mcp_enabled',harness.name)
               const cliOn=harnessDictOn('harness_cli_enabled',harness.name)
               const skillOn=harnessSkillOn(harness.name)
-              const skillLabel=skillDelivery==='session'?'Skill file (attached per session)':'Skill file (written into each Project)'
+              const skillLabel=skillDelivery==='session'?t("Settings.6637a3d49d"):t("Settings.4390e35da6")
               return <Fragment>
                 <div class="settings-harness-fleet" data-setting="harness_skill_enabled">
-                  <span>Fleet access</span>
-                  {mcpCapable&&<label class="check"><span>MCP tools <em>· registered automatically, self-describing</em></span><input type="checkbox" checked={mcpOn} onChange={e=>setHarnessDict('harness_mcp_enabled',harness.name,e.currentTarget.checked)} /></label>}
-                  <label class="check" data-setting="harness_cli_enabled"><span>Agent CLI <em>· the same tools via `swemux agent`</em></span><input type="checkbox" checked={cliOn} onChange={e=>setHarnessDict('harness_cli_enabled',harness.name,e.currentTarget.checked)} /></label>
-                  <label class="check"><span>{skillLabel} <em>· teaches whichever surface is on</em></span><input type="checkbox" checked={skillOn} onChange={e=>setHarnessSkill(harness.name,e.currentTarget.checked)} /></label>
+                  <span>{t("Settings.0d43c90518")}</span>
+                  {mcpCapable && <label class="check"><span>{rich("Settings.8063b300d8", { value1: <em>{t("Settings.9491d29b33")}</em> })}</span><input type="checkbox" checked={mcpOn} onChange={e=>setHarnessDict('harness_mcp_enabled',harness.name,e.currentTarget.checked)} /></label>}
+                  <label class="check" data-setting="harness_cli_enabled"><span>{rich("Settings.a09793cc5c", { value1: <em>{t("Settings.e310d3558b")}</em> })}</span><input type="checkbox" checked={cliOn} onChange={e=>setHarnessDict('harness_cli_enabled',harness.name,e.currentTarget.checked)} /></label>
+                  <label class="check"><span>{skillLabel} <em>{t("Settings.e9bd014beb")}</em></span><input type="checkbox" checked={skillOn} onChange={e=>setHarnessSkill(harness.name,e.currentTarget.checked)} /></label>
                 </div>
-                <p class="profile-hint">Whether agents in {harness.display_name} sessions can see and message the fleet, and how they learn they can.{mcpCapable?' MCP needs no setup and is the usual answer.':` ${harness.display_name} has no MCP client; the CLI plus the skill file is how its agents reach the swe-mux surface.`} Both capabilities off means sessions of this harness hold no fleet surface at all - the daemon refuses their tokens.</p>
-                {skillOn&&!mcpOn&&!cliOn&&<p class="settings-inline-error">The skill teaches surfaces that are switched off here, so it hands agents commands that will fail. Turn a capability on or stop delivering the skill.</p>}
-                {cliOn&&!mcpOn&&!skillOn&&<p class="settings-inline-error">The agent CLI does not advertise itself, and with MCP and the skill both off nothing ever tells {harness.display_name} sessions the commands exist. Deliver the skill to make the capability discoverable.</p>}
-                {skillOn&&(skillDelivery==='session'
-                  ?<p class="profile-hint">Delivered as a session-scoped plugin from the mux data directory; nothing is written into your Projects.</p>
-                  :<p class="profile-hint">Writes <code>.agents/skills/swe-mux/</code> into a Project when a {harness.display_name} session starts there, because this CLI reads skills only from those directories. Turning this off stops the writes and leaves existing files; <code>swemux install-skill --remove</code> takes them back.</p>)}
+                <p class="profile-hint">{rich("Settings.271490250f", { display_name: harness.display_name, value2: mcpCapable ? t("Settings.12b4f0aea7") : t("Settings.87dcf52869", { display_name: harness.display_name }) })}</p>
+                {skillOn&&!mcpOn&&!cliOn && <p class="settings-inline-error">{t("Settings.4a818f6bf3")}</p>}
+                {cliOn&&!mcpOn&&!skillOn && <p class="settings-inline-error">{rich("Settings.6e0687dc54", { display_name: harness.display_name })}</p>}
+                {skillOn && (skillDelivery==='session' ? <p class="profile-hint">{t("Settings.82a96c602b")}</p> : <p class="profile-hint">{rich("Settings.b5f492c37d", { value1: <code>{t("Settings.ca6d2d714f")}</code>, display_name: harness.display_name, value3: <code>{t("Settings.c394175813")}</code> })}</p>)}
               </Fragment>
             })()}
-            {harnessDescriptor(harness.name)?.capabilities.lifecycle_hooks&&<Fragment>
-              <label class="check"><span>Instrument with mux hooks <em>· off launches clean and unobserved</em></span><input type="checkbox" checked={harnessDictOn('harness_instrument_enabled',harness.name)} onChange={e=>setHarnessDict('harness_instrument_enabled',harness.name,e.currentTarget.checked)} /></label>
-              {!harnessDictOn('harness_instrument_enabled',harness.name)&&<p class="settings-inline-error">Clean launch drops {harness.display_name} to unobserved: no status detection, history capture, or prompt queue for its sessions.</p>}
+            {harnessDescriptor(harness.name)?.capabilities.lifecycle_hooks && <Fragment>
+              <label class="check"><span>{rich("Settings.444ba75cec", { value1: <em>{t("Settings.c040421576")}</em> })}</span><input type="checkbox" checked={harnessDictOn('harness_instrument_enabled',harness.name)} onChange={e=>setHarnessDict('harness_instrument_enabled',harness.name,e.currentTarget.checked)} /></label>
+              {!harnessDictOn('harness_instrument_enabled',harness.name) && <p class="settings-inline-error">{rich("Settings.5761a17e44", { display_name: harness.display_name })}</p>}
             </Fragment>}
-            {(harnessDictOn('harness_mcp_enabled',harness.name)===false||harnessDictOn('harness_cli_enabled',harness.name)===false||harnessDictOn('harness_instrument_enabled',harness.name)===false||harnessSkillOn(harness.name))&&<p class="profile-hint">Instrumentation and fleet-access changes take effect on the next daemon restart (live sessions are preserved).</p>}
-            {appliesWidthEnvelope(harness.name)&&<Fragment>
-              <label data-setting="claude_max_columns">Width limit<Dropdown value={String(draft.claude_max_columns)} onChange={value=>change('claude_max_columns',Number(value) as ClaudeMaxColumns)} options={CLAUDE_MAX_COLUMN_STEPS.map(step=>({value:String(step),label:claudeMaxColumnsLabel(step)}))}/></label>
-              <p class="profile-hint">Past this many columns a pane adds margin instead of resizing, because {harness.display_name}'s renderer can corrupt cells on large width changes. Raise it for wide diffs, or choose No limit; compact panes are never limited.</p>
+            {(harnessDictOn('harness_mcp_enabled',harness.name)===false||harnessDictOn('harness_cli_enabled',harness.name)===false||harnessDictOn('harness_instrument_enabled',harness.name)===false||harnessSkillOn(harness.name)) && <p class="profile-hint">{t("Settings.713c910218")}</p>}
+            {appliesWidthEnvelope(harness.name) && <Fragment>
+              <label data-setting="claude_max_columns">{rich("Settings.6141b55522", { value1: <Dropdown value={String(draft.claude_max_columns)} onChange={value=>change('claude_max_columns',Number(value) as ClaudeMaxColumns)} options={CLAUDE_MAX_COLUMN_STEPS.map(step=>({value:String(step),label:claudeMaxColumnsLabel(step)}))}/> })}</label>
+              <p class="profile-hint">{rich("Settings.1cea781564", { display_name: harness.display_name })}</p>
             </Fragment>}
-            <p class="profile-hint">Applies to every {harness.display_name} session; a named alternative is a launch profile under Terminals. Reserved: {(harness.reserved_launch_args||[]).join(' ')||'none'}.</p>
+            <p class="profile-hint">{rich("Settings.aafa73b53f", { display_name: harness.display_name, value2: (harness.reserved_launch_args||[]).join(' ') || t("Settings.140bedbf9c") })}</p>
           </div>)}
           </section>
 
           {/* History indexing rather than harness configuration, but inseparable from
               it: the scan is scoped to exactly the harnesses enabled above, so the two
               are read together or not at all. */}
-          <section><h3>Conversation history</h3>
-          <p>Indexes conversations created outside swe-mux so they can be searched and resumed.</p>
-          <label class="check"><span>Reconcile native history on startup</span><input type="checkbox" checked={draft.reconcile_external_history} onChange={e=>change('reconcile_external_history',e.currentTarget.checked)} /></label>
-          <label>History page size<input type="number" min="1" max="10000" value={draft.history_limit} onInput={e=>change('history_limit',Number(e.currentTarget.value))} /><small>Conversations per history-browser page; bounds a request, not what is stored.</small></label>
+          <section><h3 data-heading-message="Settings.80c250f3db">{t("Settings.80c250f3db")}</h3>
+          <p>{t("Settings.5ed19b9885")}</p>
+          <label class="check"><span>{t("Settings.1f280417b0")}</span><input type="checkbox" checked={draft.reconcile_external_history} onChange={e=>change('reconcile_external_history',e.currentTarget.checked)} /></label>
+          <label>{rich("Settings.babf8188ae", { value1: <input type="number" min="1" max="10000" value={draft.history_limit} onInput={e=>change('history_limit',Number(e.currentTarget.value))} />, value2: <small>{t("Settings.a7f84f4c25")}</small> })}</label>
           <div class="settings-history-scan">
             <div class="settings-history-scan-head">
-              <div><strong>Scan native history now</strong><p>Indexes past conversations from the enabled harnesses in the background; a large first import is cancellable.</p></div>
-              {scanJob?.status==='running'
-                ?<button type="button" class="danger" onClick={()=>void cancelHistoryScan()}>{scanJob.phase==='cancelling'?'Cancelling…':'Cancel scan'}</button>
-                :<button type="button" onClick={()=>void startHistoryScan()}>Scan now</button>}
+              <div><strong>{t("Settings.99d8c3676c")}</strong><p>{t("Settings.290fc26f3d")}</p></div>
+              {scanJob?.status==='running' ? <button type="button" class="danger" onClick={()=>void cancelHistoryScan()}>{scanJob.phase==='cancelling' ? t("Settings.91b104db05") : t("Settings.298360e0b1")}</button> : <button type="button" onClick={()=>void startHistoryScan()}>{t("Settings.c01d65df01")}</button>}
             </div>
-            {scanJob&&scanJob.status!=='idle'&&<p class="settings-history-scan-status" aria-live="polite">{
-              scanJob.status==='running'
-                ?(scanJob.phase==='indexing'
-                    ?`Indexing ${scanJob.processed} of ${scanJob.scanned} conversations (${scanJob.imported} imported)…`
-                    :`Scanning… ${scanJob.scanned} conversations found`)
-                :scanJob.status==='completed'?`Done: ${scanJob.imported} imported of ${scanJob.scanned} found across ${scanJob.backends.join(', ')||'no enabled harness'}.`
-                :scanJob.status==='cancelled'?`Cancelled after ${scanJob.imported} imported.`
-                :`Scan failed: ${scanJob.error||'unknown error'}`
-            }</p>}
+            {scanJob&&scanJob.status!=='idle' && <p class="settings-history-scan-status" aria-live="polite">{scanJob.status==='running' ? (scanJob.phase==='indexing' ? t("Settings.078ffdc731", { processed: scanJob.processed, scanned: scanJob.scanned, imported: scanJob.imported }) : t("Settings.7d8c668dc5", { scanned: scanJob.scanned })) : scanJob.status==='completed' ? t("Settings.51a9ad7971", { imported: scanJob.imported, scanned: scanJob.scanned, value3: scanJob.backends.join(', ')||t("Settings.a9460f3eaa") }) : scanJob.status==='cancelled' ? t("Settings.9f118efc15", { imported: scanJob.imported }) : t("Settings.6893223441", { value1: scanJob.error||t("Settings.3e4443e522") })}</p>}
           </div>
           </section>
         </Fragment>}
 
         {/* Delivery policy, not harness configuration: these bound how a queued
             message reaches an agent, whichever harness that agent is running. */}
-        {activeTab==='queue'&&<Fragment>
-          <section><h3>Overview</h3>
-          <p>Effective install-wide queue policy. Conversation and Project grants can narrow it further.</p>
+        {activeTab==='queue' && <Fragment>
+          <section><h3 data-heading-message="Settings.d4b1ea5708">{t("Settings.d4b1ea5708")}</h3>
+          <p>{t("Settings.ad06b10257")}</p>
           <div class="settings-status-grid">
-            <article><strong>Auto-delivery</strong><span>{draft.auto_delivery_enabled?`On · ${draft.auto_delivery_stable_seconds}s stability`:'Off · manual Send now only'}</span></article>
-            <article><strong>Approvals</strong><span>{draft.approval_auto_enabled?'Available with a conversation grant':'Human answers every request'}</span></article>
-            <article><strong>Agent messaging</strong><span>{draft.agent_messaging_enabled?'On · bounded threads':'Off'}</span></article>
-            <article><strong>Agent actuation</strong><span>{draft.session_control_enabled?'Interrupt and end enabled':'Interrupt and end disabled'}</span></article>
+            <article><strong>{t("Settings.a5c30a1abf")}</strong><span>{draft.auto_delivery_enabled ? t("Settings.71f9fdbd1a", { auto_delivery_stable_seconds: draft.auto_delivery_stable_seconds }) : t("Settings.877792b6f2")}</span></article>
+            <article><strong>{t("Settings.2bfc347157")}</strong><span>{draft.approval_auto_enabled ? t("Settings.864978c6fb") : t("Settings.822872c3d7")}</span></article>
+            <article><strong>{t("Settings.be19f68d0c")}</strong><span>{draft.agent_messaging_enabled ? t("Settings.292c448d09") : t("Settings.ca7981b46e")}</span></article>
+            <article><strong>{t("Settings.14be9614c7")}</strong><span>{draft.session_control_enabled ? t("Settings.175ef8fb52") : t("Settings.46eadcf1ee")}</span></article>
           </div>
-          <p class="settings-policy-floor"><strong>Safety floor:</strong> send-now, interrupts, session ends, forced Git operations, publishing, uploads, and credential access still require explicit authority or confirmation.</p>
+          <p class="settings-policy-floor">{rich("Settings.43a4c4ad66", { value1: <strong>{t("Settings.93193607d7")}</strong> })}</p>
           </section>
-          <section><h3>Auto-delivery</h3>
-          <p>New observed agent conversations start enabled with these bounds. Each conversation can opt out.</p>
-          <label class="check" data-setting="auto_delivery_enabled"><span>Allow auto-delivery for agent conversations</span><input type="checkbox" checked={draft.auto_delivery_enabled} onChange={e=>change('auto_delivery_enabled',e.currentTarget.checked)} /></label>
-          <label>Stability window seconds<input type="number" min="2" max="600" step="0.5" value={draft.auto_delivery_stable_seconds} onInput={e=>change('auto_delivery_stable_seconds',Number(e.currentTarget.value))} /></label>
-          <label>Consecutive automatic sends before the grant disables itself<input type="number" min="1" max="50" value={draft.auto_delivery_max_consecutive} onInput={e=>change('auto_delivery_max_consecutive',Number(e.currentTarget.value))} /></label>
-          <label data-setting="auto_delivery_session_ttl_minutes">Grant lapses after this many idle minutes<input type="number" min="1" max="1440" value={draft.auto_delivery_session_ttl_minutes} onInput={e=>change('auto_delivery_session_ttl_minutes',Number(e.currentTarget.value))} /></label>
-          <label data-setting="auto_delivery_reply_window_minutes">Minutes a session keeps its grant while awaiting a reply<input type="number" min="0" max="1440" value={draft.auto_delivery_reply_window_minutes} onInput={e=>change('auto_delivery_reply_window_minutes',Number(e.currentTarget.value))} /><small>Extends only the current request-response exchange. Set 0 to disable.</small></label>
-          <label>Back-off seconds after a refused attempt<input type="number" min="0" max="3600" step="0.5" value={draft.auto_delivery_refusal_backoff_seconds} onInput={e=>change('auto_delivery_refusal_backoff_seconds',Number(e.currentTarget.value))} /></label>
-          <div class="quiet-hours"><label>Quiet from<input type="time" value={draft.auto_delivery_quiet_start} onInput={e=>change('auto_delivery_quiet_start',e.currentTarget.value)} /></label><label>Until<input type="time" value={draft.auto_delivery_quiet_end} onInput={e=>change('auto_delivery_quiet_end',e.currentTarget.value)} /></label></div>
-          <p>Manual sends reset the consecutive count. Quiet hours pause automatic delivery only. The queue pane owns the immediate global pause.</p>
+          <section><h3 data-heading-message="Settings.a5c30a1abf">{t("Settings.a5c30a1abf")}</h3>
+          <p>{t("Settings.34a9fb70ee")}</p>
+          <label class="check" data-setting="auto_delivery_enabled"><span>{t("Settings.a7ed28c4c2")}</span><input type="checkbox" checked={draft.auto_delivery_enabled} onChange={e=>change('auto_delivery_enabled',e.currentTarget.checked)} /></label>
+          <label>{rich("Settings.7d738775f2", { value1: <input type="number" min="2" max="600" step="0.5" value={draft.auto_delivery_stable_seconds} onInput={e=>change('auto_delivery_stable_seconds',Number(e.currentTarget.value))} /> })}</label>
+          <label>{rich("Settings.35a3bfe847", { value1: <input type="number" min="1" max="50" value={draft.auto_delivery_max_consecutive} onInput={e=>change('auto_delivery_max_consecutive',Number(e.currentTarget.value))} /> })}</label>
+          <label data-setting="auto_delivery_session_ttl_minutes">{rich("Settings.ab0de6e002", { value1: <input type="number" min="1" max="1440" value={draft.auto_delivery_session_ttl_minutes} onInput={e=>change('auto_delivery_session_ttl_minutes',Number(e.currentTarget.value))} /> })}</label>
+          <label data-setting="auto_delivery_reply_window_minutes">{rich("Settings.6fe3a650dc", { value1: <input type="number" min="0" max="1440" value={draft.auto_delivery_reply_window_minutes} onInput={e=>change('auto_delivery_reply_window_minutes',Number(e.currentTarget.value))} />, value2: <small>{t("Settings.9286b51995")}</small> })}</label>
+          <label>{rich("Settings.46a9b670ad", { value1: <input type="number" min="0" max="3600" step="0.5" value={draft.auto_delivery_refusal_backoff_seconds} onInput={e=>change('auto_delivery_refusal_backoff_seconds',Number(e.currentTarget.value))} /> })}</label>
+          <div class="quiet-hours"><label>{rich("Settings.32be2f94a7", { value1: <input type="time" value={draft.auto_delivery_quiet_start} onInput={e=>change('auto_delivery_quiet_start',e.currentTarget.value)} /> })}</label><label>{rich("Settings.6c5bf405fb", { value1: <input type="time" value={draft.auto_delivery_quiet_end} onInput={e=>change('auto_delivery_quiet_end',e.currentTarget.value)} /> })}</label></div>
+          <p>{t("Settings.111dc8995a")}</p>
 
           {/* Mid-turn delivery belongs under auto-delivery rather than beside the
               messaging bounds: it is a *delivery* mode with its own strictly narrower
               readiness predicate, not a kind of message. */}
-          <h4>Mid-turn delivery</h4>
-          <p>Mid-turn delivery hands text to a busy CLI for its next boundary. The target Project may disable it.</p>
-          <label class="check" data-setting="agent_interject_enabled"><span>Allow mid-turn delivery</span><input type="checkbox" checked={draft.agent_interject_enabled} onChange={e=>change('agent_interject_enabled',e.currentTarget.checked)} /></label>
-          <label data-setting="agent_interject_hourly_budget">Mid-turn deliveries one session may ask for per hour<input type="number" min="0" max="1000" disabled={!draft.agent_message_limits_enabled} value={draft.agent_interject_hourly_budget} onInput={e=>change('agent_interject_hourly_budget',Number(e.currentTarget.value))} /><small>Tighter than the message budget because a mid-turn landing costs attention immediately. With limits off: 120/hour backstop.</small></label>
-          <label data-setting="agent_interject_min_interval_seconds">Seconds between mid-turn deliveries into one session<input type="number" min="0" max="3600" step="1" disabled={!draft.agent_message_limits_enabled} value={draft.agent_interject_min_interval_seconds} onInput={e=>change('agent_interject_min_interval_seconds',Number(e.currentTarget.value))} /><small>Stops a peer machine-gunning a working session. With limits off: 5-second backstop.</small></label>
+          <h4 data-heading-message="Settings.eca2f107c3">{t("Settings.eca2f107c3")}</h4>
+          <p>{t("Settings.8cb1be7eb3")}</p>
+          <label class="check" data-setting="agent_interject_enabled"><span>{t("Settings.a8eceb520f")}</span><input type="checkbox" checked={draft.agent_interject_enabled} onChange={e=>change('agent_interject_enabled',e.currentTarget.checked)} /></label>
+          <label data-setting="agent_interject_hourly_budget">{rich("Settings.ca34dedfda", { value1: <input type="number" min="0" max="1000" disabled={!draft.agent_message_limits_enabled} value={draft.agent_interject_hourly_budget} onInput={e=>change('agent_interject_hourly_budget',Number(e.currentTarget.value))} />, value2: <small>{t("Settings.aa7c0ea1d1")}</small> })}</label>
+          <label data-setting="agent_interject_min_interval_seconds">{rich("Settings.b85f7ffed7", { value1: <input type="number" min="0" max="3600" step="1" disabled={!draft.agent_message_limits_enabled} value={draft.agent_interject_min_interval_seconds} onInput={e=>change('agent_interject_min_interval_seconds',Number(e.currentTarget.value))} />, value2: <small>{t("Settings.38dc1131d8")}</small> })}</label>
           </section>
 
           {/* Approvals sit beside auto-delivery deliberately: both answer "what
               does swe-mux do on my behalf", and both are one install switch over
               bounded per-conversation grants. */}
-          <section><h3>Approvals</h3>
-          <p>Makes conversation-scoped approval modes available for Claude. Off leaves every request to the operator.</p>
-          <label class="check" data-setting="approval_auto_enabled"><span>Allow swe-mux to answer approvals</span><input type="checkbox" checked={draft.approval_auto_enabled} onChange={e=>change('approval_auto_enabled',e.currentTarget.checked)} /></label>
-          <label class="check"><span>Offer the “allow all” mode</span><input type="checkbox" checked={draft.approval_allow_all_permitted} onChange={e=>change('approval_allow_all_permitted',e.currentTarget.checked)} /></label>
-          <label>Grant expires after this many minutes<input type="number" min="1" max="480" value={draft.approval_grant_ttl_minutes} onInput={e=>change('approval_grant_ttl_minutes',Number(e.currentTarget.value))} /></label>
-          <label>Requests one grant may answer<input type="number" min="1" max="5000" value={draft.approval_max_auto_per_grant} onInput={e=>change('approval_max_auto_per_grant',Number(e.currentTarget.value))} /></label>
-          <label>Seconds the CLI waits for an answer<input type="number" min="1" max="60" step="0.5" value={draft.approval_hook_timeout_seconds} onInput={e=>change('approval_hook_timeout_seconds',Number(e.currentTarget.value))} /></label>
-          <label class="check"><span>Deliver approvals by keypress when the CLI ignores the answer</span><input type="checkbox" checked={draft.approval_keystroke_delivery} onChange={e=>change('approval_keystroke_delivery',e.currentTarget.checked)} /></label>
-          <label>Seconds to wait for the dialog before giving up<input type="number" min="1" max="300" step="1" value={draft.approval_keystroke_window_seconds} onInput={e=>change('approval_keystroke_window_seconds',Number(e.currentTarget.value))} /></label>
-          <p><strong>Never automatic:</strong> forced Git operations, recursive deletes, sudo, uploads, publishing, infrastructure writes, and credential paths. Project policy defines which routine requests qualify.</p>
+          <section><h3 data-heading-message="Settings.2bfc347157">{t("Settings.2bfc347157")}</h3>
+          <p>{t("Settings.8cfbaf9589")}</p>
+          <label class="check" data-setting="approval_auto_enabled"><span>{t("Settings.98473e42a5")}</span><input type="checkbox" checked={draft.approval_auto_enabled} onChange={e=>change('approval_auto_enabled',e.currentTarget.checked)} /></label>
+          <label class="check"><span>{t("Settings.8715729de1")}</span><input type="checkbox" checked={draft.approval_allow_all_permitted} onChange={e=>change('approval_allow_all_permitted',e.currentTarget.checked)} /></label>
+          <label>{rich("Settings.af857df0e5", { value1: <input type="number" min="1" max="480" value={draft.approval_grant_ttl_minutes} onInput={e=>change('approval_grant_ttl_minutes',Number(e.currentTarget.value))} /> })}</label>
+          <label>{rich("Settings.f0a3211cad", { value1: <input type="number" min="1" max="5000" value={draft.approval_max_auto_per_grant} onInput={e=>change('approval_max_auto_per_grant',Number(e.currentTarget.value))} /> })}</label>
+          <label>{rich("Settings.0bcc46f25d", { value1: <input type="number" min="1" max="60" step="0.5" value={draft.approval_hook_timeout_seconds} onInput={e=>change('approval_hook_timeout_seconds',Number(e.currentTarget.value))} /> })}</label>
+          <label class="check"><span>{t("Settings.3d1ee6916a")}</span><input type="checkbox" checked={draft.approval_keystroke_delivery} onChange={e=>change('approval_keystroke_delivery',e.currentTarget.checked)} /></label>
+          <label>{rich("Settings.26d22370ad", { value1: <input type="number" min="1" max="300" step="1" value={draft.approval_keystroke_window_seconds} onInput={e=>change('approval_keystroke_window_seconds',Number(e.currentTarget.value))} /> })}</label>
+          <p>{rich("Settings.f01a8c0c90", { value1: <strong>{t("Settings.2aff632d47")}</strong> })}</p>
           </section>
 
-          <section><h3>Agent messaging</h3>
-          <p>Bounds on messages agents address to each other. A message still enters the target's queue under every auto-delivery rule; these limit how far one thread may travel.</p>
-          <label class="check" data-setting="agent_messaging_enabled"><span>Allow agent-to-agent messages</span><input type="checkbox" checked={draft.agent_messaging_enabled} onChange={e=>change('agent_messaging_enabled',e.currentTarget.checked)} /></label>
-          <label class="check" data-setting="agent_message_limits_enabled"><span>Enforce the rate limits below</span><input type="checkbox" checked={draft.agent_message_limits_enabled} onChange={e=>change('agent_message_limits_enabled',e.currentTarget.checked)} /><small>Off, the bounds run at generous runaway-loop backstops (500/hour, 50 pending, 10 hops, 1000 per thread). Size cap, ring detection, and expiry always apply.</small></label>
-          <label>Relay hops before a thread must be restarted by a human<input type="number" min="1" max="10" disabled={!draft.agent_message_limits_enabled} value={draft.agent_message_max_chain_depth} onInput={e=>change('agent_message_max_chain_depth',Number(e.currentTarget.value))} /></label>
-          <label>Messages in one thread<input type="number" min="1" max="100" disabled={!draft.agent_message_limits_enabled} value={draft.agent_message_max_thread_turns} onInput={e=>change('agent_message_max_thread_turns',Number(e.currentTarget.value))} /></label>
-          <label>Messages one session may originate per hour<input type="number" min="1" max="1000" disabled={!draft.agent_message_limits_enabled} value={draft.agent_message_hourly_budget} onInput={e=>change('agent_message_hourly_budget',Number(e.currentTarget.value))} /></label>
-          <label>Pending messages allowed per target<input type="number" min="1" max="100" disabled={!draft.agent_message_limits_enabled} value={draft.agent_message_pending_per_target} onInput={e=>change('agent_message_pending_per_target',Number(e.currentTarget.value))} /></label>
-          <label data-setting="agent_message_max_chars">Characters one message may carry<input type="number" min="1" max="100000" value={draft.agent_message_max_chars} onInput={e=>change('agent_message_max_chars',Number(e.currentTarget.value))} /><small>Over this a message is refused, never truncated. Applies even with rate limits off.</small></label>
+          <section><h3 data-heading-message="Settings.be19f68d0c">{t("Settings.be19f68d0c")}</h3>
+          <p>{t("Settings.b343443ffa")}</p>
+          <label class="check" data-setting="agent_messaging_enabled"><span>{t("Settings.6671bb2f54")}</span><input type="checkbox" checked={draft.agent_messaging_enabled} onChange={e=>change('agent_messaging_enabled',e.currentTarget.checked)} /></label>
+          <label class="check" data-setting="agent_message_limits_enabled"><span>{t("Settings.05255bdaca")}</span><input type="checkbox" checked={draft.agent_message_limits_enabled} onChange={e=>change('agent_message_limits_enabled',e.currentTarget.checked)} /><small>{t("Settings.b6bad9ec57")}</small></label>
+          <label>{rich("Settings.fe4170da7b", { value1: <input type="number" min="1" max="10" disabled={!draft.agent_message_limits_enabled} value={draft.agent_message_max_chain_depth} onInput={e=>change('agent_message_max_chain_depth',Number(e.currentTarget.value))} /> })}</label>
+          <label>{rich("Settings.bd8360f4ee", { value1: <input type="number" min="1" max="100" disabled={!draft.agent_message_limits_enabled} value={draft.agent_message_max_thread_turns} onInput={e=>change('agent_message_max_thread_turns',Number(e.currentTarget.value))} /> })}</label>
+          <label>{rich("Settings.9dcc57f24d", { value1: <input type="number" min="1" max="1000" disabled={!draft.agent_message_limits_enabled} value={draft.agent_message_hourly_budget} onInput={e=>change('agent_message_hourly_budget',Number(e.currentTarget.value))} /> })}</label>
+          <label>{rich("Settings.a46074d4d0", { value1: <input type="number" min="1" max="100" disabled={!draft.agent_message_limits_enabled} value={draft.agent_message_pending_per_target} onInput={e=>change('agent_message_pending_per_target',Number(e.currentTarget.value))} /> })}</label>
+          <label data-setting="agent_message_max_chars">{rich("Settings.bcc36055f2", { value1: <input type="number" min="1" max="100000" value={draft.agent_message_max_chars} onInput={e=>change('agent_message_max_chars',Number(e.currentTarget.value))} />, value2: <small>{t("Settings.3d89b59858")}</small> })}</label>
           </section>
 
           {/* Its own section rather than more rows under messaging, and a deliberate
@@ -2246,21 +2248,21 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               bounds on what one agent may do to another through swe-mux, and they used
               to share nothing at all - every field here was enforced with no control
               anywhere, reachable only by hand-editing the daemon's config file. */}
-          <section><h3>Agent actuation</h3>
-          <p>Install-wide limits for spawn, interrupt, end-session, and watch requests. Project policy decides availability and authority, edited in the Automation workspace.</p>
-          <label class="check" data-setting="request_spawn_enabled"><span>Let agents request spawns</span><input type="checkbox" checked={draft.request_spawn_enabled} onChange={e=>change('request_spawn_enabled',e.currentTarget.checked)} /><small>A granted Project creates the session directly inside the budget below; a draft Project gets an inert Fleet Queue request instead.</small></label>
-          <label data-setting="agent_spawn_hourly_budget">Spawns one session may make per hour<input type="number" min="0" max="1000" value={draft.agent_spawn_hourly_budget} onInput={e=>change('agent_spawn_hourly_budget',Number(e.currentTarget.value))} /><small>Bounds fan-out on the granted path.</small></label>
-          <label class="check" data-setting="session_control_enabled"><span>Let agents interrupt and end sessions</span><input type="checkbox" checked={draft.session_control_enabled} onChange={e=>change('session_control_enabled',e.currentTarget.checked)} /></label>
-          <label data-setting="session_control_hourly_budget">Control actions one session may take per hour<input type="number" min="0" max="1000" value={draft.session_control_hourly_budget} onInput={e=>change('session_control_hourly_budget',Number(e.currentTarget.value))} /></label>
-          <label data-setting="session_control_graceful_timeout_s">Seconds a graceful end waits before a hard stop<input type="number" min="1" max="120" step="1" value={draft.session_control_graceful_timeout_s} onInput={e=>change('session_control_graceful_timeout_s',Number(e.currentTarget.value))} /></label>
-          <label class="check" data-setting="session_watch_enabled"><span>Let agents watch a session until it settles</span><input type="checkbox" checked={draft.session_watch_enabled} onChange={e=>change('session_watch_enabled',e.currentTarget.checked)} /><small>A watch matures into one queue message addressed to the watcher itself, so it needs no grant — only the bounds below.</small></label>
-          <label data-setting="session_watch_max_per_session">Watches one session may hold at once<input type="number" min="1" max="100" value={draft.session_watch_max_per_session} onInput={e=>change('session_watch_max_per_session',Number(e.currentTarget.value))} /><small>Sized for an orchestrator watching a handful of workers.</small></label>
-          <label data-setting="session_watch_max_minutes">Longest a single watch may run<input type="number" min="1" max="1440" value={draft.session_watch_max_minutes} onInput={e=>change('session_watch_max_minutes',Number(e.currentTarget.value))} /><small>Minutes; watches live in daemon memory and do not survive its restarts.</small></label>
+          <section><h3 data-heading-message="Settings.14be9614c7">{t("Settings.14be9614c7")}</h3>
+          <p>{t("Settings.c4e467b4a3")}</p>
+          <label class="check" data-setting="request_spawn_enabled"><span>{t("Settings.dc57c727ca")}</span><input type="checkbox" checked={draft.request_spawn_enabled} onChange={e=>change('request_spawn_enabled',e.currentTarget.checked)} /><small>{t("Settings.370087f10d")}</small></label>
+          <label data-setting="agent_spawn_hourly_budget">{rich("Settings.7d318e36e3", { value1: <input type="number" min="0" max="1000" value={draft.agent_spawn_hourly_budget} onInput={e=>change('agent_spawn_hourly_budget',Number(e.currentTarget.value))} />, value2: <small>{t("Settings.5e52f0eb53")}</small> })}</label>
+          <label class="check" data-setting="session_control_enabled"><span>{t("Settings.b02851d3ef")}</span><input type="checkbox" checked={draft.session_control_enabled} onChange={e=>change('session_control_enabled',e.currentTarget.checked)} /></label>
+          <label data-setting="session_control_hourly_budget">{rich("Settings.eda25c1a19", { value1: <input type="number" min="0" max="1000" value={draft.session_control_hourly_budget} onInput={e=>change('session_control_hourly_budget',Number(e.currentTarget.value))} /> })}</label>
+          <label data-setting="session_control_graceful_timeout_s">{rich("Settings.8007aa3154", { value1: <input type="number" min="1" max="120" step="1" value={draft.session_control_graceful_timeout_s} onInput={e=>change('session_control_graceful_timeout_s',Number(e.currentTarget.value))} /> })}</label>
+          <label class="check" data-setting="session_watch_enabled"><span>{t("Settings.02b48ef0db")}</span><input type="checkbox" checked={draft.session_watch_enabled} onChange={e=>change('session_watch_enabled',e.currentTarget.checked)} /><small>{t("Settings.37e38a1f6c")}</small></label>
+          <label data-setting="session_watch_max_per_session">{rich("Settings.7b7df55100", { value1: <input type="number" min="1" max="100" value={draft.session_watch_max_per_session} onInput={e=>change('session_watch_max_per_session',Number(e.currentTarget.value))} />, value2: <small>{t("Settings.067352455a")}</small> })}</label>
+          <label data-setting="session_watch_max_minutes">{rich("Settings.b34b6b45be", { value1: <input type="number" min="1" max="1440" value={draft.session_watch_max_minutes} onInput={e=>change('session_watch_max_minutes',Number(e.currentTarget.value))} />, value2: <small>{t("Settings.203fcc5d83")}</small> })}</label>
           </section>
 
-          <section><h3>Queue history</h3>
-          <p>Sent, cancelled, failed, and stranded items age out on this window along with their delivery audit. A <em>pending</em> item never does — nothing expires a message that has not been delivered.</p>
-          <label data-setting="prompt_queue_retention_days">Prompt queue retention days<input type="number" min="1" max="3650" value={draft.prompt_queue_retention_days} onInput={e=>change('prompt_queue_retention_days',Number(e.currentTarget.value))} /></label>
+          <section><h3 data-heading-message="Settings.4a7178cdec">{t("Settings.4a7178cdec")}</h3>
+          <p>{rich("Settings.dcaeb311f4", { value1: <em>{t("Settings.62a2fed3d6")}</em> })}</p>
+          <label data-setting="prompt_queue_retention_days">{rich("Settings.8047eaa8af", { value1: <input type="number" min="1" max="3650" value={draft.prompt_queue_retention_days} onInput={e=>change('prompt_queue_retention_days',Number(e.currentTarget.value))} /> })}</label>
           </section>
         </Fragment>}
 
@@ -2268,180 +2270,178 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             provider credentials rather than inside the one feature that happened to
             need it first. Everything model-backed depends on it, and the model
             defaults it unlocks are chosen here for the same reason. */}
-        {activeTab==='accounts'&&<Fragment>
+        {activeTab==='accounts' && <Fragment>
           <AccountSettings/>
           {/* Which endpoint every model-backed feature calls. It sits above the OpenRouter
               key because it decides whether that key is the credential in play at all, and
               a reader who set it to "custom" should not have to scroll past a key section
               that no longer applies to find out why. */}
-          <section><h3>Model provider</h3>
-          <p>Choose OpenRouter or a self-hosted OpenAI-compatible <code>/chat/completions</code> endpoint. Speech recognition and synthesis remain local.</p>
+          <section><h3 data-heading-message="Settings.ea70384c46">{t("Settings.ea70384c46")}</h3>
+          <p>{rich("Settings.f67765370d", { value1: <code>{t("Settings.99f784fabe")}</code> })}</p>
             <ProviderConnectionFields draft={draft} onChange={(key,value)=>change(key,value)} apiKey={draft.llm_provider==='custom'?customKey:openRouterKey} onKeyChange={draft.llm_provider==='custom'?setCustomKey:setOpenRouterKey} configured={!!activeEndpoint?.secret.configured}/>
             {/* Where to get the credential belongs beside the field that takes it, and
                 only while that endpoint is the one in play - a key link for an endpoint
                 nothing routes through is advice that cannot be acted on. Switching the
                 dropdown above brings it straight back, because the draft updates without
                 a save. */}
-            {draft.llm_provider==='openrouter'&&<p>Get an API key at <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer">OpenRouter</a>.</p>}
+            {draft.llm_provider==='openrouter' && <p>{rich("Settings.0c133d40b9", { value1: <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer">{t("heading.eb70c3bc14")}</a> })}</p>}
             <ProviderReadiness readiness={provider?.llm}/>
-            <div class="theme-actions"><button disabled={!(draft.llm_provider==='custom'?customKey:openRouterKey)} onClick={()=>void providerKeyAction('test',draft.llm_provider==='custom'?'custom':'openrouter')}>Test entered key</button><button disabled={!(draft.llm_provider==='custom'?customKey:openRouterKey)} onClick={()=>void providerKeyAction('set',draft.llm_provider==='custom'?'custom':'openrouter')}>Test + set/replace key</button><button disabled={!activeEndpoint?.secret.configured} onClick={()=>void providerKeyAction('clear',draft.llm_provider==='custom'?'custom':'openrouter')}>Clear stored key</button></div>
-            <p aria-live="polite">{providerMessage||'The key is write-only and stored in the platform credential store.'}</p>
+            <div class="theme-actions"><button disabled={!(draft.llm_provider==='custom'?customKey:openRouterKey)} onClick={()=>void providerKeyAction('test',draft.llm_provider==='custom'?'custom':'openrouter')}>{t("Settings.e8b793d21d")}</button><button disabled={!(draft.llm_provider==='custom'?customKey:openRouterKey)} onClick={()=>void providerKeyAction('set',draft.llm_provider==='custom'?'custom':'openrouter')}>{t("Settings.4b07dcdbc3")}</button><button disabled={!activeEndpoint?.secret.configured} onClick={()=>void providerKeyAction('clear',draft.llm_provider==='custom'?'custom':'openrouter')}>{t("Settings.b0728b74a6")}</button></div>
+            <p aria-live="polite">{providerMessage || t("Settings.1047f5664b")}</p>
             {/* One button per configured provider rather than one for the active one: an
                 operator setting up a local endpoint wants to prove it before switching
                 everything over to it, and a verify that only worked on the live provider
                 would force exactly the risky ordering. */}
-            <h4>Verification</h4>
-          <p>Verification sends one small completion and shows the reply, because a reachable endpoint can still return unusable output.</p>
+            <h4 data-heading-message="Settings.7140f4f19d">{t("Settings.7140f4f19d")}</h4>
+          <p>{t("Settings.9c3f3106f6")}</p>
             <ul class="provider-verification-list">
               {(provider?.providers||[]).map(entry=><li key={entry.id}>
                 <div class="provider-verification-head">
-                  <span class="project-setting-name">{entry.label}{entry.active&&<em class="project-setting-chip">active</em>}</span>
+                  <span class="project-setting-name">{entry.label}{entry.active && <em class="project-setting-chip">{t("Settings.9687961165")}</em>}</span>
                   <VerificationBadge entry={entry}/>
                 </div>
-                <p class="project-automation-deps">{entry.origin||'no base URL yet'}{entry.model?` · ${entry.model}`:''}{entry.requires_verification?'':' · configuring the key verifies it'}</p>
-                {entry.verification.verified&&<p class="project-automation-deps">Replied “{entry.verification.sample||'(nothing)'}” in {entry.verification.latency_ms} ms{entry.verification.verified_at?`, ${new Date(entry.verification.verified_at*1000).toLocaleString()}`:''}.</p>}
-                {entry.verification.stale&&<p class="project-automation-deps"><strong>Edited since it was verified.</strong> The stored proof covers {entry.verification.base_url||'a different URL'}{entry.verification.model?` · ${entry.verification.model}`:''}, so it no longer applies.</p>}
+                <p class="project-automation-deps">{entry.origin || t("Settings.47ae4fe851")}{entry.model ? t("Settings.1c4e8eeac2", { model: entry.model }) : ''}{entry.requires_verification ? '' : t("Settings.b86532800e")}</p>
+                {entry.verification.verified && <p class="project-automation-deps">{rich("Settings.716361bdaa", { value1: entry.verification.sample || t("Settings.00b0257114"), latency_ms: entry.verification.latency_ms, value3: entry.verification.verified_at ? t("Settings.c4ab2248b9", { value1: new Date(entry.verification.verified_at*1000).toLocaleString(uiLocale.value) }) : '' })}</p>}
+                {entry.verification.stale && <p class="project-automation-deps">{rich("Settings.0d4f39f698", { value1: <strong>{t("Settings.941b310964")}</strong>, value2: entry.verification.base_url || t("Settings.a75b5f840d"), value3: entry.verification.model ? t("Settings.1c4e8eeac2", { model: entry.verification.model }) : '' })}</p>}
                 {/* What the endpoint turned out to be, so an absent picker or absent
                     prices is explainable rather than only visible. Silent until proven:
                     "no catalog" before anyone looked is a guess, not a finding. */}
-                {capabilitySummary(entry.verification.capabilities,entry.verification.verified)&&<p class="project-automation-deps">{capabilitySummary(entry.verification.capabilities,entry.verification.verified)}</p>}
-                <button disabled={verifying===entry.id} onClick={()=>void verifyProvider(entry.id)}>{verifying===entry.id?'Verifying…':`Verify ${entry.label}`}</button>
+                {capabilitySummary(entry.verification.capabilities,entry.verification.verified) && <p class="project-automation-deps">{capabilitySummary(entry.verification.capabilities,entry.verification.verified)}</p>}
+                <button disabled={verifying===entry.id} onClick={()=>void verifyProvider(entry.id)}>{verifying===entry.id ? t("Settings.63bbd08c91") : t("Settings.c9d293565e", { label: entry.label })}</button>
               </li>)}
             </ul>
-            {verifyResult&&<div class={verifyResult.ok?'provider-verify-result ok':'provider-verify-result failed'} role="status" aria-live="polite">
-              {verifyResult.ok
-                ? <Fragment>
-                    <p><strong>{verifyResult.provider} answered</strong> in {verifyResult.latency_ms} ms as <code>{verifyResult.resolved_model}</code>.</p>
-                    <blockquote>{verifyResult.output||(verifyResult.spent_budget_reasoning?'(this model spent the whole probe budget reasoning, so there was no text left — the endpoint is fine)':'(the endpoint replied with no text)')}</blockquote>
-                  </Fragment>
-                : <p><strong>{verifyResult.provider} did not answer.</strong> {verifyResult.error}</p>}
+            {verifyResult && <div class={verifyResult.ok?'provider-verify-result ok':'provider-verify-result failed'} role="status" aria-live="polite">
+              {verifyResult.ok ? <Fragment>
+                    <p>{rich("Settings.f1b837c46e", { value1: <strong>{rich("Settings.1c7c902302", { provider: verifyResult.provider })}</strong>, latency_ms: verifyResult.latency_ms, value3: <code>{verifyResult.resolved_model}</code> })}</p>
+                    <blockquote>{verifyResult.output || (verifyResult.spent_budget_reasoning ? t("Settings.c9cffa00a7") : t("Settings.dd36815024"))}</blockquote>
+                  </Fragment> : <p><strong>{rich("Settings.d383c54bfd", { provider: verifyResult.provider })}</strong> {verifyResult.error}</p>}
             </div>}
             {/* Last, because it tunes an endpoint that already works. Sitting between the
                 key fields and Verification, it separated the credential from the thing
                 that proves it. */}
-            <label data-setting="openrouter_request_timeout_seconds">Request timeout seconds<input type="number" min="1" max="120" step="1" value={draft.openrouter_request_timeout_seconds} onInput={event=>change('openrouter_request_timeout_seconds',Number(event.currentTarget.value))}/><small>Takes effect on the next daemon restart.</small></label>
+            <label data-setting="openrouter_request_timeout_seconds">{rich("Settings.c6cc5ab037", { value1: <input type="number" min="1" max="120" step="1" value={draft.openrouter_request_timeout_seconds} onInput={event=>change('openrouter_request_timeout_seconds',Number(event.currentTarget.value))}/>, value2: <small>{t("Settings.3ef516bbf9")}</small> })}</label>
           </section>
 
-          <section><h3>Models</h3>
-          <p>All model routes are edited here. Routed defaults are inherited; overrides may fall back; pinned models do not.</p>
+          <section><h3 data-heading-message="Settings.d17d2d78d7">{t("Settings.d17d2d78d7")}</h3>
+          <p>{t("Settings.be18367df1")}</p>
             {/* Only truthful while the endpoint is doing no routing of its own. A server
                 with no catalog serves one model, so every row resolves to it; one that
                 serves a catalog collapses nothing, and saying otherwise would report the
                 models you chose as silently replaced when they are not. */}
-            {endpointOverride&&<p class="settings-warning">This endpoint publishes no model catalog, so it serves one model and every row below resolves to <code>{draft.custom_llm_model||'(no model set)'}</code> instead of the id it names. These settings are kept, and apply again the moment you point at an endpoint that has a catalog.</p>}
-            <div class="theme-actions"><button onClick={()=>void refreshModels()}>Refresh models</button><span>{provider?.models.models.length||0} models{provider?.models.stale?' · stale':''}{provider?.models.error?` · ${provider.models.error}`:''}</span>{!!provider?.models.fetched_at&&<span>prices as of {new Date(provider.models.fetched_at*1000).toLocaleDateString()}</span>}</div>
-            {!catalogKnown&&<p><small>This endpoint publishes no catalog swe-mux could read, so there is nothing to pick from — type an exact model id into any row and choose <em>Use&nbsp;…</em>. Setting a <strong>Model catalog URL</strong> above turns these back into pickers.</small></p>}
+            {endpointOverride && <p class="settings-warning">{rich("Settings.f62e0ff7ff", { value1: <code>{draft.custom_llm_model || t("Settings.8330949bdc")}</code> })}</p>}
+            <div class="theme-actions"><button onClick={()=>void refreshModels()}>{t("Settings.04903063b2")}</button><span>{rich("Settings.62d1788186", { value1: provider?.models.models.length || 0, value2: (provider?.models.stale) ? 'yes' : 'no', value3: provider?.models.error ? t("Settings.f3b99994b4", { error: provider.models.error }) : '' })}</span>{!!provider?.models.fetched_at && <span>{rich("Settings.81cb65d3ec", { value1: new Date(provider.models.fetched_at*1000).toLocaleDateString(uiLocale.value) })}</span>}</div>
+            {!catalogKnown && <p><small>{rich("Settings.a09f2441f2", { value1: <em>{t("Settings.d53585ea14")}</em>, value2: <strong>{t("Settings.2cb99db5de")}</strong> })}</small></p>}
             <ModelRoutingSummary draft={draft} catalog={modelOptions(draft.openrouter_cheap_model)} override={endpointOverride} catalogKnown={catalogKnown} onChange={(key,value)=>change(key,value)}/>
           </section>
         </Fragment>}
 
-        {activeTab==='input'&&<Fragment>
-          <section class="input-settings"><h3>Pointer</h3>
-          <label class="check"><span>Middle-click paste</span><input type="checkbox" checked={draft.middle_click_paste} onChange={e=>change('middle_click_paste',e.currentTarget.checked)} /></label>
-          <label class="check"><span>Broadcast by default</span><input type="checkbox" checked={draft.broadcast_default} onChange={e=>change('broadcast_default',e.currentTarget.checked)} /></label>
+        {activeTab==='input' && <Fragment>
+          <section class="input-settings"><h3 data-heading-message="Settings.d00f1e4dc0">{t("Settings.d00f1e4dc0")}</h3>
+          <label class="check"><span>{t("Settings.42bdbfd3e3")}</span><input type="checkbox" checked={draft.middle_click_paste} onChange={e=>change('middle_click_paste',e.currentTarget.checked)} /></label>
+          <label class="check"><span>{t("Settings.fc1a062179")}</span><input type="checkbox" checked={draft.broadcast_default} onChange={e=>change('broadcast_default',e.currentTarget.checked)} /></label>
           </section>
 
-          <section class="input-settings"><h3>Mobile terminal</h3>
-          <p>Touch settings apply on coarse-pointer devices. Text input goes directly to the focused terminal.</p>
-          <label>Vertical drag<Dropdown value={draft.mobile_vertical_drag} onChange={value=>change('mobile_vertical_drag',value as Config['mobile_vertical_drag'])} options={[{value:'smart',label:'Smart: app wheel or scrollback'},{value:'terminal',label:'Terminal scrollback only'},{value:'application',label:'Application wheel'},{value:'disabled',label:'Disabled'}]}/></label>
-          <label>Scroll direction<Dropdown value={draft.mobile_scroll_direction} onChange={value=>change('mobile_scroll_direction',value as Config['mobile_scroll_direction'])} options={[{value:'natural',label:'Natural touch'},{value:'wheel',label:'Mouse wheel'}]}/></label>
-          <label>Scroll sensitivity<input type="number" min="0.25" max="4" step="0.25" value={draft.mobile_scroll_sensitivity} onInput={e=>change('mobile_scroll_sensitivity',Number(e.currentTarget.value))} /></label>
-          <label>Long press<Dropdown value={draft.mobile_long_press} onChange={value=>change('mobile_long_press',value as Config['mobile_long_press'])} options={[{value:'context_menu',label:'Select terminal text'},{value:'disabled',label:'Disabled'}]}/></label>
-          <label class="check"><span>Copy terminal selection automatically</span><input type="checkbox" checked={draft.terminal_auto_copy_selection} onChange={e=>change('terminal_auto_copy_selection',e.currentTarget.checked)}/></label>
+          <section class="input-settings"><h3 data-heading-message="Settings.114b9bbcf1">{t("Settings.114b9bbcf1")}</h3>
+          <p>{t("Settings.d6fb1faf81")}</p>
+          <label>{rich("Settings.b27c4f6ecb", { value1: <Dropdown value={draft.mobile_vertical_drag} onChange={value=>change('mobile_vertical_drag',value as Config['mobile_vertical_drag'])} options={[{value:'smart',get label() { return t("Settings.7e033650c4") }},{value:'terminal',get label() { return t("Settings.0b10fbad3b") }},{value:'application',get label() { return t("Settings.549844eaa2") }},{value:'disabled',get label() { return t("Settings.75081b593d") }}]}/> })}</label>
+          <label>{rich("Settings.c8a5697129", { value1: <Dropdown value={draft.mobile_scroll_direction} onChange={value=>change('mobile_scroll_direction',value as Config['mobile_scroll_direction'])} options={[{value:'natural',get label() { return t("Settings.485677d14b") }},{value:'wheel',get label() { return t("Settings.8bcec96308") }}]}/> })}</label>
+          <label>{rich("Settings.2d58bfeb5a", { value1: <input type="number" min="0.25" max="4" step="0.25" value={draft.mobile_scroll_sensitivity} onInput={e=>change('mobile_scroll_sensitivity',Number(e.currentTarget.value))} /> })}</label>
+          <label>{rich("Settings.2683a40792", { value1: <Dropdown value={draft.mobile_long_press} onChange={value=>change('mobile_long_press',value as Config['mobile_long_press'])} options={[{value:'context_menu',get label() { return t("Settings.7b3336ad1e") }},{value:'disabled',get label() { return t("Settings.75081b593d") }}]}/> })}</label>
+          <label class="check"><span>{t("Settings.2d43587ee4")}</span><input type="checkbox" checked={draft.terminal_auto_copy_selection} onChange={e=>change('terminal_auto_copy_selection',e.currentTarget.checked)}/></label>
           </section>
 
-          <section class="input-settings"><h3>Clipboard history</h3>
-          <p>Keeps copies made inside swe-mux. The OS clipboard is never read. Disk persistence may retain sensitive text.</p>
-          <label class="check" data-setting="clipboard_history_enabled"><span>Keep clipboard history</span><input type="checkbox" checked={draft.clipboard_history_enabled} onChange={e=>change('clipboard_history_enabled',e.currentTarget.checked)}/></label>
-          <label class="check"><span>Save history to disk (survives daemon restarts)</span><input type="checkbox" checked={draft.clipboard_history_persist} onChange={e=>change('clipboard_history_persist',e.currentTarget.checked)}/></label>
-          <label class="check"><span>Skip secret-shaped copies (API keys, tokens, JWTs, private keys)</span><input type="checkbox" checked={draft.clipboard_history_redact_secrets} onChange={e=>change('clipboard_history_redact_secrets',e.currentTarget.checked)}/></label>
-          <label>Entries kept<input type="number" min="1" max="2000" value={draft.clipboard_history_limit} onInput={e=>change('clipboard_history_limit',Number(e.currentTarget.value))}/></label>
-          <label>Retention hours (0 keeps until evicted)<input type="number" min="0" max="8760" value={draft.clipboard_history_retention_hours} onInput={e=>change('clipboard_history_retention_hours',Number(e.currentTarget.value))}/></label>
-          <label>Maximum characters per entry<input type="number" min="256" max="1000000" value={draft.clipboard_history_entry_max_chars} onInput={e=>change('clipboard_history_entry_max_chars',Number(e.currentTarget.value))}/></label>
-          <p>Oversized copies are skipped, never truncated. Pinned entries survive retention and Clear.</p>
+          <section class="input-settings"><h3 data-heading-message="Settings.7ca62c6a45">{t("Settings.7ca62c6a45")}</h3>
+          <p>{t("Settings.5540449a20")}</p>
+          <label class="check" data-setting="clipboard_history_enabled"><span>{t("Settings.5194a6b4e2")}</span><input type="checkbox" checked={draft.clipboard_history_enabled} onChange={e=>change('clipboard_history_enabled',e.currentTarget.checked)}/></label>
+          <label class="check"><span>{t("Settings.2427a2f323")}</span><input type="checkbox" checked={draft.clipboard_history_persist} onChange={e=>change('clipboard_history_persist',e.currentTarget.checked)}/></label>
+          <label class="check"><span>{t("Settings.fbd48019c6")}</span><input type="checkbox" checked={draft.clipboard_history_redact_secrets} onChange={e=>change('clipboard_history_redact_secrets',e.currentTarget.checked)}/></label>
+          <label>{rich("Settings.f0165ce19b", { value1: <input type="number" min="1" max="2000" value={draft.clipboard_history_limit} onInput={e=>change('clipboard_history_limit',Number(e.currentTarget.value))}/> })}</label>
+          <label>{rich("Settings.df8d2cc5b6", { value1: <input type="number" min="0" max="8760" value={draft.clipboard_history_retention_hours} onInput={e=>change('clipboard_history_retention_hours',Number(e.currentTarget.value))}/> })}</label>
+          <label>{rich("Settings.976a7c24ce", { value1: <input type="number" min="256" max="1000000" value={draft.clipboard_history_entry_max_chars} onInput={e=>change('clipboard_history_entry_max_chars',Number(e.currentTarget.value))}/> })}</label>
+          <p>{t("Settings.2684bc3b5f")}</p>
           </section>
 
           <section class="input-settings">
-          <div class="keybinding-heading"><div><h3>Touch gestures</h3><p>Map multi-finger and workspace swipes. Single-finger vertical drags remain terminal scrolling; OS edge gestures remain reserved.</p></div><button onClick={()=>change('mobile_gestures',{...defaultMobileGestureSettings})}>Restore gesture defaults</button></div>
-          {GESTURE_SLOTS.map(slot=><label data-settings-search="no-options">{GESTURE_LABELS[slot]}<Dropdown value={draft.mobile_gestures?.[slot]??''} onChange={value=>change('mobile_gestures',{...draft.mobile_gestures,[slot]:value})} options={[{value:'',label:'Disabled'},...bindingCommands.map(command=>({value:command.id,label:command.label}))]}/></label>)}
-          <label class="check"><span>Horizontal swipe closes the open edge panel</span><input type="checkbox" checked={draft.mobile_gesture_swipe_away_close!==false} onChange={e=>change('mobile_gesture_swipe_away_close',e.currentTarget.checked)}/></label>
-          <label class="check"><span>Swipe right closes one overlay level</span><input type="checkbox" checked={draft.mobile_gesture_overlay_back!==false} onChange={e=>change('mobile_gesture_overlay_back',e.currentTarget.checked)}/></label>
-          <label class="check"><span>Contextual swipes on toolbars, tabs, voice, and editor rails</span><input type="checkbox" checked={draft.mobile_surface_gestures!==false} onChange={e=>change('mobile_surface_gestures',e.currentTarget.checked)}/></label>
-          <label class="check"><span>System back visits recent tabs before leaving the app</span><input type="checkbox" checked={draft.mobile_back_view_history!==false} onChange={e=>change('mobile_back_view_history',e.currentTarget.checked)}/></label>
+          <div class="keybinding-heading"><div><h3 data-heading-message="Settings.f3e334b454">{t("Settings.f3e334b454")}</h3><p>{t("Settings.95490f8640")}</p></div><button onClick={()=>change('mobile_gestures',{...defaultMobileGestureSettings})}>{t("Settings.e9b9eb34c5")}</button></div>
+          {GESTURE_SLOTS.map(slot=><label data-settings-search="no-options">{GESTURE_LABELS[slot]}<Dropdown value={draft.mobile_gestures?.[slot]??''} onChange={value=>change('mobile_gestures',{...draft.mobile_gestures,[slot]:value})} options={[{value:'',get label() { return t("Settings.75081b593d") }},...bindingCommands.map(command=>({value:command.id,label:command.label}))]}/></label>)}
+          <label class="check"><span>{t("Settings.c724ff46d1")}</span><input type="checkbox" checked={draft.mobile_gesture_swipe_away_close!==false} onChange={e=>change('mobile_gesture_swipe_away_close',e.currentTarget.checked)}/></label>
+          <label class="check"><span>{t("Settings.f73a924fb5")}</span><input type="checkbox" checked={draft.mobile_gesture_overlay_back!==false} onChange={e=>change('mobile_gesture_overlay_back',e.currentTarget.checked)}/></label>
+          <label class="check"><span>{t("Settings.a638f3a3f6")}</span><input type="checkbox" checked={draft.mobile_surface_gestures!==false} onChange={e=>change('mobile_surface_gestures',e.currentTarget.checked)}/></label>
+          <label class="check"><span>{t("Settings.21ff6d239a")}</span><input type="checkbox" checked={draft.mobile_back_view_history!==false} onChange={e=>change('mobile_back_view_history',e.currentTarget.checked)}/></label>
           </section>
 
           <section class="input-settings">
           {/* The preset picker. Outside the draft/Save cycle deliberately, like
               "restore defaults": applying one rewrites the whole document, and a
               change that large must not arrive as a side effect of an unrelated Save. */}
-          <div class="keybinding-heading" data-setting="keymap_preset"><div><h3>Keyboard preset</h3>
-            <p>The starting point for every shortcut below. Applying one replaces the whole keymap, including anything edited by hand.</p></div></div>
+          <div class="keybinding-heading" data-setting="keymap_preset"><div><h3 data-heading-message="heading.f5281d5e03">{t("heading.f5281d5e03")}</h3>
+            <p>{t("Settings.af60b0ae49")}</p></div></div>
           <div class="keymap-presets">
             {keymapPresets.map(preset=><article key={preset.id} data-keymap-preset={preset.id} class={preset.id===keymapPreset?'active':''}>
-              <div><strong>{preset.title}</strong>{preset.id===keymapPreset&&<span class="keymap-current">in use</span>}
-                <small class="keymap-preset-count">{preset.bindings} bindings · leader {displayChord(preset.leader,keymapHost.platform)}{preset.prefix?` · prefix ${displayChord(preset.prefix,keymapHost.platform)}`:''}</small></div>
+              <div><strong>{preset.title}</strong>{preset.id===keymapPreset && <span class="keymap-current">{t("Settings.64c6c17ec0")}</span>}
+                <small class="keymap-preset-count">{rich("Settings.98969d9219", { bindings: preset.bindings, value2: displayChord(preset.leader,keymapHost.platform), value3: preset.prefix ? t("Settings.c7cd4ea1e2", { value1: displayChord(preset.prefix,keymapHost.platform) }) : '' })}</small></div>
               <p>{preset.description}</p>
-              {preset.warning&&<p class="keymap-warning">⚠ {preset.warning}</p>}
+              {preset.warning && <p class="keymap-warning">⚠ {preset.warning}</p>}
               <button type="button" class="keymap-preset-apply" disabled={!!presetApplying} onClick={()=>setPresetIntent(preset)}>
-                {presetApplying===preset.id?'applying…':preset.id===keymapPreset?'Re-apply':'Use this preset'}</button>
+                {presetApplying===preset.id ? t("Settings.39c0725ac0") : preset.id===keymapPreset ? t("Settings.909168517f") : t("Settings.46087b34e3")}</button>
             </article>)}
-            {keymapPreset==='custom'&&<p class="keymap-custom">These shortcuts have been edited by hand, so they no longer match any preset. Applying one below discards those edits.</p>}
+            {keymapPreset==='custom' && <p class="keymap-custom">{t("Settings.7cc962ed72")}</p>}
           </div>
-          {presetIntent&&<div class="keymap-confirm" role="alertdialog" aria-label={`Apply the ${presetIntent.title} preset`}>
-            <p><strong>Replace every shortcut with the {presetIntent.title} preset?</strong> This rewrites the keymap immediately, outside Save, and any shortcut you set by hand is lost.</p>
-            {presetIntent.warning&&<p class="keymap-warning">⚠ {presetIntent.warning}</p>}
-            <div><button type="button" onClick={()=>setPresetIntent(null)}>Cancel</button><button type="button" class="primary" onClick={()=>void applyPreset(presetIntent)}>Apply {presetIntent.title}</button></div>
+          {presetIntent && <div class="keymap-confirm" role="alertdialog" aria-label={t("Settings.66d2236389", { title: presetIntent.title })}>
+            <p>{rich("Settings.3f112e7cd5", { value1: <strong>{rich("Settings.e103549569", { title: presetIntent.title })}</strong> })}</p>
+            {presetIntent.warning && <p class="keymap-warning">⚠ {presetIntent.warning}</p>}
+            <div><button type="button" onClick={()=>setPresetIntent(null)}>{t("Settings.19766ed6cc")}</button><button type="button" class="primary" onClick={()=>void applyPreset(presetIntent)}>{rich("Settings.0357f241c4", { title: presetIntent.title })}</button></div>
           </div>}
 
-          <div class="keybinding-heading"><div><h3>Keyboard shortcuts</h3>
-            <p>Click a command, then press the new shortcut. A chord that starts a longer one keeps recording, so a sequence is typed the way it is used. Changes apply when Settings is saved.</p></div>
-            <button onClick={()=>setPresetIntent(keymapPresets.find(preset=>preset.id===(keymapPreset==='custom'?'swemux':keymapPreset))||keymapPresets[0]||null)} disabled={!keymapPresets.length}>Restore shortcut defaults</button></div>
+          <div class="keybinding-heading"><div><h3 data-heading-message="heading.e9bef0b0f3">{t("heading.e9bef0b0f3")}</h3>
+            <p>{t("Settings.f602db76ef")}</p></div>
+            <button onClick={()=>setPresetIntent(keymapPresets.find(preset=>preset.id===(keymapPreset==='custom'?'swemux':keymapPreset))||keymapPresets[0]||null)} disabled={!keymapPresets.length}>{t("Settings.1759c54262")}</button></div>
           {/* Which keyboard the list is describing. Not decoration: a chord that works
               here may not work on the phone reading the same daemon, and the
               undeliverable list below is computed for THIS host only. */}
-          <p class="keymap-host">Showing shortcuts as they behave in <strong>{keymapHost.host==='desktop'?'the desktop app':'a browser tab'}</strong> on <strong>{keymapHost.platform==='mac'?'macOS':keymapHost.platform==='linux'?'Linux':'Windows'}</strong>.</p>
-          {!!keymapWarnings.length&&<details class="keymap-undeliverable"><summary>{keymapWarnings.length} shortcut{keymapWarnings.length===1?'':'s'} this host cannot receive</summary>
-            <ul>{keymapWarnings.map(item=><li key={item.keys}><kbd>{displayChord(item.keys,keymapHost.platform)}</kbd> {bindingCommands.find(command=>command.id===item.command)?.label||item.command} — {item.warnings[0]?.message}</li>)}</ul>
+          <p class="keymap-host">{rich("Settings.9f9b32826e", { value1: <strong>{keymapHost.host==='desktop' ? t("Settings.81b5511666") : t("Settings.51d4ec07e9")}</strong>, value2: <strong>{keymapHost.platform==='mac' ? t("Settings.aed6b7aa2a") : keymapHost.platform==='linux' ? t("Settings.4828e60247") : t("Settings.d598026a9c")}</strong> })}</p>
+          {!!keymapWarnings.length && <details class="keymap-undeliverable"><summary>{rich("Settings.9c4e80eb20", { length: keymapWarnings.length, value2: (keymapWarnings.length===1) ? 'yes' : 'no' })}</summary>
+            <ul>{keymapWarnings.map(item=><li key={item.keys}><kbd>{displayChord(item.keys,keymapHost.platform)}</kbd> {bindingCommands.find(command=>command.id===item.command)?.label || item.command} — {item.warnings[0]?.message}</li>)}</ul>
           </details>}
           {/* Inert while a chord is being recorded: that recorder listens on the window in
               capture phase and swallows every key, so an enabled box here would eat the
               filter text and bind it. */}
-          <input class="keybinding-filter" type="search" value={shortcutQuery} disabled={!!capturingCommand} placeholder="Filter commands and chords…" aria-label="Filter keyboard shortcuts" autocomplete="off" spellcheck={false} onInput={event=>setShortcutQuery(event.currentTarget.value)}/>
-          {capturingCommand&&<div class="keybinding-capture" role="status"><span>PRESS KEYS FOR</span><strong>{bindingCommands.find(command=>command.id===capturingCommand)?.label||capturingCommand}</strong>{!!captureSequence.length&&<kbd>{displayChord(captureSequence.join(' '),keymapHost.platform)} …</kbd>}<button onClick={()=>{setCapturingCommand(null);setCaptureSequence([]);setBindingError('')}}>Cancel</button></div>}
-          {bindingError&&<p class="keybinding-error" role="alert">{bindingError}</p>}
+          <input class="keybinding-filter" type="search" value={shortcutQuery} disabled={!!capturingCommand} placeholder={t("Settings.488e04a52e")} aria-label={t("Settings.b3a6e3c215")} autocomplete="off" spellcheck={false} onInput={event=>setShortcutQuery(event.currentTarget.value)}/>
+          {capturingCommand && <div class="keybinding-capture" role="status"><span>{t("Settings.750fcf031a")}</span><strong>{bindingCommands.find(command=>command.id===capturingCommand)?.label || capturingCommand}</strong>{!!captureSequence.length && <kbd>{displayChord(captureSequence.join(' '),keymapHost.platform)} …</kbd>}<button onClick={()=>{setCapturingCommand(null);setCaptureSequence([]);setBindingError('')}}>{t("Settings.19766ed6cc")}</button></div>}
+          {bindingError && <p class="keybinding-error" role="alert">{bindingError}</p>}
           {/* Not in the panel-wide search: one entry per command per button flooded every
               query that also matched a real setting, and the filter above already searches
               these rows by label, id, and chord. The search hands off to it instead. */}
           <div class="keybinding-list" data-settings-search="skip" hidden={!visibleShortcuts.size}>
-            {[...new Set(bindingCommands.map(command=>command.category))].map(category=>{const rows=bindingCommands.filter(command=>command.category===category);return <section class="keybinding-group" aria-label={`${commandCategoryLabel(category)} shortcuts`} hidden={!rows.some(command=>visibleShortcuts.has(command.id))}><h4>{commandCategoryLabel(category)}</h4>{rows.map(command=>{const chord=bindingForCommand(command.id);return <article class={capturingCommand===command.id?'capturing':''} hidden={!visibleShortcuts.has(command.id)}><button class="keybinding-command" onClick={()=>{setCapturingCommand(command.id);setCaptureSequence([]);setBindingError('')}} title={command.id}><span>{command.label}</span><small>{command.id}</small></button><button class="keybinding-chord" onClick={()=>{setCapturingCommand(command.id);setCaptureSequence([]);setBindingError('')}} aria-label={`Set shortcut for ${command.label}`}><kbd>{chord?displayChord(chord,keymapHost.platform):UNBOUND_CHORD}</kbd></button><button class="keybinding-clear" disabled={!chord} onClick={()=>clearBinding(command.id)} aria-label={`Clear shortcut for ${command.label}`}>×</button></article>})}</section>})}
+            {[...new Set(bindingCommands.map(command=>command.category))].map(category=>{const rows=bindingCommands.filter(command=>command.category===category);return <section class="keybinding-group" aria-label={t("Settings.c98847c2f8", { value1: commandCategoryLabel(category) })} hidden={!rows.some(command=>visibleShortcuts.has(command.id))}><h4>{commandCategoryLabel(category)}</h4>{rows.map(command=>{const chord=bindingForCommand(command.id);return <article class={capturingCommand===command.id?'capturing':''} hidden={!visibleShortcuts.has(command.id)}><button class="keybinding-command" onClick={()=>{setCapturingCommand(command.id);setCaptureSequence([]);setBindingError('')}} title={command.id}><span>{command.label}</span><small>{command.id}</small></button><button class="keybinding-chord" onClick={()=>{setCapturingCommand(command.id);setCaptureSequence([]);setBindingError('')}} aria-label={t("Settings.97c7454bb3", { label: command.label })}><kbd>{chord ? displayChord(chord,keymapHost.platform) : unboundChord()}</kbd></button><button class="keybinding-clear" disabled={!chord} onClick={()=>clearBinding(command.id)} aria-label={t("Settings.954d1afa82", { label: command.label })}>×</button></article>})}</section>})}
           </div>
-          {!!shortcutQuery.trim()&&!!bindingCommands.length&&!visibleShortcuts.size&&<p class="keybinding-empty" role="status">No shortcut matches “{shortcutQuery.trim()}”.</p>}
-          {bindingPolicy&&<KeyboardProbe policy={bindingPolicy} platform={keymapHost.platform}/>}
-          {bindingPolicy&&<details class="keybinding-policy"><summary>What each host and platform takes for itself</summary>
+          {!!shortcutQuery.trim()&&!!bindingCommands.length&&!visibleShortcuts.size && <p class="keybinding-empty" role="status">{rich("Settings.b8f2ddf7c5", { value1: shortcutQuery.trim() })}</p>}
+          {bindingPolicy && <KeyboardProbe policy={bindingPolicy} platform={keymapHost.platform}/>}
+          {bindingPolicy && <details class="keybinding-policy"><summary>{t("Settings.13d5bc3903")}</summary>
             <ul>{bindingPolicy.rules.map(rule=><li>{rule}</li>)}</ul>
             {/* Split into "you cannot have this" and "you can have it but it costs you
                 something", which the old single BROWSER list conflated - and that
                 conflation is why Ctrl+F was refused for years while this very panel
                 was intercepting it successfully in the same browser. */}
-            <div data-settings-search="skip"><strong>A BROWSER TAB KEEPS</strong>{bindingPolicy.browser_unreachable.map(chord=><kbd>{displayChord(chord,keymapHost.platform)}</kbd>)}</div>
-            <div data-settings-search="skip"><strong>SHARED WITH THE BROWSER</strong>{Object.entries(bindingPolicy.browser_contested).map(([chord,what])=><kbd title={what}>{displayChord(chord,keymapHost.platform)}</kbd>)}</div>
-            <div data-settings-search="skip"><strong>{keymapHost.platform==='mac'?'MACOS':keymapHost.platform==='linux'?'YOUR DESKTOP':'WINDOWS'} KEEPS</strong>{Object.entries(bindingPolicy.wm_reserved[keymapHost.platform]||{}).slice(0,40).map(([chord,what])=><kbd title={what}>{displayChord(chord,keymapHost.platform)}</kbd>)}</div>
-            <div data-settings-search="skip"><strong>THE SHELL IN A PANE USES</strong>{Object.entries(bindingPolicy.terminal_reserved).map(([chord,what])=><kbd title={what}>{displayChord(chord,keymapHost.platform)}</kbd>)}</div>
-            <div data-settings-search="skip"><strong>FIXED APP CONTROLS</strong>{bindingPolicy.application_reserved.map(chord=><kbd>{displayChord(chord,keymapHost.platform)}</kbd>)}</div>
+            <div data-settings-search="skip"><strong>{t("Settings.aa96b076ec")}</strong>{bindingPolicy.browser_unreachable.map(chord=><kbd>{displayChord(chord,keymapHost.platform)}</kbd>)}</div>
+            <div data-settings-search="skip"><strong>{t("Settings.6f1916567a")}</strong>{Object.entries(bindingPolicy.browser_contested).map(([chord,what])=><kbd title={what}>{displayChord(chord,keymapHost.platform)}</kbd>)}</div>
+            <div data-settings-search="skip"><strong>{rich("Settings.89eaedae86", { value1: keymapHost.platform==='mac' ? t("Settings.15eb6ff730") : keymapHost.platform==='linux' ? t("Settings.50f89f1aff") : t("Settings.ab7e5c15a1") })}</strong>{Object.entries(bindingPolicy.wm_reserved[keymapHost.platform]||{}).slice(0,40).map(([chord,what])=><kbd title={what}>{displayChord(chord,keymapHost.platform)}</kbd>)}</div>
+            <div data-settings-search="skip"><strong>{t("Settings.9de03c564f")}</strong>{Object.entries(bindingPolicy.terminal_reserved).map(([chord,what])=><kbd title={what}>{displayChord(chord,keymapHost.platform)}</kbd>)}</div>
+            <div data-settings-search="skip"><strong>{t("Settings.fbdc728a80")}</strong>{bindingPolicy.application_reserved.map(chord=><kbd>{displayChord(chord,keymapHost.platform)}</kbd>)}</div>
           </details>}
           </section>
         </Fragment>}
 
-        {activeTab==='usage'&&<Fragment><section><h3>Operational telemetry</h3><div class="theme-actions"><button class="primary" onClick={onOpenUsage}>Open telemetry dashboard</button><button disabled={!config?.ccusage_enabled || usage?.refreshing || usageRefreshMessage.startsWith('Refreshing')} onClick={()=>void refreshUsage()}>{usageRefreshMessage.startsWith('Refreshing')?'Refreshing…':'Refresh historical usage'}</button><button disabled={usage?.refreshing || usageRefreshMessage.startsWith('Refreshing')} onClick={()=>void clearUsage()}>Clear ccusage cache</button></div><label>Operational telemetry retention days<input type="number" min="1" max="3650" value={draft.operational_telemetry_retention_days} onInput={e=>change('operational_telemetry_retention_days',Number(e.currentTarget.value))}/></label><label>Provider quota poll minutes<input type="number" min="5" max="1440" value={draft.provider_quota_poll_minutes} onInput={e=>change('provider_quota_poll_minutes',Number(e.currentTarget.value))}/></label><label class="check"><span>Refresh active quota after eligible root turns</span><input type="checkbox" checked={draft.provider_quota_turn_refresh_enabled} onChange={e=>change('provider_quota_turn_refresh_enabled',e.currentTarget.checked)}/></label><label>Minimum minutes between turn-triggered refreshes<input type="number" min="1" max="1440" value={draft.provider_quota_turn_refresh_min_minutes} onInput={e=>change('provider_quota_turn_refresh_min_minutes',Number(e.currentTarget.value))}/><small>Globally rate limited and selected-account only.</small></label></section><section><h3>Historical ccusage</h3><p class={usageRefreshMessage.startsWith('Refresh failed')?'settings-inline-error':''} aria-live="polite">{usageRefreshMessage || (usage ? `${usage.collector.id}: ${usage.collector.status}${usage.collector.error?` (${usage.collector.error})`:''}` : 'usage status unavailable')}</p>{draft.ccusage_enabled&&!config?.ccusage_enabled&&<p>Save these settings before refreshing.</p>}<label class="check" data-setting="ccusage_enabled"><span>Enable ccusage refresh</span><input type="checkbox" checked={draft.ccusage_enabled} onChange={e=>change('ccusage_enabled',e.currentTarget.checked)} /></label><label>Background refresh minutes<input type="number" min="0" max="1440" value={draft.ccusage_refresh_minutes} onInput={e=>change('ccusage_refresh_minutes',Number(e.currentTarget.value))} /></label><label>Install/update command<input readonly value={usage?.install_command||'npm install -g ccusage@latest'} onFocus={event=>event.currentTarget.select()} /></label><button onClick={()=>void navigator.clipboard.writeText(usage?.install_command||'npm install -g ccusage@latest')}>Copy install command</button><details class="settings-advanced"><summary>Advanced collector command</summary><label>ccusage collector command<textarea value={draft.usage_command.join('\n')} onInput={e=>change('usage_command',e.currentTarget.value.split('\n').filter(Boolean))} /></label>{Object.entries(draft.usage_commands).map(([name,command])=><label>{name} legacy source override<textarea value={command.join('\n')} onInput={e=>change('usage_commands',{...draft.usage_commands,[name]:e.currentTarget.value.split('\n').filter(Boolean)})} /></label>)}</details></section></Fragment>}
+        {activeTab==='usage' && <Fragment><section><h3 data-heading-message="Settings.0f35a34d78">{t("Settings.0f35a34d78")}</h3><div class="theme-actions"><button class="primary" onClick={onOpenUsage}>{t("Settings.908e673dbf")}</button><button disabled={!config?.ccusage_enabled || usage?.refreshing || usageRefreshBusy} onClick={()=>void refreshUsage()}>{usageRefreshBusy ? t("Settings.1c0def7be0") : t("Settings.14b793509c")}</button><button disabled={usage?.refreshing || usageRefreshBusy} onClick={()=>void clearUsage()}>{t("Settings.064c8fec1a")}</button></div><label>{rich("Settings.4d78842bab", { value1: <input type="number" min="1" max="3650" value={draft.operational_telemetry_retention_days} onInput={e=>change('operational_telemetry_retention_days',Number(e.currentTarget.value))}/> })}</label><label>{rich("Settings.4fa7547d68", { value1: <input type="number" min="5" max="1440" value={draft.provider_quota_poll_minutes} onInput={e=>change('provider_quota_poll_minutes',Number(e.currentTarget.value))}/> })}</label><label class="check"><span>{t("Settings.748c990f77")}</span><input type="checkbox" checked={draft.provider_quota_turn_refresh_enabled} onChange={e=>change('provider_quota_turn_refresh_enabled',e.currentTarget.checked)}/></label><label>{rich("Settings.9334de77ea", { value1: <input type="number" min="1" max="1440" value={draft.provider_quota_turn_refresh_min_minutes} onInput={e=>change('provider_quota_turn_refresh_min_minutes',Number(e.currentTarget.value))}/>, value2: <small>{t("Settings.a181a7f8e5")}</small> })}</label></section><section><h3 data-heading-message="Settings.9e82f50d8d">{t("Settings.9e82f50d8d")}</h3><p class={usageRefreshFailed?'settings-inline-error':''} aria-live="polite">{usageRefreshMessage || (usage ? t("Settings.7e605ab36f", { id: usage.collector.id, status: codeLabel(usage.collector.status), value3: usage.collector.error?` (${usage.collector.error})`:'' }) : t("Settings.7dc32b8ddf"))}</p>{draft.ccusage_enabled&&!config?.ccusage_enabled && <p>{t("Settings.c7763caabd")}</p>}<label class="check" data-setting="ccusage_enabled"><span>{t("Settings.d2ede78359")}</span><input type="checkbox" checked={draft.ccusage_enabled} onChange={e=>change('ccusage_enabled',e.currentTarget.checked)} /></label><label>{rich("Settings.14256e81c4", { value1: <input type="number" min="0" max="1440" value={draft.ccusage_refresh_minutes} onInput={e=>change('ccusage_refresh_minutes',Number(e.currentTarget.value))} /> })}</label><label>{rich("Settings.1e9226e0ed", { value1: <input readonly value={usage?.install_command||'npm install -g ccusage@latest'} onFocus={event=>event.currentTarget.select()} /> })}</label><button onClick={()=>void navigator.clipboard.writeText(usage?.install_command||'npm install -g ccusage@latest')}>{t("Settings.d8222d3239")}</button><details class="settings-advanced"><summary>{t("Settings.5b4d942d5c")}</summary><label>{rich("Settings.12a3a76172", { value1: <textarea value={draft.usage_command.join('\n')} onInput={e=>change('usage_command',e.currentTarget.value.split('\n').filter(Boolean))} /> })}</label>{Object.entries(draft.usage_commands).map(([name,command])=><label>{rich("Settings.be205f376c", { name: name, value2: <textarea value={command.join('\n')} onInput={e=>change('usage_commands',{...draft.usage_commands,[name]:e.currentTarget.value.split('\n').filter(Boolean)})} /> })}</label>)}</details></section></Fragment>}
 
-        {activeTab==='automation'&&<section><h3>Automation workspace</h3>
-          <p>Graph definitions, rules, Project policy, global limits, spend, learned fixes, and diagnostics now share one Automation workspace.</p>
-          <div class="settings-status-grid"><article><strong>Engine</strong><span>{draft.automation_enabled?'On':'Off'}</span></article><article><strong>Rules</strong><span>{automation?.rules.length||0} custom</span></article><article><strong>Queue</strong><span>{automation?.queue.size||0}/{automation?.queue.capacity||0}</span></article><article><strong>Runtime</strong><span>{automation?.diagnostic?'Needs review':'Healthy'}</span></article></div>
-          <div class="theme-actions"><button class="primary" onClick={onOpenAutomation}>Open Automation workspace</button></div>
+        {activeTab==='automation' && <section><h3 data-heading-message="Settings.235b14eb4e">{t("Settings.235b14eb4e")}</h3>
+          <p>{t("Settings.60d1ff03f1")}</p>
+          <div class="settings-status-grid"><article><strong>{t("Settings.8e75ebbdb2")}</strong><span>{draft.automation_enabled ? t("Settings.1300117561") : t("Settings.ca7981b46e")}</span></article><article><strong>{t("Settings.4228aeb07c")}</strong><span>{rich("Settings.e6f48714bd", { value1: automation?.rules.length || 0 })}</span></article><article><strong>{t("Settings.3b2fe03e36")}</strong><span>{automation?.queue.size || 0}/{automation?.queue.capacity || 0}</span></article><article><strong>{t("Settings.1093115897")}</strong><span>{automation?.diagnostic ? t("Settings.07297fa94a") : t("Settings.7f1e323b62")}</span></article></div>
+          <div class="theme-actions"><button class="primary" onClick={onOpenAutomation}>{t("Settings.9e8cab89ac")}</button></div>
         </section>}
-        {activeTab==='plugins'&&<PluginsSettings/>}
+        {activeTab==='plugins' && <PluginsSettings/>}
 
-        {activeTab==='notifications'&&<NotificationAlertSettings/>}
+        {activeTab==='notifications' && <NotificationAlertSettings/>}
 
         {/* Voice is the largest tab in the panel, and it used to be one `<section>` with
             eight headings inside it: read-aloud policy, engine, pronunciation, summary
@@ -2457,10 +2457,10 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             still edited in exactly one place, and every `data-setting` mark travelled
             with its control (`settingTargets.ts`, `test/settingTargets.test.ts`).
             A marked control deliberately never sits inside a *collapsed* disclosure. */}
-        {activeTab==='voice'&&<Fragment>
-          <section><h3>Read aloud</h3>
-          <p aria-live="polite"><span class={`state-dot ${voiceInfo?.engine_available?'idle':'running'}`}/> engine::{voiceInfo?.engine||draft.tts_engine} {voiceInfo?.engine_available?'available':'unavailable'}{voiceInfo?.diagnostic?` · ${voiceInfo.diagnostic}`:''} · clips::{voiceInfo?.clip_count??0} · cache::{Math.round((voiceInfo?.cache_bytes||0)/1048576)}/{Math.round((voiceInfo?.cache_limit_bytes||0)/1048576)} MB · summary spend today::${(voiceInfo?.spend_today.cost_usd||0).toFixed(3)}</p>
-          {onStartVoiceSetup&&<div class="settings-tutorial-reset"><div><p>First time? The guided setup walks the engine choice, the model download, a microphone check, and a spoken confirmation.</p></div><button onClick={()=>{onClose();onStartVoiceSetup()}}>Guided setup…</button></div>}
+        {activeTab==='voice' && <Fragment>
+          <section><h3 data-heading-message="heading.0791ec6847">{t("heading.0791ec6847")}</h3>
+          <p aria-live="polite">{rich("Settings.af13d7a94d", { value1: <span class={`state-dot ${voiceInfo?.engine_available?'idle':'running'}`}/>, value2: voiceInfo?.engine || draft.tts_engine, value3: (voiceInfo?.engine_available) ? 'yes' : 'no', value4: voiceInfo?.diagnostic ? t("Settings.2a54e33e60", { diagnostic: voiceInfo.diagnostic }) : '', value5: voiceInfo?.clip_count ?? 0, value6: Math.round((voiceInfo?.cache_bytes||0)/1048576), value7: Math.round((voiceInfo?.cache_limit_bytes||0)/1048576), value8: (voiceInfo?.spend_today.cost_usd||0).toFixed(3) })}</p>
+          {onStartVoiceSetup && <div class="settings-tutorial-reset"><div><p>{t("Settings.d85a5650c2")}</p></div><button onClick={()=>{onClose();onStartVoiceSetup()}}>{t("Settings.e7e85b5eb4")}</button></div>}
           {/* Three switches decide whether a word is ever spoken, and they used to sit in
               three unrelated places — a checkbox here, a pane chip there, a button on a
               floating strip — so the honest answer to "why is it talking / why is it
@@ -2468,26 +2468,26 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               what it governs and where its per-item control lives, in the order the
               question is actually asked. */}
           <div class="policy-stack" data-policy="read-aloud">
-            <h4>Policy · what speaks, and where</h4>
+            <h4 data-heading-message="Settings.d6b872c698">{t("Settings.d6b872c698")}</h4>
             <div class="policy-layer">
               <span class="policy-step">1</span>
               <div class="policy-body">
-                <label class="check" data-setting="tts_enabled"><span>Read aloud is on (master)</span><input type="checkbox" checked={draft.tts_enabled} onChange={e=>change('tts_enabled',e.currentTarget.checked)} /></label>
-                <small>Global: off stops audio generation and playback everywhere.</small>
+                <label class="check" data-setting="tts_enabled"><span>{t("Settings.781d1ae86a")}</span><input type="checkbox" checked={draft.tts_enabled} onChange={e=>change('tts_enabled',e.currentTarget.checked)} /></label>
+                <small>{t("Settings.19405ffadd")}</small>
               </div>
             </div>
             <div class={`policy-layer ${draft.tts_enabled?'':'inert'}`}>
               <span class="policy-step">2</span>
               <div class="policy-body">
-                <label data-setting="tts_default_mode">Each session: does it generate?<Dropdown value={draft.tts_default_mode} onChange={value=>change('tts_default_mode',value as Config['tts_default_mode'])} options={[{value:'off',label:'Off until marked'},{value:'on_demand',label:'On demand (speak button)'},{value:'auto',label:'Auto on every reply'}]}/></label>
-                <small>Per session: the Read aloud panel can override this default.</small>
+                <label data-setting="tts_default_mode">{rich("Settings.4e735a3f48", { value1: <Dropdown value={draft.tts_default_mode} onChange={value=>change('tts_default_mode',value as Config['tts_default_mode'])} options={[{value:'off',get label() { return t("Settings.fa188f48b8") }},{value:'on_demand',get label() { return t("Settings.7fb69a3e88") }},{value:'auto',get label() { return t("Settings.76f5031f15") }}]}/> })}</label>
+                <small>{t("Settings.9e4eaab4b5")}</small>
               </div>
             </div>
             <div class={`policy-layer ${draft.tts_enabled?'':'inert'}`}>
               <span class="policy-step">3</span>
               <div class="policy-body">
-                <label class="check"><span>Autoplay on this device (browser)</span><input type="checkbox" checked={deviceAutoplay} onChange={e=>{const next=e.currentTarget.checked;setAutoplayEnabled(next);setDeviceAutoplay(next)}} /></label>
-                <small>Per device: only the focused session plays; other clips are held.</small>
+                <label class="check"><span>{t("Settings.e89593e26a")}</span><input type="checkbox" checked={deviceAutoplay} onChange={e=>{const next=e.currentTarget.checked;setAutoplayEnabled(next);setDeviceAutoplay(next)}} /></label>
+                <small>{t("Settings.f4cd17345f")}</small>
               </div>
             </div>
           </div>
@@ -2495,29 +2495,28 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
 
           {/* Provider-specific panels are mutually exclusive in the DOM, while their
               values remain independent fields in the complete Settings draft. */}
-          <section><h3>TTS provider</h3>
-          <p>Provider and voice used for the next speech stream.</p>
-          <label data-setting="tts_engine">Provider<Dropdown value={draft.tts_engine} onChange={value=>change('tts_engine',value as Config['tts_engine'])} options={[{value:'sapi',label:'OS voice (offline, no download)'},{value:'kokoro',label:'Kokoro-82M (local neural, one-time download)'},{value:'edge',label:'Edge TTS (experimental external, online)'}]}/></label>
+          <section><h3 data-heading-message="heading.6491c8fb07">{t("heading.6491c8fb07")}</h3>
+          <p>{t("Settings.19ac8ae5f6")}</p>
+          <label data-setting="tts_engine">{rich("Settings.bb5a4bd4ec", { value1: <Dropdown value={draft.tts_engine} onChange={value=>change('tts_engine',value as Config['tts_engine'])} options={[{value:'sapi',get label() { return t("Settings.d05bc04945") }},{value:'kokoro',get label() { return t("Settings.2d39191ebd") }},{value:'edge',get label() { return t("Settings.c71cf9b29c") }}]}/> })}</label>
           {/* At selection time, not at synthesis time. The engine's own status
               line sits at the top of this tab among six other facts, and an
               operator who switches provider here and finds the next thing to
               press below it reasonably reads that as the whole errand - which is
               what happened on 2026-08-29. This says, next to the control that
               caused it, that the chosen provider cannot speak yet. */}
-          {voiceInfo&&voiceInfo.engine===draft.tts_engine&&!voiceInfo.engine_available&&voiceInfo.providers?.[draft.tts_engine as 'sapi'|'kokoro']?.diagnostic&&
-            <p class="tts-lexicon-hint tts-lexicon-error" role="alert">{draft.tts_engine==='kokoro'?'Kokoro cannot speak yet':'This provider cannot speak yet'}: {voiceInfo.providers?.[draft.tts_engine as 'sapi'|'kokoro']?.diagnostic}</p>}
-          {draft.tts_engine==='sapi'&&<>
-            <label>SAPI voice (blank = system default)<input value={draft.tts_sapi_voice} onInput={e=>change('tts_sapi_voice',e.currentTarget.value)} /></label>
-            <label>SAPI rate (-10 slow … 10 fast)<input type="number" min="-10" max="10" value={draft.tts_sapi_rate} onInput={e=>change('tts_sapi_rate',Number(e.currentTarget.value))} /></label>
+          {voiceInfo&&voiceInfo.engine===draft.tts_engine&&!voiceInfo.engine_available&&voiceInfo.providers?.[draft.tts_engine as 'sapi'|'kokoro']?.diagnostic && <p class="tts-lexicon-hint tts-lexicon-error" role="alert">{draft.tts_engine==='kokoro' ? t("Settings.36828f0f9d") : t("Settings.3ad436906d")}: {voiceInfo.providers?.[draft.tts_engine as 'sapi'|'kokoro']?.diagnostic}</p>}
+          {draft.tts_engine==='sapi' && <>
+            <label>{rich("Settings.115574e8f9", { value1: <input value={draft.tts_sapi_voice} onInput={e=>change('tts_sapi_voice',e.currentTarget.value)} /> })}</label>
+            <label>{rich("Settings.032ddce8cf", { value1: <input type="number" min="-10" max="10" value={draft.tts_sapi_rate} onInput={e=>change('tts_sapi_rate',Number(e.currentTarget.value))} /> })}</label>
           </>}
-          {draft.tts_engine==='kokoro'&&<>
+          {draft.tts_engine==='kokoro' && <>
             {/* Fifty-odd chips, each of them worth tapping to audition and none of them
                 worth scrolling past every time. Folded, with the current voice named on
                 the summary so the closed state still answers which one is selected -
                 the same rule the tab's reference sections follow, applied to a control
                 that is long rather than rarely read. */}
             <details class="settings-disclosure kokoro-voice-disclosure">
-              <summary>Kokoro voice <em>· {kokoroVoiceLabel(draft.tts_kokoro_voice)}</em></summary>
+              <summary>{rich("Settings.5130db0ac8", { value1: <em>· {kokoroVoiceLabel(draft.tts_kokoro_voice)}</em> })}</summary>
               <KokoroVoicePicker
                 voices={voiceInfo?.kokoro_model?.voices||['af_heart']}
                 ready={voiceInfo?.kokoro_model?.status==='ready'}
@@ -2525,73 +2524,73 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
                 onSelect={voice=>change('tts_kokoro_voice',voice)}
               />
             </details>
-            <label>Speed (0.5–2.0)<input type="number" step="0.05" min="0.5" max="2" value={draft.tts_kokoro_speed} onInput={e=>change('tts_kokoro_speed',Number(e.currentTarget.value))} /></label>
+            <label>{rich("Settings.d9ba5932b5", { value1: <input type="number" step="0.05" min="0.5" max="2" value={draft.tts_kokoro_speed} onInput={e=>change('tts_kokoro_speed',Number(e.currentTarget.value))} /> })}</label>
             <KokoroModelPanel initial={voiceInfo?.kokoro_model||null}/>
           </>}
-          {draft.tts_engine==='edge'&&<EdgeTtsSettings value={draft} onChange={(field,value)=>change(field,value as never)}/>}
+          {draft.tts_engine==='edge' && <EdgeTtsSettings value={draft} onChange={(field,value)=>change(field,value as never)}/>}
           </section>
 
           {/* Kokoro owns the G2P, respellings, and observed unknown-word history.
               Other providers never render or interpret those controls. */}
-          {draft.tts_engine==='kokoro'&&<section><h3>Pronunciation</h3>
+          {draft.tts_engine==='kokoro' && <section><h3 data-heading-message="heading.75cb1e131c">{t("heading.75cb1e131c")}</h3>
             <details class="settings-disclosure">
-              <summary>Respellings and spelled-word history <em>· {Object.keys(draft.tts_kokoro_lexicon||{}).length} entr{Object.keys(draft.tts_kokoro_lexicon||{}).length===1?'y':'ies'}</em></summary>
-          <p>Teach Kokoro project names and jargon as <code>word → pronunciation</code>. Use ✨ for phonemes, ♪ to preview, and the recent-words list to fix spelled-out terms.</p>
+              <summary>{rich("Settings.69b09cebd7", { value1: <em>{rich("Settings.f58d2e7a6f", { length: Object.keys(draft.tts_kokoro_lexicon||{}).length, value2: (Object.keys(draft.tts_kokoro_lexicon||{}).length===1) ? 'yes' : 'no' })}</em> })}</summary>
+          <p>{rich("Settings.dc1cb7cb60", { value1: <code>{t("Settings.1534201ea0")}</code> })}</p>
               <TtsLexiconEditor lexicon={draft.tts_kokoro_lexicon||{}} spelled={voiceInfo?.kokoro_spelled_words||[]} onChange={next=>change('tts_kokoro_lexicon',next)}/>
             </details>
           </section>}
 
           {/* What gets spoken, and what it costs. `tts_content` chooses between the two
               halves, so it leads them rather than sitting a heading above. */}
-          <section><h3>Spoken summary</h3>
-          <p>Summary uses the configured model and daily budget. Verbatim uses no model.</p>
-          <label>Content<Dropdown value={draft.tts_content} onChange={value=>change('tts_content',value as Config['tts_content'])} options={[{value:'summary',label:'Spoken summary (LLM)'},{value:'verbatim',label:'Verbatim reply (markdown stripped)'}]}/><small>The default for every session. The voice panel's <code>tts</code> tab and the pane's player strip both override it for that session alone.</small></label>
-          <div class="model-routing-elsewhere" data-setting="tts_summary_model"><span>Summary model</span><code>{routedModel('tts_summary_model')}</code><button type="button" onClick={()=>goToSetting('accounts','tts_summary_model')}>Edit in Accounts → Models</button></div><small>An override. Left blank it follows the cheap model.</small>
-          <label>Summary max tokens<input type="number" min="64" max="2000" value={draft.tts_summary_max_tokens} onInput={e=>change('tts_summary_max_tokens',Number(e.currentTarget.value))} /></label>
-          <BudgetControl name="tts_daily_budget" label="Read-aloud summaries, daily" value={draft.tts_daily_budget} onChange={value=>change('tts_daily_budget',value)} maxTokens={100000000} maxUsd={100} reportsCost={provider?.llm?.reports_cost} unpricedCalls={voiceInfo?.spend_today?.unpriced_calls}/>
-          <label>Verbatim character cap<input type="number" min="200" max="40000" value={draft.tts_verbatim_max_chars} onInput={e=>change('tts_verbatim_max_chars',Number(e.currentTarget.value))} /><small>Applies to the verbatim mode only, where no model is involved to shorten anything.</small></label>
+          <section><h3 data-heading-message="heading.aeba66a52f">{t("heading.aeba66a52f")}</h3>
+          <p>{t("Settings.ed4c2cfc9a")}</p>
+          <label>{rich("Settings.d315703f43", { value1: <Dropdown value={draft.tts_content} onChange={value=>change('tts_content',value as Config['tts_content'])} options={[{value:'summary',get label() { return t("Settings.2cd818b2ca") }},{value:'verbatim',get label() { return t("Settings.eaa72ef65b") }}]}/>, value2: <small>{rich("Settings.46a1b41062", { value1: <code>{t("Settings.317e938a48")}</code> })}</small> })}</label>
+          <div class="model-routing-elsewhere" data-setting="tts_summary_model"><span>{t("Settings.e271f60475")}</span><code>{routedModel('tts_summary_model')}</code><button type="button" onClick={()=>goToSetting('accounts','tts_summary_model')}>{t("Settings.4f0c966dec")}</button></div><small>{t("Settings.6ef36ef8ff")}</small>
+          <label>{rich("Settings.e2750052b9", { value1: <input type="number" min="64" max="2000" value={draft.tts_summary_max_tokens} onInput={e=>change('tts_summary_max_tokens',Number(e.currentTarget.value))} /> })}</label>
+          <BudgetControl name="tts_daily_budget" label={t("Settings.af92137de8")} value={draft.tts_daily_budget} onChange={value=>change('tts_daily_budget',value)} maxTokens={100000000} maxUsd={100} reportsCost={provider?.llm?.reports_cost} unpricedCalls={voiceInfo?.spend_today?.unpriced_calls}/>
+          <label>{rich("Settings.d2b83c6da7", { value1: <input type="number" min="200" max="40000" value={draft.tts_verbatim_max_chars} onInput={e=>change('tts_verbatim_max_chars',Number(e.currentTarget.value))} />, value2: <small>{t("Settings.3471d5712e")}</small> })}</label>
           </section>
 
-          <section><h3>Clip storage</h3>
-          <label>Audio cache limit (MB)<input type="number" min="10" max="5000" value={draft.tts_cache_mb} onInput={e=>change('tts_cache_mb',Number(e.currentTarget.value))} /><small>Shared by every provider. Generated clips are files under the data directory; the oldest complete streams are dropped past this limit.</small></label>
+          <section><h3 data-heading-message="heading.af71af7319">{t("heading.af71af7319")}</h3>
+          <label>{rich("Settings.be2caad105", { value1: <input type="number" min="10" max="5000" value={draft.tts_cache_mb} onInput={e=>change('tts_cache_mb',Number(e.currentTarget.value))} />, value2: <small>{t("Settings.9b89889c11")}</small> })}</label>
           </section>
 
           {/* The whole capture half in one place: the switch, the decoders it runs, and
               the trigger word they are listening for. The wake words used to sit four
               headings below the microphone switch that makes them do anything. */}
-          <section><h3>Talk &amp; dictation</h3>
-          <p><strong>Talk means you speak to swe-mux.</strong> It owns microphone capture, dictation, wake words, and voice commands.</p>
-          <label class="check" data-setting="stt_enabled"><span>Enable Talk &amp; dictation</span><input type="checkbox" checked={draft.stt_enabled} onChange={e=>change('stt_enabled',e.currentTarget.checked)} /></label>
-          {draft.stt_enabled&&draft.stt_engine==='whisper'&&<p class="profile-hint">Local dictation needs a speech model on this machine. It is downloaded once, only when you press Download below, and transcription is offline afterwards. The browser's voice-activity runtime is served by swe-mux itself and downloads nothing.</p>}
-          <label>Daemon transcription engine<Dropdown value={draft.stt_engine} onChange={value=>change('stt_engine',value as Config['stt_engine'])} options={[{value:'whisper',label:'Whisper Turbo (local, recommended)'},{value:'sapi',label:'Windows Speech Recognition (legacy)'}]}/></label>
-          <label>Recognition language<input value={draft.stt_language} placeholder="en-US" onInput={e=>change('stt_language',e.currentTarget.value)} /><small>A first-use choice, not a fixed assumption: set the language and model that match how you speak.</small></label>
-          {draft.stt_engine==='whisper'&&<label>Dictation model<input value={draft.stt_whisper_model} placeholder="turbo" onInput={e=>change('stt_whisper_model',e.currentTarget.value)} /></label>}
-          {draft.stt_engine==='whisper'&&<label title="Used for the speculative pass that only has to recognize a wake word and a command phrase. Blank decodes commands on the dictation model: correct, but slower.">Routing model (spoken commands)<input value={draft.stt_routing_model} placeholder="small.en" onInput={e=>change('stt_routing_model',e.currentTarget.value)} /></label>}
-          <p>STT::{voiceInfo?.stt_available?'available':'unavailable'} · engine::{voiceInfo?.stt_engine||draft.stt_engine}{voiceInfo?.stt_diagnostic?` · ${voiceInfo.stt_diagnostic}`:''}</p>
-          {draft.stt_engine==='whisper'&&<WhisperModelPanel initial={voiceInfo?.stt_models||null} runtime={voiceInfo?.voice_runtime||null}/>}
-          <p>Talk keeps listening across pauses. Wake-word commands act immediately; other speech becomes dictation. Raw audio is deleted after transcription.</p>
-          <h4>Wake words</h4>
-          <p>Comma-separated spellings the recognizer may produce. Test them under Diagnostics.</p>
-          <label>Wake words<input value={(draft.voice_wake_words||[]).join(', ')} placeholder="mux, mucks, max" onInput={e=>change('voice_wake_words',e.currentTarget.value.split(',').map(item=>item.trim()).filter(Boolean))} /></label>
+          <section><h3 data-heading-message="heading.116fe62640">{t("heading.116fe62640")}</h3>
+          <p>{rich("Settings.e658b470c5", { value1: <strong>{t("Settings.fb2b6737ad")}</strong> })}</p>
+          <label class="check" data-setting="stt_enabled"><span>{t("Settings.c04a719695")}</span><input type="checkbox" checked={draft.stt_enabled} onChange={e=>change('stt_enabled',e.currentTarget.checked)} /></label>
+          {draft.stt_enabled&&draft.stt_engine==='whisper' && <p class="profile-hint">{t("Settings.3c00265dee")}</p>}
+          <label>{rich("Settings.3696304b53", { value1: <Dropdown value={draft.stt_engine} onChange={value=>change('stt_engine',value as Config['stt_engine'])} options={[{value:'whisper',get label() { return t("Settings.5fcab2edf5") }},{value:'sapi',get label() { return t("Settings.0457704efb") }}]}/> })}</label>
+          <label>{rich("Settings.fb5ced330a", { value1: <input value={draft.stt_language} placeholder={t("Settings.5c49f88daf")} onInput={e=>change('stt_language',e.currentTarget.value)} />, value2: <small>{t("Settings.07aa13c9ee")}</small> })}</label>
+          {draft.stt_engine==='whisper' && <label>{rich("Settings.a4bb95a06d", { value1: <input value={draft.stt_whisper_model} placeholder={t("Settings.c3449cd99d")} onInput={e=>change('stt_whisper_model',e.currentTarget.value)} /> })}</label>}
+          {draft.stt_engine==='whisper' && <label title={t("Settings.14816a3f03")}>{rich("Settings.2ef3ca0f75", { value1: <input value={draft.stt_routing_model} placeholder={t("Settings.3c5abaac19")} onInput={e=>change('stt_routing_model',e.currentTarget.value)} /> })}</label>}
+          <p>{rich("Settings.2fbda81ee0", { value1: (voiceInfo?.stt_available) ? 'yes' : 'no', value2: voiceInfo?.stt_engine || draft.stt_engine, value3: voiceInfo?.stt_diagnostic ? t("Settings.ba9fd14b65", { stt_diagnostic: voiceInfo.stt_diagnostic }) : '' })}</p>
+          {draft.stt_engine==='whisper' && <WhisperModelPanel initial={voiceInfo?.stt_models||null} runtime={voiceInfo?.voice_runtime||null}/>}
+          <p>{t("Settings.6066bb7be1")}</p>
+          <h4 data-heading-message="Settings.f5f0563199">{t("Settings.f5f0563199")}</h4>
+          <p>{t("Settings.5394f490cc")}</p>
+          <label>{rich("Settings.0724540222", { value1: <input value={(draft.voice_wake_words||[]).join(', ')} placeholder={t("Settings.25064f1cff")} onInput={e=>change('voice_wake_words',e.currentTarget.value.split(',').map(item=>item.trim()).filter(Boolean))} /> })}</label>
           </section>
 
           {/* The phrase table, on its own. Seventeen rows is the largest single control in
               the tab, and it used to share a heading with the wake words that trigger it
               and with two paragraphs about built-in queries it does not configure. */}
-          <section><h3>Voice commands</h3>
-          <p>Commands run through Talk after a wake word. Leave a phrase blank to disable it.</p>
-          {draft.stt_enabled?<div class="voice-commands">
+          <section><h3 data-heading-message="heading.7fca441bba">{t("heading.7fca441bba")}</h3>
+          <p>{t("Settings.834428db08")}</p>
+          {draft.stt_enabled ? <div class="voice-commands">
             {VOICE_ACTION_ORDER.map(action=>{
               const meta=VOICE_ACTION_META[action]
               const phrases=(draft.voice_commands||[]).find(command=>command.action===action)?.phrases||[]
-              return <label key={action} title={meta.hint}><span>{meta.label} <em>· {meta.hint}</em></span><input value={phrases.join(', ')} placeholder="(no voice trigger)" onInput={e=>{
+              return <label key={action} title={meta.hint}><span>{meta.label} <em>· {meta.hint}</em></span><input value={phrases.join(', ')} placeholder={t("Settings.5570379899")} onInput={e=>{
                 const updated=e.currentTarget.value.split(',').map(item=>item.trim()).filter(Boolean)
                 const byAction=new Map(VOICE_ACTION_ORDER.map(name=>[name as string,(draft.voice_commands||[]).find(command=>command.action===name)?.phrases||[]]))
                 byAction.set(action,updated)
                 change('voice_commands',VOICE_ACTION_ORDER.map(name=>({action:name,phrases:byAction.get(name)||[]})))
               }} /></label>
             })}
-          </div>:<div class="settings-capability-flag"><span aria-hidden="true">⚑</span><div><strong>Talk is off.</strong><small>Command phrases are hidden until microphone input is enabled.</small></div><button type="button" onClick={()=>change('stt_enabled',true)}>Enable Talk &amp; dictation</button></div>}
+          </div> : <div class="settings-capability-flag"><span aria-hidden="true">⚑</span><div><strong>{t("Settings.f1d8e67df7")}</strong><small>{t("Settings.a7c9b74775")}</small></div><button type="button" onClick={()=>change('stt_enabled',true)}>{t("Settings.c04a719695")}</button></div>}
           </section>
 
           {/* Reference, not a control: the complete live catalog, read once and then rarely.
@@ -2600,36 +2599,36 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               open the disclosures above its target (pinned by `setting-reveal.spec.ts`), but
               a marked control behind a fold is one a search result and a deep link both
               reach through an extra state change, so the marks stay above it. */}
-          <section><h3>Command reference</h3>
-          {draft.stt_enabled?<details class="settings-disclosure">
-          <summary>Every spoken command, as currently configured</summary>
-          <p>Start commands with a wake word. Project numbers follow the sidebar; session numbers use the selected Project. Braces mark spoken values.</p>
+          <section><h3 data-heading-message="heading.64a0c611be">{t("heading.64a0c611be")}</h3>
+          {draft.stt_enabled ? <details class="settings-disclosure">
+          <summary>{t("Settings.e338cc2329")}</summary>
+          <p>{t("Settings.2621c5feb6")}</p>
           <div class="voice-command-reference">
             {completeVoiceCatalog.map((section,index)=><details open={index===0} key={section.id}>
               <summary>{section.title} <span>{section.phrases.length+section.commands.length}</span></summary>
-              {!!section.phrases.length&&<div class="voice-reference-phrases">{section.phrases.map(phrase=><code key={phrase}>{phrase}</code>)}</div>}
-              {!!section.commands.length&&<div class="voice-reference-commands">{section.commands.map(command=><article key={command.id}>
+              {!!section.phrases.length && <div class="voice-reference-phrases">{section.phrases.map(phrase=><code key={phrase}>{phrase}</code>)}</div>}
+              {!!section.commands.length && <div class="voice-reference-commands">{section.commands.map(command=><article key={command.id}>
                 <strong>{command.label}</strong>
-                {!command.available&&<small>{command.disabledReason||'Unavailable in the current workspace state'}</small>}
+                {!command.available && <small>{command.disabledReason || t("Settings.61166d13af")}</small>}
                 <div class="voice-reference-phrases">{command.phrases.map(phrase=><code key={phrase}>{phrase}</code>)}</div>
               </article>)}</div>}
             </details>)}
           </div>
-          </details>:<p class="settings-muted-reference">Command reference hidden while Talk &amp; dictation is off.</p>}
+          </details> : <p class="settings-muted-reference">{t("Settings.a472da6c22")}</p>}
           </section>
 
-          <section><h3>Mux assistant</h3>
-          <p><strong>Mux Assistant is independent from Talk.</strong> Text chat works whenever the assistant is on. Unmatched spoken requests reach it only when Talk &amp; dictation is also on.</p>
-          <label class="check" data-setting="assistant_enabled"><span>Enable the Mux assistant</span><input type="checkbox" checked={draft.assistant_enabled} onChange={e=>change('assistant_enabled',e.currentTarget.checked)} /></label>
-          {draft.assistant_enabled&&!draft.stt_enabled&&<div class="settings-capability-status"><strong>Text chat available · spoken fallback unavailable</strong><span>Enable Talk &amp; dictation to speak to the assistant.</span></div>}
-          <div class="model-routing-elsewhere" data-setting="assistant_model"><span>Assistant model</span><code>{routedModel('assistant_model')}</code><button type="button" onClick={()=>goToSetting('accounts','assistant_model')}>Edit in Accounts → Models</button></div><small>Pinned rather than routed: the assistant is a tool-calling loop and needs a model that reliably emits well-formed calls. <code>openai/gpt-5.6-terra</code> is verified; <code>openai/gpt-5.6-luna</code> is the cheap alternative.</small>
-          <BudgetControl name="assistant_daily_budget" label="Assistant, daily" value={draft.assistant_daily_budget} onChange={value=>change('assistant_daily_budget',value)} maxTokens={100000000} maxUsd={1000} usdStep={0.05} reportsCost={provider?.llm?.reports_cost}/>
-          <label>Reversible-action trust<Dropdown value={draft.assistant_trust_reversible} onChange={value=>change('assistant_trust_reversible',value as Config['assistant_trust_reversible'])} options={[{value:'cancel_window',label:'Announce with a cancel window (default)'},{value:'confirm',label:'Always confirm'},{value:'auto',label:'Run silently'}]}/><small>Applies to queueing drafts, note appends, and spawns. Interrupt, send-now, and end-session always confirm.</small></label>
-          <label class="check" data-setting="assistant_stream_replies"><span>Stream the reply as it is written</span><input type="checkbox" checked={draft.assistant_stream_replies} onChange={e=>change('assistant_stream_replies',e.currentTarget.checked)} /></label>
-          <p>Streaming releases the first sentence while the rest is generated. Off buffers the full reply.</p>
-          <label>Reply max tokens<input type="number" min="128" max="8192" value={draft.assistant_max_output_tokens} onInput={e=>change('assistant_max_output_tokens',Number(e.currentTarget.value))} /></label>
-          <label>Dialog memory (messages per turn)<input type="number" min="2" max="200" value={draft.assistant_context_messages} onInput={e=>change('assistant_context_messages',Number(e.currentTarget.value))} /></label>
-          <label>Spoken-chat patience (ms)<input type="number" min="0" max="5000" step="100" value={draft.voice_chat_patience_ms} disabled={!draft.stt_enabled} onInput={e=>change('voice_chat_patience_ms',Number(e.currentTarget.value))} /><small>{draft.stt_enabled?'Extra pause before plain Talk speech becomes an assistant turn.':'Inactive while Talk & dictation is off.'}</small></label>
+          <section><h3 data-heading-message="heading.0fe741492b">{t("heading.0fe741492b")}</h3>
+          <p>{rich("Settings.86df6f4991", { value1: <strong>{t("Settings.3c8fed9d38")}</strong> })}</p>
+          <label class="check" data-setting="assistant_enabled"><span>{t("Settings.dff4641557")}</span><input type="checkbox" checked={draft.assistant_enabled} onChange={e=>change('assistant_enabled',e.currentTarget.checked)} /></label>
+          {draft.assistant_enabled&&!draft.stt_enabled && <div class="settings-capability-status"><strong>{t("Settings.a105d3011c")}</strong><span>{t("Settings.b8014fea63")}</span></div>}
+          <div class="model-routing-elsewhere" data-setting="assistant_model"><span>{t("Settings.7c8dbb91df")}</span><code>{routedModel('assistant_model')}</code><button type="button" onClick={()=>goToSetting('accounts','assistant_model')}>{t("Settings.4f0c966dec")}</button></div><small>{rich("Settings.53e8d5073a", { value1: <code>{t("Settings.f8dbf8d16f")}</code>, value2: <code>{t("Settings.65a8fc1dec")}</code> })}</small>
+          <BudgetControl name="assistant_daily_budget" label={t("Settings.9f65f59e1c")} value={draft.assistant_daily_budget} onChange={value=>change('assistant_daily_budget',value)} maxTokens={100000000} maxUsd={1000} usdStep={0.05} reportsCost={provider?.llm?.reports_cost}/>
+          <label>{rich("Settings.1ead7b71d8", { value1: <Dropdown value={draft.assistant_trust_reversible} onChange={value=>change('assistant_trust_reversible',value as Config['assistant_trust_reversible'])} options={[{value:'cancel_window',get label() { return t("Settings.89bb11ccf9") }},{value:'confirm',get label() { return t("Settings.d106d42498") }},{value:'auto',get label() { return t("Settings.b16c1f3288") }}]}/>, value2: <small>{t("Settings.b384af6ab0")}</small> })}</label>
+          <label class="check" data-setting="assistant_stream_replies"><span>{t("Settings.69c70bc61c")}</span><input type="checkbox" checked={draft.assistant_stream_replies} onChange={e=>change('assistant_stream_replies',e.currentTarget.checked)} /></label>
+          <p>{t("Settings.5620ecbaa7")}</p>
+          <label>{rich("Settings.36878b3bbe", { value1: <input type="number" min="128" max="8192" value={draft.assistant_max_output_tokens} onInput={e=>change('assistant_max_output_tokens',Number(e.currentTarget.value))} /> })}</label>
+          <label>{rich("Settings.3ce9025c78", { value1: <input type="number" min="2" max="200" value={draft.assistant_context_messages} onInput={e=>change('assistant_context_messages',Number(e.currentTarget.value))} /> })}</label>
+          <label>{rich("Settings.4e1d76efdb", { value1: <input type="number" min="0" max="5000" step="100" value={draft.voice_chat_patience_ms} disabled={!draft.stt_enabled} onInput={e=>change('voice_chat_patience_ms',Number(e.currentTarget.value))} />, value2: <small>{draft.stt_enabled ? t("Settings.a49f853964") : t("Settings.334d149375")}</small> })}</label>
           </section>
 
           {/* The two measuring instruments, together and folded away. Neither is a setting:
@@ -2637,19 +2636,19 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               latency report reads back samples the browser already posted. They are
               reached when a trigger word is being chosen or when spoken commands feel
               slow, which is not most visits to this tab. */}
-          <section><h3>Testing and latency</h3>
+          <section><h3 data-heading-message="heading.cfc1c5858d">{t("heading.cfc1c5858d")}</h3>
           <details class="settings-disclosure">
-          <summary>Measure what the recognizer hears, and how fast it acts</summary>
-          <h4>Wake-word tester</h4>
-          <p>Tests the real transcription and command matcher. Try each wake word several times and save changes before testing.</p>
+          <summary>{t("Settings.24cfd6dc4d")}</summary>
+          <h4 data-heading-message="Settings.34e55f5ee9">{t("Settings.34e55f5ee9")}</h4>
+          <p>{t("Settings.c376f1d530")}</p>
           <WakeWordTester
             wakeWords={voiceInfo?.wake_words||draft.voice_wake_words||[]}
             commands={voiceInfo?.commands||draft.voice_commands||[]}
             available={!!voiceInfo?.stt_available}
             diagnostic={voiceInfo?.stt_diagnostic||''}
           />
-          <h4>Spoken command latency</h4>
-          <p>End of speech to executed action, broken into the four stages it passes through. Samples are recorded by the browser after each utterance and also written to <code>daemon.log</code>. The target is under 500 ms for a short command.</p>
+          <h4 data-heading-message="Settings.a32a4a4e02">{t("Settings.a32a4a4e02")}</h4>
+          <p>{rich("Settings.a3399ffb60", { value1: <code>{t("Settings.6131960bd0")}</code> })}</p>
           <VoiceLatencyReport report={latencyReport} onRefresh={loadLatency} onReset={resetLatency} />
           </details>
           </section>
@@ -2657,59 +2656,55 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           {/* One-time setup, and a deliberate second copy of what Remote owns: someone
               setting up dictation should not have to leave this tab (`features/ui.md`).
               Folded away because it is done once and then never again. */}
-          <section><h3>Mobile voice</h3>
+          <section><h3 data-heading-message="heading.732d8524f8">{t("heading.732d8524f8")}</h3>
           <details class="settings-disclosure">
-          <summary>Set up microphone access from a phone (HTTPS)</summary>
-          <p>Mobile microphone capture requires HTTPS. Use the private Tailscale Serve address below; setup may need one approval.</p>
+          <summary>{t("Settings.93f3d2f9db")}</summary>
+          <p>{t("Settings.b8afb6e9c9")}</p>
           <TailscaleConnection status={remote} />
-          <div class="theme-actions"><button class="primary" disabled={mobileVoiceBusy||!draft.tailnet_enabled} onClick={()=>void setupMobileVoice()}>{mobileVoiceBusy?'Setting up…':remote?.mobile_voice_configured?'Repair secure mobile voice':'Enable secure mobile voice'}</button>{remote?.mobile_voice_url&&<a href={remote.mobile_voice_url} target="_blank" rel="noreferrer">Open secure mobile voice</a>}</div>
-          {mobileVoiceMessage&&<p class={mobileVoiceMessage.toLowerCase().includes('failed')?'settings-inline-error':''} aria-live="polite">{mobileVoiceMessage}</p>}
+          <div class="theme-actions"><button class="primary" disabled={mobileVoiceBusy||!draft.tailnet_enabled} onClick={()=>void setupMobileVoice()}>{mobileVoiceBusy ? t("Settings.c894bba9c3") : remote?.mobile_voice_configured ? t("Settings.0e7a37d085") : t("Settings.b63d1b949e")}</button>{remote?.mobile_voice_url && <a href={remote.mobile_voice_url} target="_blank" rel="noreferrer">{t("Settings.17833695a6")}</a>}</div>
+          {mobileVoiceMessage && <p class={mobileVoiceFailed?'settings-inline-error':''} aria-live="polite">{mobileVoiceMessage}</p>}
           <PhoneDnsChecklist />
           </details>
           </section>
         </Fragment>}
 
-        {activeTab==='remote'&&<Fragment>
-          <section><h3>Tailnet listener</h3>
-          <p class="settings-inline-error">Any device on this tailnet reaches this daemon with no login, and an admitted device has full terminal and code-execution authority. Do not enable the tailnet listener on a shared tailnet.</p>
-          <label class="check"><span>Listen on Tailscale IPv4</span><input type="checkbox" checked={draft.tailnet_enabled} onChange={event=>change('tailnet_enabled',event.currentTarget.checked)} /><small>Applies on the next daemon restart. Binds localhost plus the Tailscale address only, never every LAN interface.</small></label>
+        {activeTab==='remote' && <Fragment>
+          <section><h3 data-heading-message="Settings.668c7def66">{t("Settings.668c7def66")}</h3>
+          <p class="settings-inline-error">{t("Settings.aba207e063")}</p>
+          <label class="check"><span>{t("Settings.b87f5d702f")}</span><input type="checkbox" checked={draft.tailnet_enabled} onChange={event=>change('tailnet_enabled',event.currentTarget.checked)} /><small>{t("Settings.6d171eab20")}</small></label>
           <TailscaleConnection status={remote} />
-          <dl><dt>Local URL</dt><dd>{remote?.listen_url||`http://${draft.host}:${draft.port}`}</dd><dt>Direct tailnet</dt><dd>{remote?.direct_available?'active':draft.tailnet_enabled?'Tailscale address unavailable':'disabled'}</dd>{remote?.tailnet_urls.map(url=><Fragment key={url}><dt>Tailnet URL</dt><dd><a href={url} target="_blank" rel="noreferrer">{url}</a></dd></Fragment>)}</dl>
-          <p>Tailnet HTTP is encrypted in transit by Tailscale; mobile microphone access additionally needs the private HTTPS address.</p>
+          <dl><dt>{t("Settings.58b471eed4")}</dt><dd>{remote?.listen_url || t("Settings.77f91a235f", { host: draft.host, port: draft.port })}</dd><dt>{t("Settings.ec575b1542")}</dt><dd>{remote?.direct_available ? t("Settings.9687961165") : draft.tailnet_enabled ? t("Settings.0251499a6e") : t("Settings.17eb3c0168")}</dd>{remote?.tailnet_urls.map(url=><Fragment key={url}><dt>{t("Settings.3170afddf2")}</dt><dd><a href={url} target="_blank" rel="noreferrer">{url}</a></dd></Fragment>)}</dl>
+          <p>{t("Settings.88f432459c")}</p>
           </section>
 
-          <section><h3>Connect a phone</h3>
-          <p>Walks one device through admission: the address to open, the Tailscale state it needs, and a scannable code for it.</p>
-          <div class="theme-actions"><button onClick={()=>setConnectPhoneOpen(true)}>Connect a phone…</button></div>
-          {connectPhoneOpen&&<ConnectPhone onClose={()=>setConnectPhoneOpen(false)} />}
+          <section><h3 data-heading-message="Settings.8b4df73a36">{t("Settings.8b4df73a36")}</h3>
+          <p>{t("Settings.a6dae8d816")}</p>
+          <div class="theme-actions"><button onClick={()=>setConnectPhoneOpen(true)}>{t("Settings.5ea4f31d60")}</button></div>
+          {connectPhoneOpen && <ConnectPhone onClose={()=>setConnectPhoneOpen(false)} />}
           </section>
 
           {/* Both panels render nothing on a host that does not support them. Now that
               each owns a heading, that would leave a heading promising content that is
               not there, so the unsupported case says so instead of going quiet. */}
-          <section><h3>Firewall</h3>
-          {firewall?.supported
-            ?<FirewallPanel status={firewall} busy={firewallBusy} message={firewallMessage} onRepair={()=>void repairFirewall()} />
-            :<p>Firewall inspection and repair are only available in the packaged Windows app.</p>}
+          <section><h3 data-heading-message="Settings.f12efc4df2">{t("Settings.f12efc4df2")}</h3>
+          {firewall?.supported ? <FirewallPanel status={firewall} busy={firewallBusy} message={firewallMessage} onRepair={()=>void repairFirewall()} /> : <p>{t("Settings.62ae343f37")}</p>}
           </section>
 
-          <section><h3>WSL bridge</h3>
-          {wsl?.supported
-            ?<WslBridgePanel status={wsl} busy={wslBusy} message={wslMessage} probing={wslProbing}
+          <section><h3 data-heading-message="Settings.2b925074f3">{t("Settings.2b925074f3")}</h3>
+          {wsl?.supported ? <WslBridgePanel status={wsl} busy={wslBusy} message={wslMessage} probing={wslProbing}
               onToggle={enabled=>void toggleWsl(enabled)} onProbe={()=>void probeWsl()}
-              onInstall={distro=>void installWslBridge(distro)} onRepairFirewall={()=>void repairWslFirewall()} />
-            :<p>This host has no WSL, so there is no distribution to run an agent inside.</p>}
+              onInstall={distro=>void installWslBridge(distro)} onRepairFirewall={()=>void repairWslFirewall()} /> : <p>{t("Settings.e2f251c813")}</p>}
           </section>
 
-          <section><h3>Secure HTTPS access</h3>
-          <p>Optional HTTPS with Tailscale Serve. {remote?.diagnostic||'Checking the private HTTPS address…'}</p>
-          {remote?.funnel_detected&&<p class="settings-inline-error">Tailscale Funnel appears enabled. Public ingress is unsupported; swe-mux only configures private tailnet access.</p>}
-          <div class="theme-actions"><button class="primary" disabled={mobileVoiceBusy||!draft.tailnet_enabled} onClick={()=>void setupMobileVoice()}>{mobileVoiceBusy?'Setting up…':remote?.mobile_voice_configured?'Repair secure mobile access':'Enable secure mobile access'}</button>{remote?.mobile_voice_url&&<a href={remote.mobile_voice_url} target="_blank" rel="noreferrer">Open secure address</a>}<button onClick={()=>{void api<RemoteStatus>('GET','/api/remote/status').then(setRemote);void api<FirewallStatus>('GET','/api/remote/firewall').then(setFirewall)}}>Recheck</button></div>
-          {mobileVoiceMessage&&<p class={mobileVoiceMessage.toLowerCase().includes('failed')?'settings-inline-error':''} aria-live="polite">{mobileVoiceMessage}</p>}
-          <p>No public Funnel access is ever enabled; Tailscale access policy controls which devices connect.</p>
+          <section><h3 data-heading-message="Settings.88da55bde5">{t("Settings.88da55bde5")}</h3>
+          <p>{rich("Settings.24cb39057d", { value1: remote?.diagnostic || t("Settings.118602dd87") })}</p>
+          {remote?.funnel_detected && <p class="settings-inline-error">{t("Settings.d254e935d9")}</p>}
+          <div class="theme-actions"><button class="primary" disabled={mobileVoiceBusy||!draft.tailnet_enabled} onClick={()=>void setupMobileVoice()}>{mobileVoiceBusy ? t("Settings.c894bba9c3") : remote?.mobile_voice_configured ? t("Settings.f46198787f") : t("Settings.51523c1565")}</button>{remote?.mobile_voice_url && <a href={remote.mobile_voice_url} target="_blank" rel="noreferrer">{t("Settings.6d13a49e47")}</a>}<button onClick={()=>{void api<RemoteStatus>('GET','/api/remote/status').then(setRemote);void api<FirewallStatus>('GET','/api/remote/firewall').then(setFirewall)}}>{t("Settings.1f47d83669")}</button></div>
+          {mobileVoiceMessage && <p class={mobileVoiceFailed?'settings-inline-error':''} aria-live="polite">{mobileVoiceMessage}</p>}
+          <p>{t("Settings.4e3273f678")}</p>
           </section>
 
-          <section><h3>Phone DNS</h3>
+          <section><h3 data-heading-message="Settings.131638b04e">{t("Settings.131638b04e")}</h3>
           <PhoneDnsChecklist />
           </section>
         </Fragment>}
@@ -2717,7 +2712,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
         {/* Support tooling, not remote configuration: what the host is missing, how to
             push new code into the running app, and one bundle to hand over when
             something is wrong. */}
-        {activeTab==='maintenance'&&<Fragment>
+        {activeTab==='maintenance' && <Fragment>
           {/* First on the tab, because "which build am I on" is the question every
               other answer here is qualified by: a prerequisite report, a log level,
               and an exported bundle all describe a specific version, and the one a
@@ -2726,53 +2721,45 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               outright rather than left to be inferred from "This is the latest
               release", which says nothing while the check is off and reads the same
               on a daemon whose check cannot reach the manifest. */}
-          <section><h3>swe-mux version</h3>
-          <p class="settings-running-version">Running <strong>swe-mux {runningVersion||'(version not reported)'}</strong>{runningVersion&&updateStatus?.status==='ok'&&!updateStatus.update_available?' · the latest release':''}</p>
-          <p>Once a day the daemon asks <code>{updateStatus?.manifest_url||'https://swemux.dev/version.json'}</code> whether a newer release exists, and shows a dismissible banner if one does. <strong>Nothing downloads and nothing installs until you press Install</strong>, which first shows what the update would do - and whether your live sessions survive it - and then replaces the app in place.</p>
-          <p class="profile-hint">The check is the only request swe-mux makes on its own behalf. It is a plain fetch of one file that is identical for every install: no query string, no custom header, no cookie, and no identifier of this machine. Turning it off means no request is made at all.</p>
-          <label class="check" data-setting="update_check_enabled"><span>Check for new releases</span><input type="checkbox" checked={draft.update_check_enabled} onChange={e=>change('update_check_enabled',e.currentTarget.checked)}/><small>At most one check a day, remembered across restarts.</small></label>
+          <section><h3 data-heading-message="Settings.a7e863241f">{t("Settings.a7e863241f")}</h3>
+          <p class="settings-running-version">{rich("Settings.3ab6ea948b", { value1: <strong>{rich("Settings.b277ccf9f1", { value1: runningVersion || t("Settings.a00d58b4a7") })}</strong>, value2: (runningVersion&&updateStatus?.status==='ok'&&!updateStatus.update_available) ? 'yes' : 'no' })}</p>
+          <p>{rich("Settings.9f996710ad", { value1: <code>{updateStatus?.manifest_url || t("Settings.a2711588a8")}</code>, value2: <strong>{t("Settings.585dd00552")}</strong> })}</p>
+          <p class="profile-hint">{t("Settings.029a85cb06")}</p>
+          <label class="check" data-setting="update_check_enabled"><span>{t("Settings.4a99175ce6")}</span><input type="checkbox" checked={draft.update_check_enabled} onChange={e=>change('update_check_enabled',e.currentTarget.checked)}/><small>{t("Settings.bad8675c88")}</small></label>
           <div class="settings-config-actions"><div>
-            <p>{updateSummary||' '}</p>
-            {updateChecked&&<p class="profile-hint">Last checked {updateChecked}.</p>}
-            {updateStatus?.latest?.changelog&&updateStatus.update_available
-              ?<p><a href={updateStatus.latest.changelog} target="_blank" rel="noreferrer">Release notes for {updateStatus.latest.version}</a></p>
-              :null}
+            <p>{updateSummary || ' '}</p>
+            {updateChecked && <p class="profile-hint">{rich("Settings.ec3c366cff", { updateChecked: updateChecked })}</p>}
+            {updateStatus?.latest?.changelog&&updateStatus.update_available ? <p><a href={updateStatus.latest.changelog} target="_blank" rel="noreferrer">{rich("Settings.6c1357ac49", { version: updateStatus.latest.version })}</a></p> : null}
           </div>
             <div class="settings-update-actions">
-              <button disabled={updateBusy||!draft.update_check_enabled} onClick={()=>void checkForUpdates()}>{updateBusy?'Checking…':'Check now'}</button>
-              {updateStatus?.update_available&&updateStatus.latest?.version&&<button class="primary" onClick={()=>setUpdateInstallOpen(true)}>Install {updateStatus.latest.version}</button>}
+              <button disabled={updateBusy||!draft.update_check_enabled} onClick={()=>void checkForUpdates()}>{updateBusy ? t("Settings.ec963ffc91") : t("Settings.2937cffb37")}</button>
+              {updateStatus?.update_available&&updateStatus.latest?.version && <button class="primary" onClick={()=>setUpdateInstallOpen(true)}>{rich("Settings.b69eb65b13", { version: updateStatus.latest.version })}</button>}
             </div>
           </div>
-          {updateError&&<p aria-live="polite">{updateError}</p>}
-          {updateInstallOpen&&updateStatus?.latest?.version&&<UpdateDialog version={updateStatus.latest.version} changelog={updateStatus.latest.changelog} onClose={()=>setUpdateInstallOpen(false)}/>}
+          {updateError && <p aria-live="polite">{updateError}</p>}
+          {updateInstallOpen&&updateStatus?.latest?.version && <UpdateDialog version={updateStatus.latest.version} changelog={updateStatus.latest.changelog} onClose={()=>setUpdateInstallOpen(false)}/>}
           </section>
 
-          <section><h3>System prerequisites</h3>
-          <p class="profile-hint">These back specific features. Each fails gracefully when absent, so a missing one reads as unconfigured, not broken.</p>
+          <section><h3 data-heading-message="Settings.ae763e6d95">{t("Settings.ae763e6d95")}</h3>
+          <p class="profile-hint">{t("Settings.74c8a0ca0b")}</p>
           {/* Re-scan is a POST, not a re-fetch: the daemon inherited its PATH once
               at startup, so a tool installed while swe-mux was running stays
               invisible until PATH is read back from the OS. A button that only
               re-ran detection would have returned the same wrong answer and taught
               the user that the feature does not work. */}
           <div class="settings-config-actions"><div>
-            <button type="button" disabled={prereqBusy} onClick={()=>void rescanPrerequisites()}>{prereqBusy?'Re-scanning…':'Re-scan'}</button>
-            {prereqRescan&&<small>{prereqRescan.path_refreshed
-              ?'PATH changed since startup and has been re-read.'
-              :prereqRescan.path_refresh_supported
-                ?'Re-read PATH from Windows; it is unchanged since startup.'
-                :'Re-checked. On this platform PATH cannot be re-read out of band, so a tool installed since startup needs a daemon restart.'}</small>}
+            <button type="button" disabled={prereqBusy} onClick={()=>void rescanPrerequisites()}>{prereqBusy ? t("Settings.712ba0b969") : t("Settings.59b7d55a69")}</button>
+            {prereqRescan && <small>{prereqRescan.path_refreshed ? t("Settings.52af894101") : prereqRescan.path_refresh_supported ? t("Settings.4d345465e9") : t("Settings.71d4a94286")}</small>}
           </div></div>
-          {prerequisites
-            ?<div class="settings-prerequisites"><ul>{prerequisites.map(prereq=><li key={prereq.id} class={prereq.state==='present'?'prereq-ok':prereq.state==='off_path'?'prereq-warn':'prereq-missing'}>
-              <span>{prereq.state==='present'?'✓':prereq.state==='off_path'?'!':'✗'} {prereq.label}</span>
-              <small>{prereq.purpose}{prereq.present&&prereq.path?` · ${prereq.path}`:''}</small>
+          {prerequisites ? <div class="settings-prerequisites"><ul>{prerequisites.map(prereq=><li key={prereq.id} class={prereq.state==='present'?'prereq-ok':prereq.state==='off_path'?'prereq-warn':'prereq-missing'}>
+              <span>{prereq.state==='present' ? '✓' : prereq.state==='off_path' ? '!' : '✗'} {prereq.label}</span>
+              <small>{prereq.purpose}{prereq.present&&prereq.path ? t("Settings.2d31151b5f", { path: prereq.path }) : ''}</small>
               {/* Three states, three sentences. Telling someone to install what
                   they already have is the failure this replaced. */}
-              {prereq.state==='off_path'&&<small class="settings-inline-error">{prereq.path_remedy}</small>}
-              {prereq.state==='missing'&&<small><code>{prereq.install_command}</code> · <a href={prereq.download_url} target="_blank" rel="noreferrer">download</a></small>}
-              <label class="check"><span>Path override</span><input type="text" placeholder="leave empty to detect automatically" value={draft.tool_paths?.[prereq.id]??''} onChange={e=>setToolPath(prereq.id,e.currentTarget.value)} /><small>An absolute path to the executable. Used ahead of PATH, and saved with the rest of Settings.</small></label>
-            </li>)}</ul></div>
-            :<p>Prerequisite status is unavailable.</p>}
+              {prereq.state==='off_path' && <small class="settings-inline-error">{prereq.path_remedy}</small>}
+              {prereq.state==='missing' && <small><code>{prereq.install_command}</code> · <a href={prereq.download_url} target="_blank" rel="noreferrer">{t("Settings.68ff63fb82")}</a></small>}
+              <label class="check"><span>{t("Settings.94c01d6425")}</span><input type="text" placeholder={t("Settings.a4a5659f66")} value={draft.tool_paths?.[prereq.id]??''} onChange={e=>setToolPath(prereq.id,e.currentTarget.value)} /><small>{t("Settings.a485cc349e")}</small></label>
+            </li>)}</ul></div> : <p>{t("Settings.5cdbf06792")}</p>}
           </section>
 
           {/* The cheap version of a whole-app update, which is why it sits between
@@ -2780,64 +2767,62 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               tree is a few megabytes of the ~370 MB a bundle swap rewrites.
               Hidden entirely until an overlay exists - an empty panel explaining a
               mechanism nobody is using is noise. */}
-          {shouldShowOverlaySection(overlayStatus)&&<section data-section="frontend-overlay"><h3>Frontend overlay</h3>
-          <p>A hash-verified copy of the UI in the data directory, served instead of the one built into this app. It carries a compatibility pin, so an overlay built for another version is refused rather than served, and an app update always supersedes it.</p>
-          <p class={overlayStatus?.serving?.faulted?'settings-inline-error':''} aria-live="polite">{overlaySummary||' '}</p>
-          {overlayInstalled&&<p class="profile-hint">Installed {overlayInstalled}{overlayStatus?.state?.requires_backend?`, pinned to swe-mux ${overlayStatus.state.requires_backend}`:''}.</p>}
-          {overlayStatus?.state?.installed_from&&<p class="profile-hint">From <code>{overlayStatus.state.installed_from}</code>.</p>}
-          <label class="check" data-setting="frontend_overlay_enabled"><span>Allow frontend overlays</span><input type="checkbox" checked={draft.frontend_overlay_enabled} onChange={e=>change('frontend_overlay_enabled',e.currentTarget.checked)}/><small>Off serves the built-in frontend without uninstalling anything.</small></label>
+          {shouldShowOverlaySection(overlayStatus) && <section data-section="frontend-overlay"><h3 data-heading-message="Settings.d77f40d58d">{t("Settings.d77f40d58d")}</h3>
+          <p>{t("Settings.c1817945a6")}</p>
+          <p class={overlayStatus?.serving?.faulted?'settings-inline-error':''} aria-live="polite">{overlaySummary || ' '}</p>
+          {overlayInstalled && <p class="profile-hint">{rich("Settings.2ac78ac747", { overlayInstalled: overlayInstalled, value2: overlayStatus?.state?.requires_backend ? t("Settings.25d91a5442", { requires_backend: overlayStatus.state.requires_backend }) : '' })}</p>}
+          {overlayStatus?.state?.installed_from && <p class="profile-hint">{rich("Settings.3079da5837", { value1: <code>{overlayStatus.state.installed_from}</code> })}</p>}
+          <label class="check" data-setting="frontend_overlay_enabled"><span>{t("Settings.74a527cd05")}</span><input type="checkbox" checked={draft.frontend_overlay_enabled} onChange={e=>change('frontend_overlay_enabled',e.currentTarget.checked)}/><small>{t("Settings.0e159d5ea7")}</small></label>
           <div class="settings-config-actions"><div>
-            <p class="profile-hint">Reverting switches the overlay off and leaves its files in place, so restoring it is the same press in reverse. Either takes effect at the next daemon restart.</p>
+            <p class="profile-hint">{t("Settings.29c23dbb5c")}</p>
           </div>
             <div>
-              {overlayStatus?.active
-                ?<button disabled={overlayBusy} onClick={()=>void overlayPress(revertOverlay)}>{overlayBusy?'Working…':'Revert to bundled frontend'}</button>
-                :<button disabled={overlayBusy||!overlayStatus?.can_restore} onClick={()=>void overlayPress(restoreOverlay)}>{overlayBusy?'Working…':'Use the overlay again'}</button>}
-              <button disabled={!appCommand('daemon.reload')} onClick={()=>runAppCommand('daemon.reload')}>Reload daemon (keep sessions)</button>
+              {overlayStatus?.active ? <button disabled={overlayBusy} onClick={()=>void overlayPress(revertOverlay)}>{overlayBusy ? t("Settings.5474eef8d0") : t("Settings.66f746259c")}</button> : <button disabled={overlayBusy||!overlayStatus?.can_restore} onClick={()=>void overlayPress(restoreOverlay)}>{overlayBusy ? t("Settings.5474eef8d0") : t("Settings.dab6a71282")}</button>}
+              <button disabled={!appCommand('daemon.reload')} onClick={()=>runAppCommand('daemon.reload')}>{t("Settings.b12a0f8d97")}</button>
             </div>
           </div>
-          {overlayError&&<p class="settings-inline-error" aria-live="polite">{overlayError}</p>}
+          {overlayError && <p class="settings-inline-error" aria-live="polite">{overlayError}</p>}
           </section>}
 
           {/* The same three commands the app menu carries, reachable from Settings
               because this is where you already are when a change has not appeared.
               Each is session-preserving: none of them reaps a live agent or terminal. */}
-          <section><h3>Rebuild and reload</h3>
-          <div class="settings-config-actions"><div><p>Every one of these keeps live sessions. <strong>Reload UI</strong> refreshes the page, <strong>Reload daemon</strong> restarts the backend, <strong>Rebuild + redeploy</strong> updates the frozen desktop app.</p></div>
+          <section><h3 data-heading-message="Settings.6e3a8d0788">{t("Settings.6e3a8d0788")}</h3>
+          <div class="settings-config-actions"><div><p>{rich("Settings.3b08d15313", { value1: <strong>{t("Settings.e71a8b379c")}</strong>, value2: <strong>{t("Settings.6e1cbd000b")}</strong>, value3: <strong>{t("Settings.9561c11798")}</strong> })}</p></div>
             <div>
-              <button disabled={!appCommand('ui.reload')} onClick={()=>runAppCommand('ui.reload')}>Reload UI</button>
-              <button disabled={!appCommand('daemon.reload')} onClick={()=>runAppCommand('daemon.reload')}>Reload daemon (keep sessions)</button>
-              <button disabled={!appCommand('app.redeploy')} onClick={()=>runAppCommand('app.redeploy')}>Rebuild + redeploy app</button>
+              <button disabled={!appCommand('ui.reload')} onClick={()=>runAppCommand('ui.reload')}>{t("Settings.e71a8b379c")}</button>
+              <button disabled={!appCommand('daemon.reload')} onClick={()=>runAppCommand('daemon.reload')}>{t("Settings.b12a0f8d97")}</button>
+              <button disabled={!appCommand('app.redeploy')} onClick={()=>runAppCommand('app.redeploy')}>{t("Settings.84ab91dbd0")}</button>
             </div>
           </div>
           </section>
 
           {/* Beside the bundle rather than under Processes: this is what decides how
               much the log that ends up in that bundle actually says. */}
-          <section><h3>Logging</h3>
-          <p>Sets the daemon log and console level immediately. Use <code>DEBUG</code> before reproducing a problem for export.</p>
-          <label data-setting="log_level">Daemon log level<Dropdown value={draft.log_level} onChange={value=>change('log_level',value as Config['log_level'])} options={[
-            {value:'DEBUG',label:'DEBUG · everything, including per-request detail'},
-            {value:'INFO',label:'INFO · the default'},
-            {value:'WARNING',label:'WARNING'},
-            {value:'ERROR',label:'ERROR'},
-          ]}/><small><code>DEBUG</code> is verbose enough to rotate the log quickly on a busy fleet, so it is worth putting back afterwards.</small></label>
+          <section><h3 data-heading-message="Settings.d3ef01b4a9">{t("Settings.d3ef01b4a9")}</h3>
+          <p>{rich("Settings.c076417552", { value1: <code>{t("Settings.0ffd43f588")}</code> })}</p>
+          <label data-setting="log_level">{rich("Settings.0898c2473b", { value1: <Dropdown value={draft.log_level} onChange={value=>change('log_level',value as Config['log_level'])} options={[
+            {value:'DEBUG',get label() { return t("Settings.914c586e27") }},
+            {value:'INFO',get label() { return t("Settings.221cb5a321") }},
+            {value:'WARNING',get label() { return t("Settings.86f56fe822") }},
+            {value:'ERROR',get label() { return t("Settings.d98ee0e5f9") }},
+          ]}/>, value2: <small>{rich("Settings.73721ce857", { value1: <code>{t("Settings.0ffd43f588")}</code> })}</small> })}</label>
           </section>
 
           {/* Above Export diagnostics, because it is the same errand one step
               earlier: "collect a bundle" is what you do when you are going to ask
               somebody, and this is asking somebody. */}
-          {onLaunchConfigurator&&<section><h3>Ask an agent about this install</h3>
-          <p>Starts the default agent against swe-mux with its settings inventory, automation graph, and health report. Changes still require specific approval.</p>
-          <div class="theme-actions"><button class="primary" onClick={()=>{onClose();onLaunchConfigurator()}}>Launch the configurator</button></div>
-          <p class="profile-hint">Runs as an ordinary session in the current Project. Which agent it uses is Harnesses → Default harness.</p>
+          {onLaunchConfigurator && <section><h3 data-heading-message="Settings.9e252559e7">{t("Settings.9e252559e7")}</h3>
+          <p>{t("Settings.e608f47623")}</p>
+          <div class="theme-actions"><button class="primary" onClick={()=>{onClose();onLaunchConfigurator()}}>{t("Settings.fca2999d30")}</button></div>
+          <p class="profile-hint">{t("Settings.4ec9cb75dd")}</p>
           </section>}
 
-          <section><h3>Export diagnostics</h3>
-          <p>Exports connection state, firewall status, counters, sanitized config, and recent logs. Secrets are omitted.</p>
-          <div class="theme-actions"><button class="primary" disabled={diagnosticsBusy} onClick={()=>void exportDiagnostics()}>{diagnosticsBusy?'Collecting…':'Export diagnostics'}</button></div>
-          {diagnosticsMessage&&<p aria-live="polite">{diagnosticsMessage}</p>}
-          {diagnosticsText&&<label>Diagnostics bundle<textarea readOnly rows={10} value={diagnosticsText} onClick={event=>event.currentTarget.select()} /></label>}
+          <section><h3 data-heading-message="Settings.b4205182f0">{t("Settings.b4205182f0")}</h3>
+          <p>{t("Settings.d5c754ab15")}</p>
+          <div class="theme-actions"><button class="primary" disabled={diagnosticsBusy} onClick={()=>void exportDiagnostics()}>{diagnosticsBusy ? t("Settings.3c0e2e7dd7") : t("Settings.b4205182f0")}</button></div>
+          {diagnosticsMessage && <p aria-live="polite">{diagnosticsMessage}</p>}
+          {diagnosticsText && <label>{rich("Settings.08b8bd7d04", { value1: <textarea readOnly rows={10} value={diagnosticsText} onClick={event=>event.currentTarget.select()} /> })}</label>}
           </section>
 
           {/* Last on the tab, and the only control here that destroys anything.
@@ -2845,62 +2830,57 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               this is the way to stop having it. The dialog does the explaining -
               this section is deliberately short, because a wall of warnings
               beside the button is read as decoration. */}
-          <section data-section="factory-reset"><h3>Factory reset</h3>
-          <p>Returns swe-mux to a fresh install: configuration, Projects, history, the database,
-            notes, prompts, plugins and stored credentials are moved out of the data directory,
-            and the app comes back on the first-run setup with nothing carried over.</p>
-          <p class="profile-hint">Files inside your repositories are never touched, worktree
-            checkouts are left where they are, and nothing is deleted - the old install is moved
-            into the data directory's <code>.trash</code> folder. <strong>Every live session is
-            terminated</strong>, so stop anything mid-run first.</p>
-          <div class="theme-actions"><button class="danger" onClick={()=>setFactoryResetOpen(true)}>Factory reset…</button></div>
+          <section data-section="factory-reset"><h3 data-heading-message="Settings.46a0b85a51">{t("Settings.46a0b85a51")}</h3>
+          <p>{t("Settings.4b8c2a87cf")}</p>
+          <p class="profile-hint">{rich("Settings.cf6794d265", { value1: <code>{t("Settings.e46d8b606c")}</code>, value2: <strong>{t("Settings.30fc04c0e1")}</strong> })}</p>
+          <div class="theme-actions"><button class="danger" onClick={()=>setFactoryResetOpen(true)}>{t("Settings.8f6bc9df7a")}</button></div>
           </section>
-          {factoryResetOpen&&<FactoryResetDialog onClose={()=>setFactoryResetOpen(false)}/>}
+          {factoryResetOpen && <FactoryResetDialog onClose={()=>setFactoryResetOpen(false)}/>}
         </Fragment>}
 
-        {activeTab==='appearance'&&<Fragment><DeviceModeSetting /><section><h3>Theme</h3>
+        {activeTab==='appearance' && <Fragment><DeviceModeSetting /><section><h3 data-heading-message="heading.efb52e7172">{t("heading.efb52e7172")}</h3>
           <div class="theme-field">
-            <span>Theme</span>
+            <span>{t("heading.efb52e7172")}</span>
             <ThemePicker value={draft.theme} customTheme={draft.custom_theme} open={themePickerOpen} onOpenChange={setThemePickerOpen} onChange={value=>{change('theme',value);applyTheme(value)}} onPreview={previewTheme} />
           </div>
           {draft.theme==='custom' && <div class="theme-tokens">{Object.entries(draft.custom_theme).map(([key,value])=><label>{key}<input value={value} onInput={e=>{const custom={...draft.custom_theme,[key]:e.currentTarget.value};change('custom_theme',custom);configureCustomTheme(custom);applyTheme('custom')}} /></label>)}</div>}
           <input class="file-input" ref={themeFile} type="file" accept="application/json" onChange={e=>void importTheme(e.currentTarget.files?.[0])} />
-          <div class="theme-actions"><button onClick={()=>themeFile.current?.click()}>Import theme</button><button onClick={exportTheme}>Export theme</button></div>
-          <p>Settings, menus, controls, and terminal chrome use the same monospace font token.</p>
-          </section><section><h3>Terminal font</h3>
-          <label data-setting="terminal_font_family">Font family<input value={draft.terminal_font_family} maxLength={TERMINAL_FONT_FAMILY_MAX_CHARS} placeholder={`default: ${DEFAULT_TERMINAL_FONT_FAMILIES.join(', ')}`} spellcheck={false} onInput={e=>change('terminal_font_family',e.currentTarget.value)}/></label>
+          <div class="theme-actions"><button onClick={()=>themeFile.current?.click()}>{t("Settings.f9cc639285")}</button><button onClick={exportTheme}>{t("Settings.575ade1ff4")}</button></div>
+          <p>{t("Settings.bcb3a1163c")}</p>
+          </section><section><h3 data-heading-message="heading.c70da52b01">{t("heading.c70da52b01")}</h3>
+          <label data-setting="terminal_font_family">{rich("Settings.6d0716a233", { value1: <input value={draft.terminal_font_family} maxLength={TERMINAL_FONT_FAMILY_MAX_CHARS} placeholder={t("Settings.227958e927", { value1: DEFAULT_TERMINAL_FONT_FAMILIES.join(', ') })} spellcheck={false} onInput={e=>change('terminal_font_family',e.currentTarget.value)}/> })}</label>
           <TerminalFontAvailability family={draft.terminal_font_family} />
-          <p>A font installed on the device viewing the terminal, such as <code>JetBrainsMono Nerd Font</code>; a Nerd Font supplies the icons prompt themes and agent CLIs draw. Blank keeps the default, and whatever you enter falls back to it. Saving re-fits every open terminal in place.</p>
+          <p>{rich("Settings.cd14ff0297", { value1: <code>{t("Settings.56d61d7bc8")}</code> })}</p>
           </section><section><SessionRowSettings /></section><section><SessionTopbarSettings /></section><section>
-          <h3>Right sidebar</h3>
-          <label>Drawer tabs<Dropdown value={draft.drawer_tab_display} onChange={value=>change('drawer_tab_display',value as Config['drawer_tab_display'])} options={[{value:'icon',label:'Icons'},{value:'title',label:'Titles'}]}/></label>
-          <label>Right rail<Dropdown value={draft.utility_rail_display} onChange={value=>change('utility_rail_display',value as Config['utility_rail_display'])} options={[{value:'icon',label:'Icons'},{value:'title',label:'Titles'}]}/></label>
-          <div class="drawer-tab-visibility" role="group" aria-label="Visible side panels">{DRAWER_TABS.map(tab=>{
+          <h3 data-heading-message="heading.14721e2ef2">{t("heading.14721e2ef2")}</h3>
+          <label>{rich("Settings.5234b067b5", { value1: <Dropdown value={draft.drawer_tab_display} onChange={value=>change('drawer_tab_display',value as Config['drawer_tab_display'])} options={[{value:'icon',get label() { return t("Settings.eae96e02bb") }},{value:'title',get label() { return t("Settings.3b23a123fa") }}]}/> })}</label>
+          <label>{rich("Settings.8081e3347f", { value1: <Dropdown value={draft.utility_rail_display} onChange={value=>change('utility_rail_display',value as Config['utility_rail_display'])} options={[{value:'icon',get label() { return t("Settings.eae96e02bb") }},{value:'title',get label() { return t("Settings.3b23a123fa") }}]}/> })}</label>
+          <div class="drawer-tab-visibility" role="group" aria-label={t("Settings.bbd666e760")}>{DRAWER_TABS.map(tab=>{
             const shown=!drawerHiddenTabs.includes(tab.id)
             const blocked=shown&&!canHideDrawerTab(drawerHiddenTabs,tab.id)
-            return <label key={tab.id} title={blocked?'The side panel must keep at least one tab.':tab.title}>
+            return <label key={tab.id} title={blocked ? t("Settings.f7f20aa575") : tab.title}>
               <input type="checkbox" checked={shown} disabled={blocked||!onDrawerTabHidden} onChange={()=>onDrawerTabHidden?.(tab.id,shown)} />
               <span>{tab.label}</span>
             </label>
           })}</div>
-          <div class="theme-actions"><button disabled={!drawerHiddenTabs.length||!onShowAllDrawerTabs} onClick={()=>onShowAllDrawerTabs?.()}>Show all panels</button></div>
-          <p>Unchecked panels leave the tab strips and the rail without losing their arrangement; commands and menus can still open them. Stored on this device.</p>
-          </section><section><h3>Interface scale</h3>
-          <label>Desktop interface scale<Dropdown value={String(draft.ui_scale_desktop)} onChange={value=>changeUiScale('ui_scale_desktop',value)} options={UI_SCALE_STEPS.map(step=>({value:String(step),label:uiScaleLabel(step)}))}/></label>
-          <label>Mobile interface scale<Dropdown value={String(draft.ui_scale_mobile)} onChange={value=>changeUiScale('ui_scale_mobile',value)} options={UI_SCALE_STEPS.map(step=>({value:String(step),label:uiScaleLabel(step)}))}/></label>
-          <p class="settings-scale-active">This window is using the <strong>{currentProfile()==='mobile'?'mobile':'desktop'}</strong> value — the other one will not change anything you can see from here.</p>
-          <p><kbd>Ctrl</kbd>+wheel, <kbd>Ctrl</kbd>+<kbd>+</kbd>/<kbd>-</kbd>, and <kbd>Ctrl</kbd>+<kbd>0</kbd> also drive the active value. The terminal's font family is under <strong>Terminal font</strong> on this tab; the note editor keeps its own typography under <strong>Notes</strong>.</p>
+          <div class="theme-actions"><button disabled={!drawerHiddenTabs.length||!onShowAllDrawerTabs} onClick={()=>onShowAllDrawerTabs?.()}>{t("Settings.421d20a7d2")}</button></div>
+          <p>{t("Settings.2c9f742f6e")}</p>
+          </section><section><h3 data-heading-message="heading.6ba5218d81">{t("heading.6ba5218d81")}</h3>
+          <label>{rich("Settings.3ac388f04e", { value1: <Dropdown value={String(draft.ui_scale_desktop)} onChange={value=>changeUiScale('ui_scale_desktop',value)} options={UI_SCALE_STEPS.map(step=>({value:String(step),label:uiScaleLabel(step)}))}/> })}</label>
+          <label>{rich("Settings.f0b81573e6", { value1: <Dropdown value={String(draft.ui_scale_mobile)} onChange={value=>changeUiScale('ui_scale_mobile',value)} options={UI_SCALE_STEPS.map(step=>({value:String(step),label:uiScaleLabel(step)}))}/> })}</label>
+          <p class="settings-scale-active">{rich("Settings.30005ce0e1", { value1: <strong>{currentProfile()==='mobile' ? t("Settings.d524c1a081") : t("Settings.68693d02ab")}</strong> })}</p>
+          <p>{rich("Settings.46f97430b4", { value1: <kbd>{t("Settings.e2ee2909fe")}</kbd>, value2: <kbd>{t("Settings.e2ee2909fe")}</kbd>, value3: <kbd>+</kbd>, value4: <kbd>-</kbd>, value5: <kbd>{t("Settings.e2ee2909fe")}</kbd>, value6: <kbd>0</kbd>, value7: <strong>{t("heading.c70da52b01")}</strong>, value8: <strong>{t("Settings.8a7525b149")}</strong> })}</p>
           </section></Fragment>}
 
-        {activeTab==='actions'&&<Fragment><section><h3>Action rail</h3>
-          <label class="check" data-setting="rail_enabled_desktop"><span>Show the rail on desktop</span><input type="checkbox" checked={draft.rail_enabled_desktop} onChange={e=>change('rail_enabled_desktop',e.currentTarget.checked)} /></label>
-          <label class="check" data-setting="rail_enabled_mobile"><span>Show the rail on mobile</span><input type="checkbox" checked={draft.rail_enabled_mobile} onChange={e=>change('rail_enabled_mobile',e.currentTarget.checked)} /></label>
-          <p>The row of keys and actions under each terminal. Turning a device class off hides the whole rail there — on mobile that includes the pinned Send button — while your configured layout is kept and comes back untouched.</p>
-          <label class="check" data-setting="rail_hover_desktop"><span>Only show the desktop rail on hover</span><input type="checkbox" checked={draft.rail_hover_desktop} disabled={!draft.rail_enabled_desktop} onChange={e=>change('rail_hover_desktop',e.currentTarget.checked)} /></label>
-          <p>The terminal takes the rows the rail used to occupy, and the rail slides up over the bottom of the terminal while the mouse is there. It stays up while one of its panels is open - the complete-row popover, a drop-up, a pad's dial, arranging - and while a chip has keyboard focus. Right-click the rail to toggle this without opening Settings. Desktop only: a phone has nothing to hover with.</p>
-          <label data-setting="rail_density_desktop">Desktop rail density<Dropdown value={draft.rail_density_desktop} onChange={value=>changeRailDensity('rail_density_desktop',value)} options={RAIL_DENSITIES.map(step=>({value:step,label:railDensityLabel(step)}))}/></label>
-          <label data-setting="rail_density_mobile">Mobile rail density<Dropdown value={draft.rail_density_mobile} onChange={value=>changeRailDensity('rail_density_mobile',value)} options={RAIL_DENSITIES.map(step=>({value:step,label:railDensityLabel(step)}))}/></label>
-          <p>How tightly the Action rail under each terminal packs its buttons. Below Comfortable, a phone's buttons drop under the 44px touch target, which is why the two devices are set separately.</p></section><section><h3>Action layout</h3><ActionEditorPanel projectId={focusedProjectId}/></section></Fragment>}
+        {activeTab==='actions' && <Fragment><section><h3 data-heading-message="Settings.f73cf84043">{t("Settings.f73cf84043")}</h3>
+          <label class="check" data-setting="rail_enabled_desktop"><span>{t("Settings.e04b865f75")}</span><input type="checkbox" checked={draft.rail_enabled_desktop} onChange={e=>change('rail_enabled_desktop',e.currentTarget.checked)} /></label>
+          <label class="check" data-setting="rail_enabled_mobile"><span>{t("Settings.38748adfc7")}</span><input type="checkbox" checked={draft.rail_enabled_mobile} onChange={e=>change('rail_enabled_mobile',e.currentTarget.checked)} /></label>
+          <p>{t("Settings.d8236f10f4")}</p>
+          <label class="check" data-setting="rail_hover_desktop"><span>{t("Settings.641b0f9dca")}</span><input type="checkbox" checked={draft.rail_hover_desktop} disabled={!draft.rail_enabled_desktop} onChange={e=>change('rail_hover_desktop',e.currentTarget.checked)} /></label>
+          <p>{t("Settings.1d11026ad3")}</p>
+          <label data-setting="rail_density_desktop">{rich("Settings.657b201d12", { value1: <Dropdown value={draft.rail_density_desktop} onChange={value=>changeRailDensity('rail_density_desktop',value)} options={RAIL_DENSITIES.map(step=>({value:step,label:railDensityLabel(step)}))}/> })}</label>
+          <label data-setting="rail_density_mobile">{rich("Settings.9b8bca40cf", { value1: <Dropdown value={draft.rail_density_mobile} onChange={value=>changeRailDensity('rail_density_mobile',value)} options={RAIL_DENSITIES.map(step=>({value:step,label:railDensityLabel(step)}))}/> })}</label>
+          <p>{t("Settings.24a536f5b0")}</p></section><section><h3 data-heading-message="Settings.36c88395a3">{t("Settings.36c88395a3")}</h3><ActionEditorPanel projectId={focusedProjectId}/></section></Fragment>}
   </Fragment>
 
   // Built here rather than beside the sidebar because it needs `tabContent`, and built
@@ -2914,11 +2894,18 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   // are the two largest — Voice's command reference and Accounts' model routing — so
   // the preview costs less than a search does for the same reason it is affordable
   // at all.
+  const localizationKey=uiLocale.value+':'+catalogRevision.value
+  if(localizationCache.current!==localizationKey){
+    localizationCache.current=localizationKey
+    railPreview.current=null
+    searchIndex.current=null
+    liveTabEntries.clear()
+  }
   if(!railPreview.current){
     const preview=new Map<SettingsTab,SettingsRailSection[]>()
     for(const tab of settingsTabs){
       if(settingsSubpages[tab.id])continue
-      try{preview.set(tab.id,railSectionIds(harvestHeadings(tabContent(tab.id))))}
+      try{const content=tabContent(tab.id);preview.set(tab.id,railSectionIds(harvestHeadings(content),harvestHeadings(content,'h3',true)))}
       catch{preview.set(tab.id,[])}
     }
     railPreview.current=preview
@@ -2937,7 +2924,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     // reference, not markup. Those harvests are kept for the page session, so a
     // tab reached once stays fully searchable from every other tab afterwards.
     const mounted=panel.current?.querySelectorAll('.settings-content > *:not(.settings-errors)')
-    if(mounted?.length){
+    if(mounted?.length&&contentEl()?.dataset.uiLocale===uiLocale.value){
       const index=settingsTabs.findIndex(tab=>tab.id===activeTab)
       const label=settingsTabs[index]?.label||activeTab
       liveTabEntries.set(activeTab,[...mounted].flatMap(node=>harvestSettings(domVNode(node),activeTab,label,index)))
@@ -2966,7 +2953,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const openShortcuts=()=>{
     const shortcuts=searchIndex.current?.entries.find(entry=>entry.tab==='input'&&entry.kind==='section'&&entry.key==='keyboard shortcuts')
     const inputIndex=settingsTabs.findIndex(tab=>tab.id==='input')
-    const heading=shortcuts||{...tabEntry('input','Input',inputIndex),label:'Keyboard shortcuts',key:'keyboard shortcuts'}
+    const heading=shortcuts||{...tabEntry('input','Input',inputIndex),get label() { return t("heading.e9bef0b0f3") },key:'keyboard shortcuts'}
     const filter=query.trim()
     openResult(heading)
     setShortcutQuery(filter)
@@ -2984,25 +2971,25 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   // One search box, drawn in the place each layout reads first: inline in the header on
   // a phone, above the section list on a desktop — beside the navigation it drives.
   const searchBox = <div class="settings-search">
-    <input ref={searchInput} type="search" value={query} placeholder="Search settings…" aria-label="Search settings" role="combobox" aria-expanded={resultCount>0} aria-controls="settings-search-results" autocomplete="off" spellcheck={false} onInput={event=>{setQuery(event.currentTarget.value);setHighlight(0)}} onKeyDown={onSearchKey} />
-    {!!query.trim()&&<div id="settings-search-results" class="settings-search-results" role="listbox" aria-label="Search results">
+    <input ref={searchInput} type="search" value={query} placeholder={t("Settings.57054c5a04")} aria-label={t("Settings.255b076dd8")} role="combobox" aria-expanded={resultCount>0} aria-controls="settings-search-results" autocomplete="off" spellcheck={false} onInput={event=>{setQuery(event.currentTarget.value);setHighlight(0)}} onKeyDown={onSearchKey} />
+    {!!query.trim() && <div id="settings-search-results" class="settings-search-results" role="listbox" aria-label={t("Settings.e978b00de4")}>
       {searchResults.map((entry,index)=><button type="button" role="option" aria-selected={index===activeResult} class={index===activeResult?'active':''} key={`${entry.tab}:${entry.kind}:${entry.key}:${entry.occurrence}`} onPointerDown={event=>event.preventDefault()} onClick={()=>openResult(entry)}><strong>{entry.label}</strong><small>{settingsBreadcrumb(entry.tab as SettingsTab,entry.tabLabel,entry.path)}</small></button>)}
-      {!!shortcutHits&&<button type="button" role="option" aria-selected={activeResult===searchResults.length} class={`settings-search-handoff${activeResult===searchResults.length?' active':''}`} key="keyboard-shortcuts" onPointerDown={event=>event.preventDefault()} onClick={openShortcuts}><strong>Keyboard shortcuts matching “{query.trim()}”</strong><small>Input · Keyboard shortcuts · {shortcutHits} command{shortcutHits===1?'':'s'}</small></button>}
-      {!resultCount&&<p>No setting matches “{query.trim()}”.</p>}
+      {!!shortcutHits && <button type="button" role="option" aria-selected={activeResult===searchResults.length} class={`settings-search-handoff${activeResult===searchResults.length?' active':''}`} key="keyboard-shortcuts" onPointerDown={event=>event.preventDefault()} onClick={openShortcuts}><strong>{rich("Settings.52c56456c4", { value1: query.trim() })}</strong><small>{rich("Settings.6309326206", { shortcutHits: shortcutHits, value2: (shortcutHits===1) ? 'yes' : 'no' })}</small></button>}
+      {!resultCount && <p>{rich("Settings.6422f95e3b", { value1: query.trim() })}</p>}
     </div>}
   </div>
-  return <div class="settings-layer" onMouseDown={event=>event.target===event.currentTarget&&requestClose()}><section class="settings-panel" ref={panel} role="dialog" aria-modal={!closeIntent&&!resetIntent} aria-hidden={Boolean(closeIntent||resetIntent)} aria-label="Settings">
+  return <div class="settings-layer" onMouseDown={event=>event.target===event.currentTarget&&requestClose()}><section class="settings-panel" ref={panel} role="dialog" aria-modal={!closeIntent&&!resetIntent} aria-hidden={Boolean(closeIntent||resetIntent)} aria-label={t("Settings.74a883a037")}>
     <header>{navTrigger}{heading}
-      {narrow&&searchBox}
-      <button class="settings-close" aria-label="Close Settings" onClick={()=>requestClose()}>×</button></header>
-    {!!query.trim()&&<div class="settings-search-scrim" onPointerDown={()=>setQuery('')} />}
+      {narrow && searchBox}
+      <button class="settings-close" aria-label={t("Settings.2da15e4dad")} onClick={()=>requestClose()}>×</button></header>
+    {!!query.trim() && <div class="settings-search-scrim" onPointerDown={()=>setQuery('')} />}
     <main class="settings-body">
-      {narrow?renderTabNav(railPreview.current):<div class="settings-nav-col">{searchBox}{renderTabNav(railPreview.current)}</div>}
+      {narrow ? renderTabNav(railPreview.current) : <div class="settings-nav-col">{searchBox}{renderTabNav(railPreview.current)}</div>}
       {/* Which tab this DOM belongs to, so a heading read cannot attribute it to another.
           The observer that drives that read fires on the commit that swaps tabs, while the
           effect holding the previous tab's id is still the one registered. */}
-      <div class="settings-content" data-settings-tab={activeTab}>
-        {Object.keys(errors).length > 0 && <section class="settings-errors" aria-live="assertive"><h3>Validation errors</h3>{Object.entries(errors).map(([field,message])=><p><strong>{field}</strong> — {message}</p>)}</section>}
+      <div class="settings-content" data-settings-tab={activeTab} data-ui-locale={uiLocale.value}>
+        {Object.keys(errors).length > 0 && <section class="settings-errors" aria-live="assertive"><h3 data-heading-message="Settings.b81f8fe779">{t("Settings.b81f8fe779")}</h3>{Object.entries(errors).map(([field,message])=><p><strong>{field}</strong> — {message}</p>)}</section>}
 
         {tabContent(activeTab)}
       </div>
@@ -3012,20 +2999,20 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
         the draft is still dirty after a failure, so the honest status was replaced by
         "unsaved changes" and only the errors block said what happened. A write in flight,
         or one that failed, has something to say that the hint does not. */}
-    <footer><span aria-live="polite">{writeBusy||writeFailed?status:dirty?'unsaved changes':status}</span><button onClick={()=>requestClose()}>Cancel</button><button class={`primary${dirty?' unsaved':''}`} disabled={!dirty||writeBusy} onClick={()=>void save()}>{status===SAVING?'Saving…':dirty?'Save changes':'Saved'}</button></footer>
+    <footer><span aria-live="polite">{writeBusy||writeFailed ? status : dirty ? t("Settings.c4751a7ab8") : status}</span><button onClick={()=>requestClose()}>{t("Settings.19766ed6cc")}</button><button class={`primary${dirty?' unsaved':''}`} disabled={!dirty||writeBusy} onClick={()=>void save()}>{status===SAVING ? t("Settings.23e39291d6") : dirty ? t("Settings.dd0ae7a5cb") : t("Settings.b5c120b316")}</button></footer>
   </section>
-  {closeIntent&&<div class="modal-layer settings-confirm-layer" onMouseDown={event=>event.target===event.currentTarget&&setCloseIntent(null)}>
-    <section class="modal settings-confirm" ref={confirmPanel} role="alertdialog" aria-modal="true" aria-label="Unsaved settings" onMouseDown={event=>event.stopPropagation()}>
-      <div class="modal-heading"><div><span>SETTINGS::UNSAVED</span><h2>Save your changes?</h2></div><button aria-label="Keep editing" onClick={()=>setCloseIntent(null)}>×</button></div>
-      <div class="settings-confirm-body"><p>You have changes that have not been saved. Save them before leaving Settings, or discard them and restore the last saved configuration.</p></div>
-      <div class="modal-footer"><span>Settings stay open if saving fails.</span><button onClick={()=>setCloseIntent(null)}>Keep editing</button><button class="danger" onClick={discardAndLeave}>Discard</button><button class="primary" disabled={writeBusy} onClick={()=>void saveAndLeave()}>Save changes</button></div>
+  {closeIntent && <div class="modal-layer settings-confirm-layer" onMouseDown={event=>event.target===event.currentTarget&&setCloseIntent(null)}>
+    <section class="modal settings-confirm" ref={confirmPanel} role="alertdialog" aria-modal="true" aria-label={t("Settings.842e70aacb")} onMouseDown={event=>event.stopPropagation()}>
+      <div class="modal-heading"><div><span>{t("Settings.4c1795372c")}</span><h2 data-heading-message="Settings.56dd16e7b1">{t("Settings.56dd16e7b1")}</h2></div><button aria-label={t("Settings.e76fd2add0")} onClick={()=>setCloseIntent(null)}>×</button></div>
+      <div class="settings-confirm-body"><p>{t("Settings.77aee18f76")}</p></div>
+      <div class="modal-footer"><span>{t("Settings.623ab0c19d")}</span><button onClick={()=>setCloseIntent(null)}>{t("Settings.e76fd2add0")}</button><button class="danger" onClick={discardAndLeave}>{t("Settings.eb1a70e392")}</button><button class="primary" disabled={writeBusy} onClick={()=>void saveAndLeave()}>{t("Settings.dd0ae7a5cb")}</button></div>
     </section>
   </div>}
-  {resetIntent&&<div class="modal-layer settings-confirm-layer" onMouseDown={event=>event.target===event.currentTarget&&setResetIntent(false)}>
-    <section class="modal settings-confirm settings-reset-confirm" ref={resetPanel} role="alertdialog" aria-modal="true" aria-label="Restore default settings" onMouseDown={event=>event.stopPropagation()}>
-      <div class="modal-heading"><div><span>SETTINGS::RESTORE</span><h2>Restore every setting to its default?</h2></div><button aria-label="Keep current settings" onClick={()=>setResetIntent(false)}>×</button></div>
-      <div class="settings-confirm-body"><p>This rewrites the saved configuration in <code>{draft.data_dir}</code> immediately — it is not staged behind <em>Save changes</em>, it discards unsaved edits, and there is no undo. Keyboard shortcuts, Projects, and provider accounts are kept; everything on these tabs goes back to its default.</p></div>
-      <div class="modal-footer"><span>Nothing changes unless you confirm.</span><button onClick={()=>setResetIntent(false)}>Cancel</button><button class="danger" disabled={writeBusy} onClick={()=>void reset()}>Restore defaults</button></div>
+  {resetIntent && <div class="modal-layer settings-confirm-layer" onMouseDown={event=>event.target===event.currentTarget&&setResetIntent(false)}>
+    <section class="modal settings-confirm settings-reset-confirm" ref={resetPanel} role="alertdialog" aria-modal="true" aria-label={t("Settings.a3c85d9f8f")} onMouseDown={event=>event.stopPropagation()}>
+      <div class="modal-heading"><div><span>{t("Settings.7cb9a23a6d")}</span><h2 data-heading-message="Settings.e1f16d4544">{t("Settings.e1f16d4544")}</h2></div><button aria-label={t("Settings.dc5f190d4f")} onClick={()=>setResetIntent(false)}>×</button></div>
+      <div class="settings-confirm-body"><p>{rich("Settings.2bdc0490be", { value1: <code>{draft.data_dir}</code>, value2: <em>{t("Settings.dd0ae7a5cb")}</em> })}</p></div>
+      <div class="modal-footer"><span>{t("Settings.cea63d4e0b")}</span><button onClick={()=>setResetIntent(false)}>{t("Settings.19766ed6cc")}</button><button class="danger" disabled={writeBusy} onClick={()=>void reset()}>{t("Settings.602f8e6370")}</button></div>
     </section>
   </div>}
   </div>
@@ -3065,7 +3052,7 @@ function KokoroVoicePicker({voices,ready,selected,onSelect}:{
       audio.onended=()=>setPlaying(current=>current===voice?null:current)
       audio.onerror=()=>{
         setPlaying(current=>current===voice?null:current)
-        setError('The sample could not be played; is the Kokoro model downloaded?')
+        setError(t("Settings.f3cf34b408"))
       }
       await audio.play()
     }catch(cause){
@@ -3074,8 +3061,8 @@ function KokoroVoicePicker({voices,ready,selected,onSelect}:{
     }
   }
   return <div class="kokoro-voice-picker">
-    {!ready&&<p class="profile-hint">Download the Kokoro model below to audition voices; tapping still selects.</p>}
-    <div class="kokoro-voice-grid" role="listbox" aria-label="Kokoro voices">
+    {!ready && <p class="profile-hint">{t("Settings.afb1ca89ca")}</p>}
+    <div class="kokoro-voice-grid" role="listbox" aria-label={t("Settings.a0df974b18")}>
       {sortKokoroVoices(voices).map(voice=>{
         const label=kokoroVoiceLabel(voice)
         return <button
@@ -3084,15 +3071,15 @@ function KokoroVoicePicker({voices,ready,selected,onSelect}:{
           role="option"
           aria-selected={voice===selected}
           class={`kokoro-voice-chip${voice===selected?' selected':''}${playing===voice?' playing':''}`}
-          title={`${label.name} — ${label.flavor||voice}. Tap to hear a sample and select; Save commits.`}
+          title={t("Settings.ac4d44b4ae", { name: label.name, value2: label.flavor||voice })}
           onClick={()=>void audition(voice)}
         >
-          <strong>{playing===voice?'♪ ':''}{label.name}</strong>
-          <span>{label.flavor||voice}</span>
+          <strong>{playing===voice ? '♪ ' : ''}{label.name}</strong>
+          <span>{label.flavor || voice}</span>
         </button>
       })}
     </div>
-    {error&&<p class="assistant-error" role="alert">{error}</p>}
+    {error && <p class="assistant-error" role="alert">{error}</p>}
   </div>
 }
 
@@ -3107,9 +3094,9 @@ type DesktopIntegrationStatus = {
 }
 
 const SHORTCUT_SLOTS:{id:string;label:string;hint:string}[]=[
-  {id:'start-menu',label:'Start Menu',hint:'Findable by name, and immune to a PATH that is not set up'},
-  {id:'desktop',label:'Desktop icon',hint:'A shortcut on the desktop'},
-  {id:'startup',label:'Start with Windows',hint:'Starts minimised to the tray at sign-in, so the browser UI is always up'},
+  {id:'start-menu',get label() { return t("Settings.03029b0319") },get hint() { return t("Settings.eb22827454") }},
+  {id:'desktop',get label() { return t("Settings.1673f4411d") },get hint() { return t("Settings.178b7f5a03") }},
+  {id:'startup',get label() { return t("Settings.0bfcd9317d") },get hint() { return t("Settings.7b4095a1f8") }},
 ]
 
 /**
@@ -3155,33 +3142,31 @@ function DesktopIntegrationSection(){
       const body=remove?{remove:true}:{remove:false,slots:selected}
       const report=await api<{outcomes?:{slot:string;action:string}[];reason?:string;notes?:string[]}>('POST','/api/desktop/integration/shortcuts',body)
       const outcomes=(report.outcomes||[]).map(outcome=>`${outcome.slot}: ${outcome.action}`).join(' · ')
-      setNote([report.reason||outcomes||'Nothing to do.',...(report.notes||[])].join(' — '))
+      setNote([report.reason||outcomes||t("Settings.b6150a5c59"),...(report.notes||[])].join(' — '))
       load()
     }catch(cause){setNote(cause instanceof Error?cause.message:String(cause))}
     finally{setBusy(false)}
   }
   const shell=status.shell
-  return <section><h3>Desktop integration</h3>
-    <p>What the Windows installer sets up and a PyPI install can add later. A wheel cannot create a shortcut - there is no hook that runs after <code>pip</code> or <code>uv</code> writes its launchers - so this is the only place to ask for one.</p>
+  return <section><h3 data-heading-message="Settings.abb1f294e6">{t("Settings.abb1f294e6")}</h3>
+    <p>{rich("Settings.aa1b2246f7", { value1: <code>{t("Settings.fed5038bf2")}</code>, value2: <code>{t("Settings.e6184ce10e")}</code> })}</p>
     <div class="settings-tutorial-reset"><div>
-      <p>{present.length?`Present: ${present.join(', ')}.`:'None present.'} Removal always takes back all three, including a run-at-login entry from an earlier install.</p>
+      <p>{rich("Settings.a8e6ecbb14", { value1: present.length ? t("Settings.dff7f2dec0", { value1: present.join(', ') }) : t("Settings.2a67beb3f4") })}</p>
       {SHORTCUT_SLOTS.map(slot=>
         <label key={slot.id} class="check" data-slot={slot.id}>
           <span>{slot.label} <em>· {slot.hint}</em></span>
           <input type="checkbox" checked={!!chosen[slot.id]} disabled={busy}
             onChange={e=>setChosen({...chosen,[slot.id]:e.currentTarget.checked})}/>
         </label>)}
-      <p class="profile-hint">Start with Windows launches the tray hidden (<code>--hidden</code>); the tray menu has the same switch.</p>
+      <p class="profile-hint">{rich("Settings.dda5e96744", { value1: <code>{t("Settings.62e7f29f9e")}</code> })}</p>
     </div>
-      <div><button disabled={busy||!selected.length} onClick={()=>void applyShortcuts(false)}>Write selected</button><button disabled={busy} onClick={()=>void applyShortcuts(true)}>Remove all</button></div>
+      <div><button disabled={busy||!selected.length} onClick={()=>void applyShortcuts(false)}>{t("Settings.bf209e8494")}</button><button disabled={busy} onClick={()=>void applyShortcuts(true)}>{t("Settings.ef7b7e6abe")}</button></div>
     </div>
-    {shell&&(shell.importable
-      ?<p class="profile-hint"><span class="state-dot idle"/> Desktop shell::available{shell.frozen?' · this is the desktop app':' · start it with the swe-mux command'}</p>
-      :<div class="kokoro-model-panel">
-        <p aria-live="polite"><span class="state-dot stopped"/> Desktop shell::unavailable · this Python cannot import {shell.missing.join(', ')}</p>
-        <p class="profile-hint">These ship as ordinary dependencies of swe-mux on Windows, so this is an incomplete install rather than a missing option.{shell.reinstall_command?<> Reinstall with <code>{shell.reinstall_command}</code>.</>:' A frozen bundle has no installer to re-run; rebuild or reinstall the app.'}</p>
+    {shell && (shell.importable ? <p class="profile-hint">{rich("Settings.8c6dbc27bd", { value1: <span class="state-dot idle"/>, value2: (shell.frozen) ? 'yes' : 'no' })}</p> : <div class="kokoro-model-panel">
+        <p aria-live="polite">{rich("Settings.6bfba04360", { value1: <span class="state-dot stopped"/>, value2: shell.missing.join(', ') })}</p>
+        <p class="profile-hint">{rich("Settings.77c2a1e56f", { value1: shell.reinstall_command ? <>{rich("Settings.d4fa4e03fa", { value1: <code>{shell.reinstall_command}</code> })}</> : t("Settings.4a81626dd4") })}</p>
       </div>)}
-    {note&&<p class="profile-hint" role="status">{note}</p>}
+    {note && <p class="profile-hint" role="status">{note}</p>}
   </section>
 }
 
@@ -3238,7 +3223,7 @@ function TtsLexiconEditor({lexicon,spelled,onChange}:{
     setBuildError(null)
     try{
       const result=await api<{ok:boolean;value?:string|null;diagnostic?:string|null}>('POST','/api/voice/lexicon/build',{word,value})
-      if(!result.ok||!result.value){setBuildError(result.diagnostic||'Could not build a pronunciation from that spelling.');return null}
+      if(!result.ok||!result.value){setBuildError(result.diagnostic||t("Settings.97dbd398d6"));return null}
       return result.value
     }catch(cause){setBuildError(cause instanceof Error?cause.message:String(cause));return null}
   }
@@ -3256,32 +3241,32 @@ function TtsLexiconEditor({lexicon,spelled,onChange}:{
       return <Fragment key={word}>
         <div class="tts-lexicon-row">
           <code>{word}</code>
-          <input aria-label={`Pronunciation for ${word}`} value={spoken} onInput={e=>onChange({...lexicon,[word]:e.currentTarget.value})}/>
-          {state&&<span class={`tts-lexicon-verdict ${state.ok?'ok':'bad'}`} title={state.ok?(state.phonemes?`Speaks as written · ${state.phonemes}`:'Speaks as written'):'This respelling would be rejected and the word spelled out'}>{state.ok?'✓':'✗'}</span>}
-          {state&&!state.ok&&<button type="button" title="Build exact phonemes from this spelling" onClick={()=>void build(word,spoken).then(value=>{if(value)onChange({...lexicon,[word]:value})})}>✨</button>}
-          <button type="button" title="Hear this pronunciation" onClick={()=>hear(spoken)}>♪</button>
-          <button type="button" title={`Remove ${word}`} onClick={()=>{const next={...lexicon};delete next[word];onChange(next)}}>✕</button>
+          <input aria-label={t("Settings.5dd5b63e92", { word: word })} value={spoken} onInput={e=>onChange({...lexicon,[word]:e.currentTarget.value})}/>
+          {state && <span class={`tts-lexicon-verdict ${state.ok?'ok':'bad'}`} title={state.ok ? (state.phonemes ? t("Settings.587a1d9085", { phonemes: state.phonemes }) : t("Settings.dc586a1f6a")) : t("Settings.d6a7e802a6")}>{state.ok ? '✓' : '✗'}</span>}
+          {state&&!state.ok && <button type="button" title={t("Settings.1ab10bf2a9")} onClick={()=>void build(word,spoken).then(value=>{if(value)onChange({...lexicon,[word]:value})})}>✨</button>}
+          <button type="button" title={t("Settings.ad64ff185f")} onClick={()=>hear(spoken)}>♪</button>
+          <button type="button" title={t("Settings.3f854e61f6", { word: word })} onClick={()=>{const next={...lexicon};delete next[word];onChange(next)}}>✕</button>
         </div>
-        {state&&!state.ok&&<p class="tts-lexicon-hint">{state.unspeakable?.length?<>Not pronounceable: {state.unspeakable.map(piece=><code key={piece}>{piece}</code>)} — tap ✨ to build the exact phonemes from this spelling.</>:<>This respelling cannot be pronounced as written.</>}</p>}
+        {state&&!state.ok && <p class="tts-lexicon-hint">{state.unspeakable?.length ? <>{rich("Settings.945ff3fcb2", { value1: state.unspeakable.map(piece=><code key={piece}>{piece}</code>) })}</> : <>{t("Settings.70da5d612d")}</>}</p>}
       </Fragment>
     })}
     <div class="tts-lexicon-row">
-      <input placeholder="word" aria-label="New lexicon word" value={newWord} onInput={e=>setNewWord(e.currentTarget.value)}/>
-      <input placeholder="spoken as… e.g. vault spaces" aria-label="New lexicon pronunciation" value={newSpoken} onInput={e=>setNewSpoken(e.currentTarget.value)}/>
-      <button type="button" title="Build exact phonemes from the spelling (uses the word itself if blank)" disabled={!newWord.trim()&&!newSpoken.trim()} onClick={()=>void build(newWord,newSpoken).then(value=>{if(value)setNewSpoken(value)})}>✨</button>
-      <button type="button" title="Hear this pronunciation" disabled={!newSpoken.trim()} onClick={()=>hear(newSpoken)}>♪</button>
-      <button type="button" disabled={!newWord.trim()||!newSpoken.trim()} onClick={()=>{add(newWord,newSpoken);setNewWord('');setNewSpoken('')}}>Add</button>
+      <input placeholder={t("Settings.98c1eb4ee9")} aria-label={t("Settings.275229d9fa")} value={newWord} onInput={e=>setNewWord(e.currentTarget.value)}/>
+      <input placeholder={t("Settings.24f1b8254b")} aria-label={t("Settings.f30058f551")} value={newSpoken} onInput={e=>setNewSpoken(e.currentTarget.value)}/>
+      <button type="button" title={t("Settings.21c78f1d69")} disabled={!newWord.trim()&&!newSpoken.trim()} onClick={()=>void build(newWord,newSpoken).then(value=>{if(value)setNewSpoken(value)})}>✨</button>
+      <button type="button" title={t("Settings.ad64ff185f")} disabled={!newSpoken.trim()} onClick={()=>hear(newSpoken)}>♪</button>
+      <button type="button" disabled={!newWord.trim()||!newSpoken.trim()} onClick={()=>{add(newWord,newSpoken);setNewWord('');setNewSpoken('')}}>{t("Settings.9fd728c66c")}</button>
     </div>
-    {buildError&&<p class="tts-lexicon-hint tts-lexicon-error" role="alert">{buildError}</p>}
-    {check&&!check.available&&<p class="tts-lexicon-hint">{check.diagnostic||'Pronunciation checking needs the Kokoro model.'}</p>}
-    {!!pending.length&&<div class="tts-lexicon-spelled">
-      <h5>Words the voice had to spell out</h5>
+    {buildError && <p class="tts-lexicon-hint tts-lexicon-error" role="alert">{buildError}</p>}
+    {check&&!check.available && <p class="tts-lexicon-hint">{check.diagnostic || t("Settings.442a86ee10")}</p>}
+    {!!pending.length && <div class="tts-lexicon-spelled">
+      <h5 data-heading-message="Settings.0d11785a7f">{t("Settings.0d11785a7f")}</h5>
       {pending.map(item=><div class="tts-lexicon-row" key={item.word}>
         <code>{item.word}</code><small>×{item.count}</small>
-        <input placeholder="spoken as…" aria-label={`Respell ${item.word}`} value={respell[item.word]??''} onInput={e=>{const value=e.currentTarget.value;setRespell(current=>({...current,[item.word]:value}))}}/>
-        <button type="button" title="Build exact phonemes (from your spelling, or from the word itself if blank)" onClick={()=>void build(item.word,respell[item.word]||'').then(value=>{if(value)setRespell(current=>({...current,[item.word]:value}))})}>✨</button>
-        <button type="button" title="Hear this pronunciation" disabled={!(respell[item.word]||'').trim()} onClick={()=>hear(respell[item.word]||'')}>♪</button>
-        <button type="button" disabled={!(respell[item.word]||'').trim()} onClick={()=>add(item.word,respell[item.word]||'')}>Respell</button>
+        <input placeholder={t("Settings.bd8d2b7a80")} aria-label={t("Settings.78cdc43e57", { word: item.word })} value={respell[item.word]??''} onInput={e=>{const value=e.currentTarget.value;setRespell(current=>({...current,[item.word]:value}))}}/>
+        <button type="button" title={t("Settings.ffe04ba9ce")} onClick={()=>void build(item.word,respell[item.word]||'').then(value=>{if(value)setRespell(current=>({...current,[item.word]:value}))})}>✨</button>
+        <button type="button" title={t("Settings.ad64ff185f")} disabled={!(respell[item.word]||'').trim()} onClick={()=>hear(respell[item.word]||'')}>♪</button>
+        <button type="button" disabled={!(respell[item.word]||'').trim()} onClick={()=>add(item.word,respell[item.word]||'')}>{t("Settings.5f4ac9161a")}</button>
       </div>)}
     </div>}
   </div>

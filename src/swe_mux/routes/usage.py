@@ -25,6 +25,7 @@ from ..telemetry_queries import (
     TOOL_FILTER_COLUMNS,
     clean_filters,
 )
+from ..ui_messages import ui_message
 from ..usage import UsageManager
 from .support import _query_epoch
 
@@ -48,12 +49,12 @@ async def refresh_usage(request: web.Request) -> web.Response:
         try:
             body = await request.json()
         except json.JSONDecodeError:
-            raise ValueError("refresh body must be JSON") from None
+            raise ValueError(ui_message("usage.06970f5dc5")) from None
     if not isinstance(body, dict):
-        raise ValueError("refresh body must be a JSON object")
+        raise ValueError(ui_message("usage.3997315975"))
     mode = body.get("mode", "auto")
     if not isinstance(mode, str):
-        raise ValueError("mode must be a string")
+        raise ValueError(ui_message("usage.e539fee9c6"))
     snapshot = usage.start_refresh(mode)
     log.info(
         "usage refresh requested",
@@ -152,9 +153,7 @@ def _page_arguments(request: web.Request, kind: str) -> dict[str, Any]:
         )
     }
     filters = dict(scope["filters"])
-    filters.update(
-        clean_filters(extra, {*FILTER_COLUMNS, *PAGE_EXTRA_FILTERS.get(kind, ())})
-    )
+    filters.update(clean_filters(extra, {*FILTER_COLUMNS, *PAGE_EXTRA_FILTERS.get(kind, ())}))
     try:
         limit = int(request.query.get("limit", 100))
     except ValueError:
@@ -174,9 +173,7 @@ async def canonical_tool_summary(request: web.Request) -> web.Response:
     """Exact aggregate across every ledger segment in the requested window."""
 
     service = request.app[keys.CANONICAL_TELEMETRY]
-    result = await service.tool_summary(
-        **_canonical_scope(request, allowed=TOOL_FILTER_COLUMNS)
-    )
+    result = await service.tool_summary(**_canonical_scope(request, allowed=TOOL_FILTER_COLUMNS))
     result["collection"] = service.health()
     return json_response(result)
 
@@ -225,7 +222,8 @@ async def canonical_entity_page(request: web.Request) -> web.Response:
         await _name_telemetry_runs(request, result["items"])
         log.debug(
             "telemetry_run_page matching=%s returned=%s",
-            result["matching"], len(result["items"]),
+            result["matching"],
+            len(result["items"]),
         )
     return json_response(result)
 
@@ -278,9 +276,7 @@ async def canonical_run_audit(request: web.Request) -> web.Response:
 
 
 async def canonical_turn_audit(request: web.Request) -> web.Response:
-    result = await request.app[keys.CANONICAL_TELEMETRY].turn_audit(
-        request.match_info["turn_id"]
-    )
+    result = await request.app[keys.CANONICAL_TELEMETRY].turn_audit(request.match_info["turn_id"])
     if result is None:
         raise web.HTTPNotFound(text="unknown canonical turn")
     return json_response(result)
@@ -481,9 +477,7 @@ async def review_quota_resets(request: web.Request) -> web.Response:
     return json_response({"items": reviewed, "reset_alert": await telemetry.reset_summary()})
 
 
-async def _enriched_accounts(
-    request: web.Request, snapshot: dict[str, Any]
-) -> dict[str, Any]:
+async def _enriched_accounts(request: web.Request, snapshot: dict[str, Any]) -> dict[str, Any]:
     """One provider-accounts payload, whichever call produced the snapshot.
 
     Every route here hands the browser a whole `ProviderAccountsStatus` and the
@@ -508,9 +502,7 @@ async def _enriched_accounts(
 
 async def get_provider_accounts(request: web.Request) -> web.Response:
     accounts: ProviderAccountManager = request.app[keys.PROVIDER_ACCOUNTS]
-    return json_response(
-        await _enriched_accounts(request, await accounts.reconcile_current())
-    )
+    return json_response(await _enriched_accounts(request, await accounts.reconcile_current()))
 
 
 async def get_provider_account_audit(request: web.Request) -> web.Response:
@@ -583,12 +575,12 @@ async def patch_provider_account(request: web.Request) -> web.Response:
     accounts: ProviderAccountManager = request.app[keys.PROVIDER_ACCOUNTS]
     body = await request.json()
     if not isinstance(body, dict):
-        raise ValueError("expected a JSON object")
+        raise ValueError(ui_message("usage.a07d4035d7"))
     # `alias` is the field; `label` is what clients before aliases sent, and meant the
     # same thing. An empty or null alias clears it, and the name follows the identity.
     raw = body["alias"] if "alias" in body else body.get("label")
     if raw is not None and not isinstance(raw, str):
-        raise ValueError("alias must be a string or null")
+        raise ValueError(ui_message("usage.04060443a3"))
     return json_response(
         await _enriched_accounts(
             request,
@@ -619,9 +611,7 @@ async def adopt_provider_account(request: web.Request) -> web.Response:
     return json_response(
         await _enriched_accounts(
             request,
-            await accounts.adopt(
-                request.match_info["provider"], request.match_info["account_id"]
-            ),
+            await accounts.adopt(request.match_info["provider"], request.match_info["account_id"]),
         )
     )
 
@@ -647,9 +637,7 @@ async def remove_provider_account(request: web.Request) -> web.Response:
     return json_response(
         await _enriched_accounts(
             request,
-            await accounts.remove(
-                request.match_info["provider"], request.match_info["account_id"]
-            ),
+            await accounts.remove(request.match_info["provider"], request.match_info["account_id"]),
         )
     )
 

@@ -30,6 +30,7 @@ from .. import (
     app_keys as keys,
 )
 from ..http_support import json_response
+from ..ui_messages import ui_message
 from ..update_check import UpdateChecker
 from ..update_install import UpdateInstaller, UpdateRefused
 
@@ -105,19 +106,14 @@ async def post_update_check(request: web.Request) -> web.Response:
     if checker is None:
         return _unavailable()
     if request.headers.get("X-Mux-User-Gesture") != GESTURE_CHECK:
-        return json_response(
-            {"error": "checking for updates requires an explicit user action"}, 400
-        )
+        return json_response({"error": ui_message("update.28f3ac7d2d")}, 400)
     if not checker.enabled:
         # Refused rather than silently answered, because the caller pressed a
         # button and is owed the reason nothing happened.
         return json_response(
             {
                 "error": "update_check_disabled",
-                "message": (
-                    "the update check is turned off, so nothing was requested; "
-                    "enable it in Settings → Maintenance → swe-mux version"
-                ),
+                "message": (ui_message("update.dbda63bf0b")),
                 **checker.snapshot(),
             },
             409,
@@ -138,7 +134,7 @@ async def post_update_dismiss(request: web.Request) -> web.Response:
         body = {}
     version = str(body.get("version", "")).strip() if isinstance(body, dict) else ""
     if not version:
-        return json_response({"error": "version is required"}, 400)
+        return json_response({"error": ui_message("update.50a8bfb0de")}, 400)
     response = json_response(await checker.dismiss(version))
     response.headers["Cache-Control"] = "no-store"
     return response
@@ -152,7 +148,7 @@ def _install_unavailable() -> web.Response:
             "swappable": False,
             "phase": "idle",
             "reason": "unavailable",
-            "message": "this daemon has no updater",
+            "message": ui_message("update.5a9a15bd48"),
         }
     )
 
@@ -188,7 +184,7 @@ def _version_required() -> web.Response:
     return json_response(
         {
             "error": "version_required",
-            "message": ("name the version to install, so what is installed is what you were shown"),
+            "message": (ui_message("update.ee2f0795c8")),
         },
         400,
     )
@@ -221,7 +217,7 @@ async def post_update_plan(request: web.Request) -> web.Response:
     if installer is None:
         return _install_unavailable()
     if request.headers.get("X-Mux-User-Gesture") != GESTURE_PLAN:
-        return json_response({"error": "planning an update requires an explicit user action"}, 400)
+        return json_response({"error": ui_message("update.d3401f9660")}, 400)
     version, _ = await _named_version(request)
     if not version:
         return _version_required()
@@ -277,9 +273,7 @@ async def post_update_install(request: web.Request) -> web.Response:
     if installer is None:
         return _install_unavailable()
     if request.headers.get("X-Mux-User-Gesture") != GESTURE_INSTALL:
-        return json_response(
-            {"error": "installing an update requires an explicit user action"}, 400
-        )
+        return json_response({"error": ui_message("update.aacdc22e1a")}, 400)
     version, body = await _named_version(request)
     if not version:
         return _version_required()

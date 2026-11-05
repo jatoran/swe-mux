@@ -15,6 +15,7 @@ from ..prompt_queue import (
     PromptQueueService,
     QueueError,
 )
+from ..ui_messages import ui_message
 from .support import _human_sender_kind
 
 log = logging.getLogger(__name__)
@@ -32,7 +33,7 @@ async def queue_summary(request: web.Request) -> web.Response:
 async def queue_messages(request: web.Request) -> web.Response:
     target = request.query.get("target_session_id", "").strip()
     if not target:
-        raise ValueError("target_session_id is required")
+        raise ValueError(ui_message("queue.1e9f182606"))
     return json_response(await request.app[keys.PROMPT_QUEUE].target_view(target))
 
 
@@ -67,7 +68,7 @@ async def queue_patch_message(request: web.Request) -> web.Response:
     if "body" in body:
         revision = body.get("revision")
         if not isinstance(revision, int):
-            raise ValueError("revision is required to edit a message body")
+            raise ValueError(ui_message("queue.a203c1e7c1"))
         return json_response(
             await queue.edit(message_id, revision=revision, body=str(body["body"]))
         )
@@ -79,7 +80,7 @@ async def queue_patch_message(request: web.Request) -> web.Response:
     if "constraints" in body:
         # Scheduling is a property of the queued item, not of a sender's UI.
         return json_response(await queue.set_constraints(message_id, body.get("constraints")))
-    raise ValueError("nothing to change")
+    raise ValueError(ui_message("queue.ce09ff1cf9"))
 
 
 async def queue_cancel_message(request: web.Request) -> web.Response:
@@ -127,7 +128,7 @@ async def queue_send_next(request: web.Request) -> web.Response:
     message_id = str(body.get("message_id") or "")
     revision = body.get("revision")
     if not message_id or not isinstance(revision, int):
-        raise ValueError("message_id and revision are required")
+        raise ValueError(ui_message("queue.b484433e66"))
     return json_response(
         await request.app[keys.PROMPT_QUEUE].send_next(
             message_id,
@@ -141,7 +142,7 @@ async def queue_send_next(request: web.Request) -> web.Response:
 async def queue_export(request: web.Request) -> web.Response:
     target = request.query.get("target_session_id", "").strip()
     if not target:
-        raise ValueError("target_session_id is required")
+        raise ValueError(ui_message("queue.1e9f182606"))
     redact = request.query.get("redact_secrets", "1") not in {"0", "false"}
     return json_response(
         await request.app[keys.PROMPT_QUEUE].export_target(target, redact_secrets=redact)
@@ -195,7 +196,9 @@ async def queue_auto_session(request: web.Request) -> web.Response:
                 by=by,
             )
         else:
-            await controller.disable_session(session_id, reason="disabled by user", by=by)
+            await controller.disable_session(
+                session_id, reason=ui_message("queue.952732a1f7"), by=by
+            )
     return json_response(await controller.status())
 
 

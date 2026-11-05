@@ -173,6 +173,7 @@ from .redeploy_launch import (
 )
 from .supervisor import discovery_path
 from .tls_trust import trusting_connector
+from .ui_messages import ui_message
 from .update_check import (
     MALFORMED,
     MANIFEST_URL,
@@ -1111,7 +1112,7 @@ class UpdateInstaller:
             self._record(
                 PHASE_FAILED,
                 reason=REASON_DOWNLOAD_FAILED,
-                message="The update was cancelled before anything was installed.",
+                message=ui_message("update_install.ffb2cb6a2f"),
             )
             raise
         except Exception as exc:  # noqa: BLE001 - a UI path must not raise
@@ -1122,8 +1123,7 @@ class UpdateInstaller:
             self._record(
                 PHASE_FAILED,
                 reason=REASON_DOWNLOAD_FAILED,
-                message=f"The update failed unexpectedly ({type(exc).__name__}). "
-                "Nothing was installed.",
+                message=ui_message("update_install.bd231553d1", value1=type(exc).__name__),
             )
 
     # -- step 1: the manifest, fetched fresh ----------------------------------
@@ -1565,9 +1565,9 @@ class UpdateInstaller:
             return SupervisorVerdict(
                 mode=MODE_REPLACE,
                 reason="",
-                message=f"This release carries PTY supervisor revision {incoming_revision} "
-                f"and revision {running_revision} is running. You chose to install it, "
-                "which replaces the supervisor and ends every live terminal session.",
+                message=ui_message(
+                    "update_install.8093a562a1", value1=incoming_revision, value2=running_revision
+                ),
                 running_protocol=running,
                 incoming_protocol=incoming,
                 known=is_known,
@@ -1680,9 +1680,9 @@ class UpdateInstaller:
             PHASE_HANDED_OFF,
             reason=REASON_OK,
             message=(
-                f"swe-mux {release.version} was downloaded and verified, and the "
-                f"staged swap is running (pid {pid}). {ends}; the app restarts when "
-                "it completes."
+                ui_message(
+                    "update_install.43fff7b3cf", value1=release.version, value2=pid, value3=ends
+                )
             ),
         )
         if self.announce is not None:

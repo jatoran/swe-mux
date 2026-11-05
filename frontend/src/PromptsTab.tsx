@@ -1,3 +1,5 @@
+import { codeLabel } from './localization/codeLabels.ts'
+import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
 import { api } from './api'
@@ -112,7 +114,7 @@ export function PromptsTab({ project, backend, onInsert, onDone, onManage, showM
   useEffect(() => {
     if (!preselect || !items) return
     const target = items.find(item => item.key === preselect.key)
-    if (!target) { setNote('That prompt template is no longer available.'); return }
+    if (!target) { setNote(t("PromptsTab.e21d9c34e1")); return }
     setQuery('')
     setSelected(target.key)
     setPending(null)
@@ -124,11 +126,11 @@ export function PromptsTab({ project, backend, onInsert, onDone, onManage, showM
     return (items || []).filter(item =>
       (!backend || item.backends.includes(backend)) &&
       (!needle || `${item.title} ${item.tags.join(' ')} ${item.body}`.toLocaleLowerCase().includes(needle)))
-  }, [items, query, backend])
+  }, [items, query, backend, uiLocale.value, catalogRevision.value])
 
   // The menu only offers this Project's live Claude/Codex sessions — the same rule as
   // send-to-agent, and for the same reason: a shell would run the template as commands.
-  const targets = useMemo(() => project ? agentTargets(sessions, project.id) : [], [sessions, project?.id])
+  const targets = useMemo(() => project ? agentTargets(sessions, project.id) : [], [sessions, project?.id, uiLocale.value, catalogRevision.value])
 
   const active = filtered.find(item => item.key === selected) || null
   // A template with no placeholders is a one-tap insert; one with placeholders
@@ -182,13 +184,13 @@ export function PromptsTab({ project, backend, onInsert, onDone, onManage, showM
     api('POST', `/api/prompts/${item.scope}/${item.id}/use`, { project_id: project?.id }).catch(() => {})
 
   const insert = async (item: PromptTemplate, text: string) => {
-    if (onInsert(text) === 'none') { setNote('Focus an agent session first, then insert.'); return }
+    if (onInsert(text) === 'none') { setNote(t("PromptsTab.4a2654c5b9")); return }
     await recordUse(item)
     onDone()
   }
 
   const targetLabel = (target: SendToAgentTarget) =>
-    target.kind === 'new' ? `new ${harnessDisplayName(target.backend)}` : agentTargetName(target.session)
+    target.kind === 'new' ? t("PromptsTab.4e0573bbcf", { value1: harnessDisplayName(target.backend) }) : agentTargetName(target.session)
 
   const send = async (item: PromptTemplate, text: string, target: SendToAgentTarget) => {
     setBusy(true)
@@ -198,7 +200,7 @@ export function PromptsTab({ project, backend, onInsert, onDone, onManage, showM
     if (result.status === 'blocked') {
       // The message is staged (blocked) in the target's queue; the Queue panel and the
       // send dialog own the explicit confirmation flow.
-      setNote(`Queued but not delivered: ${wordReasons(result.reasons)}. Confirm from the Queue tab of this panel.`)
+      setNote(t("PromptsTab.12a2f8421e", { value1: wordReasons(result.reasons) }))
       await recordUse(item)
       return
     }
@@ -220,7 +222,7 @@ export function PromptsTab({ project, backend, onInsert, onDone, onManage, showM
       setVariables(Object.fromEntries(item.variables.map(name => [name, ''])))
     }
     setPending({ key: item.key, target })
-    setNote(`Fill ${unfilled.join(', ')} to send to ${targetLabel(target)}.`)
+    setNote(t("PromptsTab.4fbd8595c3", { value1: unfilled.join(', '), value2: targetLabel(target) }))
   }
 
   const openMenu = (item: PromptTemplate, x: number, y: number) => {
@@ -281,32 +283,32 @@ export function PromptsTab({ project, backend, onInsert, onDone, onManage, showM
     setEdit({ template, nonce: ++editNonce.current })
   }
   const closeEditor = () => {
-    if (draft.dirty) { draft.setMessage('Save or revert this template before closing.'); return }
+    if (draft.dirty) { draft.setMessage(t("PromptsTab.51661b690d")); return }
     setEdit(null)
   }
 
   if (edit) return <div class="prompt-inline-editor">
     <header class="prompt-inline-head">
-      <button onClick={closeEditor} title="Back to the template list">‹ Templates</button>
-      <strong>{edit.template ? 'Edit template' : 'New template'}</strong>
+      <button onClick={closeEditor} title={t("PromptsTab.36d17675dd")}>{t("PromptsTab.af8e7b8cea")}</button>
+      <strong>{edit.template ? t("PromptsTab.708c9a5c56") : t("PromptsTab.30d87ec452")}</strong>
     </header>
     <PromptDraftFields state={draft} owners={owners} compact />
-    <PromptDraftActions state={draft} onCancel={closeEditor} cancelLabel="Close" />
+    <PromptDraftActions state={draft} onCancel={closeEditor} cancelLabel={t("PromptsTab.7d9eb7acb1")} />
     {draft.message && <p class="clipboard-note" aria-live="polite">{draft.message}</p>}
-    <footer class="drawer-actions"><button onClick={onManage}>Open full library…</button></footer>
+    <footer class="drawer-actions"><button onClick={onManage}>{t("PromptsTab.9f3e8be3aa")}</button></footer>
   </div>
 
   return <>
-    <p class="drawer-status">{project ? project.name : 'global templates'}{backend ? ` · ${backend}` : ''} · tap inserts · long-press to send</p>
+    <p class="drawer-status">{rich("PromptsTab.8316969960", { value1: project ? project.name : t("PromptsTab.b4c065c0b9"), value2: backend ? t("PromptsTab.2cfa5943b5", { backend: backend }) : '' })}</p>
     <div class="clipboard-search prompt-drawer-search">
-      <input value={query} onInput={event => setQuery(event.currentTarget.value)} placeholder="Filter templates…" aria-label="Filter prompt templates" />
-      <button title="Write a new prompt template here" onClick={() => openEditor(null)}>New</button>
+      <input value={query} onInput={event => setQuery(event.currentTarget.value)} placeholder={t("PromptsTab.f4207787da")} aria-label={t("PromptsTab.25f84c44df")} />
+      <button title={t("PromptsTab.0701237826")} onClick={() => openEditor(null)}>{t("PromptsTab.18fdd549b2")}</button>
     </div>
-    <div class="clipboard-entries" role="group" aria-label="Prompt templates">
+    <div class="clipboard-entries" role="group" aria-label={t("PromptsTab.d3a289c7a7")}>
       {filtered.map(item => <div key={item.key} class={`clipboard-entry ${selected === item.key ? 'active' : ''} has-actions`}>
         <button
           class="clipboard-entry-body prompt-entry-body"
-          title={`${item.variables.length ? 'Fill placeholders, then insert' : 'Insert into the focused session'} · right-click or long-press to send to a session`}
+          title={t("PromptsTab.a2137a23a9", { value1: (item.variables.length) ? 'yes' : 'no' })}
           onContextMenu={event => {
             event.preventDefault(); event.stopPropagation()
             cancelLongPress()
@@ -331,38 +333,36 @@ export function PromptsTab({ project, backend, onInsert, onDone, onManage, showM
             <span class="prompt-row-tags">
               <b class="prompt-pill scope">{item.scope}</b>
               {item.tags.map(tag => <b class="prompt-pill" key={tag}>{tag}</b>)}
-              {item.variables.length > 0 && <b class="prompt-pill fields">{item.variables.length} field{item.variables.length === 1 ? '' : 's'}</b>}
+              {item.variables.length > 0 && <b class="prompt-pill fields">{rich("PromptsTab.5fbe7bc964", { length: item.variables.length, value2: (item.variables.length === 1) ? 'yes' : 'no' })}</b>}
             </span>
           </span>
           <small class="prompt-template-excerpt">{promptTemplateExcerpt(item.body)}</small>
         </button>
         <button
           class="prompt-row-edit"
-          title={`Edit “${item.title}” here`}
-          aria-label={`Edit ${item.title}`}
+          title={t("PromptsTab.9334f4aaf6", { title: item.title })}
+          aria-label={t("PromptsTab.6f0fc08449", { title: item.title })}
           onClick={() => openEditor(item)}
-        >Edit</button>
+        >{t("PromptsTab.464c4ffd01")}</button>
       </div>)}
       {active && active.variables.length > 0 && <div class="drawer-fields">
         {active.variables.map(name => <label key={name}>{name}
           <input value={variables[name] || ''} onInput={event => setVariables({ ...variables, [name]: event.currentTarget.value })} />
         </label>)}
-        {armed
-          ? <button class="primary" disabled={busy || missing.length > 0} title={missing.length ? `Fill: ${missing.join(', ')}` : `Send to ${targetLabel(armed.target)}`} onClick={() => void send(active, renderPromptTemplate(active.body, variables), armed.target)}>
-            {busy ? 'Sending…' : `Send to ${targetLabel(armed.target)}`}
-          </button>
-          : <button class="primary" disabled={missing.length > 0} title={missing.length ? `Fill: ${missing.join(', ')}` : 'Insert without submitting'} onClick={() => void insert(active, renderPromptTemplate(active.body, variables))}>Insert</button>}
-        {armed && <button disabled={busy} onClick={() => { setPending(null); setNote('') }}>Insert instead</button>}
+        {armed ? <button class="primary" disabled={busy || missing.length > 0} title={missing.length ? t("PromptsTab.5bad85b71b", { value1: missing.join(', ') }) : t("PromptsTab.5045c90bd0", { value1: targetLabel(armed.target) })} onClick={() => void send(active, renderPromptTemplate(active.body, variables), armed.target)}>
+            {busy ? t("PromptsTab.b8ed5279e8") : t("PromptsTab.5045c90bd0", { value1: targetLabel(armed.target) })}
+          </button> : <button class="primary" disabled={missing.length > 0} title={missing.length ? t("PromptsTab.5bad85b71b", { value1: missing.join(', ') }) : t("PromptsTab.d3b7774cd7")} onClick={() => void insert(active, renderPromptTemplate(active.body, variables))}>{t("PromptsTab.8aa318eb7e")}</button>}
+        {armed && <button disabled={busy} onClick={() => { setPending(null); setNote('') }}>{t("PromptsTab.627a02c1be")}</button>}
       </div>}
-      {items && !filtered.length && <p class="drawer-empty">{items.length ? 'No template matches that filter.' : 'No prompt templates yet.'}</p>}
+      {items && !filtered.length && <p class="drawer-empty">{items.length ? t("PromptsTab.d039b63a13") : t("PromptsTab.d2d7834dd9")}</p>}
     </div>
     {note && <p class="clipboard-note" aria-live="polite">{note}</p>}
-    {showManage && <footer class="drawer-actions"><button onClick={onManage}>Manage templates…</button></footer>}
+    {showManage && <footer class="drawer-actions"><button onClick={onManage}>{t("PromptsTab.2bd2820325")}</button></footer>}
     {menu && <div
       class="context-menu prompt-target-menu"
       ref={el => { menuPanel.current = el; fitScrollingMenuInViewport(el) }}
       role="menu"
-      aria-label={`Send ${menu.item.title} to`}
+      aria-label={t("PromptsTab.0483a9ca76", { title: menu.item.title })}
       style={{ left: clampContextMenuLeft(menu.x, window.innerWidth), top: Math.max(4, menu.y) }}
       // The menu opens under the finger that opened it, so the lift can land on
       // whichever item now sits there. Nothing fires for the first moment.
@@ -370,24 +370,24 @@ export function PromptsTab({ project, backend, onInsert, onDone, onManage, showM
     >
       <div class="context-title"><strong>{menu.item.title}</strong></div>
       <button role="menuitem" onClick={() => { const item = menu.item; setMenu(null); choose(item) }}>
-        {menu.item.variables.length ? 'Fill fields, then insert' : 'Insert into focused session'}
+        {menu.item.variables.length ? t("PromptsTab.5d55373b45") : t("PromptsTab.9c9dd81e7f")}
       </button>
-      <button role="menuitem" onClick={() => openEditor(menu.item)}>Edit template</button>
-      <div class="context-subtitle">SEND TO SESSION</div>
+      <button role="menuitem" onClick={() => openEditor(menu.item)}>{t("PromptsTab.708c9a5c56")}</button>
+      <div class="context-subtitle">{t("PromptsTab.b548082eae")}</div>
       {targets.map(session => <button
         key={session.id}
         role="menuitem"
-        title={`${session.backend} · ${session.state}${session.state_detail ? ` · ${session.state_detail}` : ''}`}
+        title={t("PromptsTab.6db0bda9ee", { backend: session.backend, state: codeLabel(session.state), value3: session.state_detail ? ` · ${session.state_detail}` : '' })}
         onClick={() => chooseTarget(menu.item, { kind: 'session', session, submit })}
       ><StateIndicator session={session} shape={rowConfig.dotShape} />{agentTargetName(session)}</button>)}
-      {!targets.length && <button role="menuitem" disabled>{project ? 'No live agent session here' : 'Select a Project first'}</button>}
-      <div class="context-subtitle">NEW SESSION</div>
-      {promptDeliveryHarnesses().map(harness=><button role="menuitem" disabled={!project} onClick={() => project && chooseTarget(menu.item, { kind: 'new', backend: harness.name, projectId: project.id })}>New {harness.display_name} session</button>)}
+      {!targets.length && <button role="menuitem" disabled>{project ? t("PromptsTab.fae521ae46") : t("PromptsTab.a8ca7d4346")}</button>}
+      <div class="context-subtitle">{t("PromptsTab.0473538890")}</div>
+      {promptDeliveryHarnesses().map(harness=><button role="menuitem" disabled={!project} onClick={() => project && chooseTarget(menu.item, { kind: 'new', backend: harness.name, projectId: project.id })}>{rich("PromptsTab.6889f2ff2b", { display_name: harness.display_name })}</button>)}
       <div class="context-rule" />
       {/* A new session always submits (its prompt travels on the command line); this
           only governs the live-session writes, so the library's insert-never-send
           contract stays reachable from the menu too. */}
-      <button role="menuitem" aria-pressed={submit} onClick={() => setSubmit(value => !value)}>{submit ? '☑' : '☐'} Press Enter after sending</button>
+      <button role="menuitem" aria-pressed={submit} onClick={() => setSubmit(value => !value)}>{t("PromptsTab.e99974510f", { value1: (submit) ? 'yes' : 'no' })}</button>
     </div>}
   </>
 }

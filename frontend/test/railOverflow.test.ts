@@ -1,3 +1,4 @@
+import { withCatalogText } from './support/localizedSource.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
@@ -34,15 +35,15 @@ test('focused items are moved clear of both passive edge indicators', () => {
 })
 
 test('workspace rails retrigger selected-tab reveal when their pane receives focus', () => {
-  const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
-  const railSource = readFileSync(new URL('../src/RailScroller.tsx', import.meta.url), 'utf8')
+  const appSource = withCatalogText(readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8'))
+  const railSource = withCatalogText(readFileSync(new URL('../src/RailScroller.tsx', import.meta.url), 'utf8'))
   assert.match(appSource, /activeKey=\{activeChild\.id\} focusKey=\{focusedPane\?activeChild\.id:undefined\}/)
   assert.match(railSource, /if \(focusKey === undefined\) return\s+return scheduleSelectedReveal\(\)/)
 })
 
 test('command rail owns the first touch drag without dropping the soft keyboard', () => {
-  const railSource = readFileSync(new URL('../src/RailScroller.tsx', import.meta.url), 'utf8')
-  const styles = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
+  const railSource = withCatalogText(readFileSync(new URL('../src/RailScroller.tsx', import.meta.url), 'utf8'))
+  const styles = withCatalogText(readFileSync(new URL('../src/style.css', import.meta.url), 'utf8'))
   const commandRail = railSource.slice(railSource.indexOf('export function RailScroller'))
 
   assert.match(commandRail, /touchDrag touchDragGain=\{1\.75\} preserveSoftKeyboard/)
@@ -50,8 +51,8 @@ test('command rail owns the first touch drag without dropping the soft keyboard'
 })
 
 test('a swipe may begin on a repeating arrow key, which sends on click like its neighbours', () => {
-  const railSource = readFileSync(new URL('../src/RailScroller.tsx', import.meta.url), 'utf8')
-  const button = readFileSync(new URL('../src/RailRepeatKey.tsx', import.meta.url), 'utf8')
+  const railSource = withCatalogText(readFileSync(new URL('../src/RailScroller.tsx', import.meta.url), 'utf8'))
+  const button = withCatalogText(readFileSync(new URL('../src/RailRepeatKey.tsx', import.meta.url), 'utf8'))
   const pointerDown = button.slice(button.indexOf('onPointerDown='), button.indexOf('onContextMenu='))
 
   // The pan refusing a touch that landed on an arrow is what made the arrows the one part
@@ -66,7 +67,7 @@ test('a swipe may begin on a repeating arrow key, which sends on click like its 
 })
 
 test('command rail terminal writes preserve rather than request mobile keyboard focus', () => {
-  const source = readFileSync(new URL('../src/TerminalPane.tsx', import.meta.url), 'utf8')
+  const source = withCatalogText(readFileSync(new URL('../src/TerminalPane.tsx', import.meta.url), 'utf8'))
   const pasteHelper = source.slice(source.indexOf('async function pasteBrowserClipboard'), source.indexOf('function TerminalPaneImpl'))
   const paste = source.slice(source.indexOf('const paste = async'), source.indexOf('const copyLastReply'))
   const sendKey = source.slice(source.indexOf('const sendKey='), source.indexOf('const railKeyRepeat='))
@@ -82,12 +83,12 @@ test('command rail terminal writes preserve rather than request mobile keyboard 
 })
 
 test('jump-to-latest does not request terminal input focus', () => {
-  const source = readFileSync(new URL('../src/TerminalPane.tsx', import.meta.url), 'utf8')
+  const source = withCatalogText(readFileSync(new URL('../src/TerminalPane.tsx', import.meta.url), 'utf8'))
   const handler = source.slice(source.indexOf('const jumpToLatest='), source.indexOf('const setMobileInputMode='))
   assert.ok(handler.length > 0)
   assert.doesNotMatch(handler, /focusTerminalInputRef/)
 
-  const rendererHarness = readFileSync(new URL('./renderer/jumpLatest.ts', import.meta.url), 'utf8')
+  const rendererHarness = withCatalogText(readFileSync(new URL('./renderer/jumpLatest.ts', import.meta.url), 'utf8'))
   assert.doesNotMatch(rendererHarness, /chip-then-keyboard/)
 })
 
@@ -181,18 +182,18 @@ function declarations(styles: string, pattern: RegExp): string {
 }
 
 test('the permanent drawer control is fixed-width and carries the full row count', () => {
-  const styles = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
+  const styles = withCatalogText(readFileSync(new URL('../src/style.css', import.meta.url), 'utf8'))
   const rule = declarations(styles, /\.terminal-action-rail button\.rail-more\{([^}]*)\}/)
   assert.match(rule, /min-width:var\(--rail-more-width\)/)
   assert.match(rule, /width:var\(--rail-more-width\)/)
-  const strip = readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8')
+  const strip = withCatalogText(readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8'))
   assert.match(strip, /<RailDrawerIcon \/><span class="rail-more-count">\{chips\.length\}<\/span>/)
   assert.doesNotMatch(strip, /railFitCount|rail-row-measure/)
 })
 
 test('scroll indicators are passive glow wedges, not buttons', () => {
-  const rail = readFileSync(new URL('../src/RailScroller.tsx', import.meta.url), 'utf8')
-  const styles = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
+  const rail = withCatalogText(readFileSync(new URL('../src/RailScroller.tsx', import.meta.url), 'utf8'))
+  const styles = withCatalogText(readFileSync(new URL('../src/style.css', import.meta.url), 'utf8'))
   assert.match(rail, /<span class="overflow-rail-edge overflow-rail-left" aria-hidden="true" \/>/)
   assert.match(rail, /<span class="overflow-rail-edge overflow-rail-right" aria-hidden="true" \/>/)
   assert.doesNotMatch(rail, /class="overflow-rail-edge[^\n]*onClick/)
@@ -200,7 +201,7 @@ test('scroll indicators are passive glow wedges, not buttons', () => {
 })
 
 test('command rail overflow arrows and their glow are green', () => {
-  const styles = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
+  const styles = withCatalogText(readFileSync(new URL('../src/style.css', import.meta.url), 'utf8'))
   assert.match(declarations(styles, /\.overflow-rail-edge::before\{([^}]*)\}/), /var\(--green\)/)
   assert.match(declarations(styles, /\.overflow-rail-edge::after\{([^}]*)\}/), /var\(--green\)/)
   assert.match(declarations(styles, /\.overflow-rail-left::after\{([^}]*)\}/), /border-right:5px solid var\(--green\)/)
@@ -208,7 +209,7 @@ test('command rail overflow arrows and their glow are green', () => {
 })
 
 test('every row has one drawer route to its complete list and full configuration', () => {
-  const strip = readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8')
+  const strip = withCatalogText(readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8'))
   assert.doesNotMatch(strip, /class="rail-config"/)
   assert.match(strip, /class=\{`rail-more/)
   assert.match(strip, /onConfigure=\{onConfigure\}/)
@@ -217,13 +218,13 @@ test('every row has one drawer route to its complete list and full configuration
 
 test('the row scrolls end to end while the trailing cluster stays pinned outside it', () => {
   // Every chip remains in the scroller, while the drawer stays fixed beside it.
-  const strip = readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8')
+  const strip = withCatalogText(readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8'))
   const scroller = strip.slice(strip.indexOf('<OverflowRail'), strip.indexOf('</OverflowRail>'))
   // `arrangeChildren` is the identity on `chips` with no caret, so this still says "every
   // chip, and nothing else, is in the scroller" (`railArrangeChips.tsx`).
   assert.match(scroller, /\{arrangeChildren\(chips, caretAt\)\}/)
   assert.ok(!scroller.includes('rail-row-trailing'), 'the cluster must sit outside the scroller')
-  const styles = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
+  const styles = withCatalogText(readFileSync(new URL('../src/style.css', import.meta.url), 'utf8'))
   const rule = declarations(styles, /\.rail-row>\.rail-row-trailing\{([^}]*)\}/)
   // Fixed furniture beside a flex:1 scroller: the cluster must never grow into the space
   // the chips scroll through.
@@ -232,12 +233,12 @@ test('the row scrolls end to end while the trailing cluster stays pinned outside
 })
 
 test('the panel is placed against the trailing cluster, so it lands on the rail\'s edge', () => {
-  const strip = readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8')
+  const strip = withCatalogText(readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8'))
   assert.match(strip, /anchor=\{trailingRef\.current\}/)
 })
 
 test('the borderless popover footer opens the full configuration modal', () => {
-  const popover = readFileSync(new URL('../src/RailOverflowPopover.tsx', import.meta.url), 'utf8')
+  const popover = withCatalogText(readFileSync(new URL('../src/RailOverflowPopover.tsx', import.meta.url), 'utf8'))
   assert.match(popover, /class="rail-overflow-configure"/)
   assert.match(popover, /onClick=\{\(\) => \{ onClose\(\); onConfigure\(\) \}\}/)
   assert.doesNotMatch(popover, /<header|More actions|stays open/)
@@ -246,7 +247,7 @@ test('the borderless popover footer opens the full configuration modal', () => {
 })
 
 test('the terminal rail keeps the scroller that owns its touch-drag click suppression', () => {
-  const strip = readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8')
+  const strip = withCatalogText(readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8'))
   const opening = strip.slice(strip.indexOf('<OverflowRail'), strip.indexOf('>', strip.indexOf('<OverflowRail')))
   for (const prop of [
     'className="terminal-action-scroll"',
@@ -260,12 +261,12 @@ test('the terminal rail keeps the scroller that owns its touch-drag click suppre
 test('a row publishes its stored identity, so a drop can be resolved against a config', () => {
   // The rendered rail is a filtered projection of its row, so a drag has to be able to name
   // the row it landed in and the *stored* slot each chip occupies (`railArrange.ts`).
-  const strip = readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8')
+  const strip = withCatalogText(readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8'))
   assert.match(strip, /stripProps=\{\{ 'data-rail-row': `\$\{device\}\|strip\|\$\{rowId\}` \}\}/)
 })
 
 test('command rail edge wedges align to the strip, not to a guessed trailing width', () => {
-  const styles = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
+  const styles = withCatalogText(readFileSync(new URL('../src/style.css', import.meta.url), 'utf8'))
   // The wrapper is the strip's own box, so it has to be the containing block. Positioned
   // from the *row* instead, the right wedge had to name the trailing cluster's width in a
   // `calc`, and could only ever be right for one cluster width.
@@ -280,7 +281,7 @@ test('a rail row carries no message of its own', () => {
   // fraction of the viewport - so in a split narrower than that cap the readout took the
   // whole row and the chips were squeezed out of it. Terminal messages go to
   // `.terminal-clip-toast` now, over the buffer, where their width answers to the pane.
-  const strip = readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8')
+  const strip = withCatalogText(readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8'))
   // Comments stripped, because the one above the component explains why the prop went and
   // has to be free to say its name.
   const code = strip.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '')
@@ -290,11 +291,11 @@ test('a rail row carries no message of its own', () => {
   // the button, which is where the readout used to be.
   const cluster = code.slice(code.indexOf('class="rail-row-trailing"'))
   assert.match(cluster, /class="rail-row-trailing" ref=\{trailingRef\}>\s*<button/)
-  const styles = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
+  const styles = withCatalogText(readFileSync(new URL('../src/style.css', import.meta.url), 'utf8'))
   assert.doesNotMatch(styles, /\.rail-row>\.rail-row-trailing>span\{/)
-  const pane = readFileSync(new URL('../src/TerminalPane.tsx', import.meta.url), 'utf8')
+  const pane = withCatalogText(readFileSync(new URL('../src/TerminalPane.tsx', import.meta.url), 'utf8'))
   assert.doesNotMatch(pane, /<RailStrip[^\n]*status=/)
   // And it did not simply vanish: the count still goes somewhere, through the same transient
   // toast the copy and paste confirmations use.
-  assert.match(pane, /showClipboardStatus\(`\$\{text\.length\.toLocaleString\(\)\} selected/)
+  assert.match(pane, /showClipboardStatus\(`\$\{text\.length\.toLocaleString\(uiLocale\.value\)\} selected/)
 })

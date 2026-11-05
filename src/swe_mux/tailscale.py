@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 from .bounded_subprocess import run_bounded
 from .http_origin_policy import is_tailscale_ip
 from .shim_paths import which_real
+from .ui_messages import ui_message
 
 #: `tailscale status --json` is a few KiB per peer; 1 MiB is far above any real tailnet.
 _OUTPUT_LIMIT = 1024 * 1024
@@ -319,7 +320,7 @@ async def _plain_status(executable: str) -> Any | None:
     try:
         outcome = await run_bounded(
             [executable, "status", "--json"],
-            label="tailscale-status",
+            label=ui_message("tailscale.c7c25ecbac"),
             timeout_seconds=4,
             output_limit=_OUTPUT_LIMIT,
             stderr_limit=_STDERR_LIMIT,
@@ -338,7 +339,7 @@ async def _status(executable: str, command: str) -> tuple[Any | None, str]:
     try:
         outcome = await run_bounded(
             [executable, command, "status", "--json"],
-            label=f"tailscale-{command}-status",
+            label=ui_message("tailscale.9b8bb4742f", value1=command),
             timeout_seconds=4,
             output_limit=_OUTPUT_LIMIT,
             stderr_limit=_STDERR_LIMIT,
@@ -384,14 +385,14 @@ async def tailscale_ipv4(executable: str | None = None) -> str | None:
     executable = executable or tailscale_executable()
     if not executable:
         return None
-    return await _tailscale_ip(executable, "-4", label="tailscale-ip4")
+    return await _tailscale_ip(executable, "-4", label=ui_message("tailscale.842dbfbb9c"))
 
 
 async def tailscale_ipv6(executable: str | None = None) -> str | None:
     executable = executable or tailscale_executable()
     if not executable:
         return None
-    return await _tailscale_ip(executable, "-6", label="tailscale-ip6")
+    return await _tailscale_ip(executable, "-6", label=ui_message("tailscale.c686741a5d"))
 
 
 async def _tailscale_ip(executable: str, family_flag: str, *, label: str) -> str | None:
@@ -419,7 +420,7 @@ async def tailscale_dns_name(executable: str | None = None) -> str | None:
     try:
         outcome = await run_bounded(
             [executable, "status", "--json"],
-            label="tailscale-dns-name",
+            label=ui_message("tailscale.9b729c6de4"),
             timeout_seconds=6,
             output_limit=_OUTPUT_LIMIT,
             stderr_limit=_STDERR_LIMIT,
@@ -434,7 +435,8 @@ async def tailscale_dns_name(executable: str | None = None) -> str | None:
 
 
 async def direct_mobile_voice_tls(
-    data_dir: Path, https_port: int = MOBILE_VOICE_HTTPS_PORT,
+    data_dir: Path,
+    https_port: int = MOBILE_VOICE_HTTPS_PORT,
 ) -> tuple[list[str], str, ssl.SSLContext] | tuple[None, None, str]:
     """Prepare a direct TLS listener on the Tailscale IP without Tailscale Serve."""
     executable = tailscale_executable()
@@ -465,7 +467,7 @@ async def direct_mobile_voice_tls(
                 str(key_path),
                 dns_name,
             ],
-            label="tailscale-cert",
+            label=ui_message("tailscale.4f961d103b"),
             timeout_seconds=30,
             output_limit=_OUTPUT_LIMIT,
             stderr_limit=_STDERR_LIMIT,
@@ -572,8 +574,7 @@ async def _probe_tailscale_status(port: int, *, tailnet_enabled: bool = True) ->
         "gateway_mount_port": None,
         "funnel_detected": False,
         "setup_command": (
-            f"tailscale serve --bg --https={MOBILE_VOICE_HTTPS_PORT} "
-            f"http://127.0.0.1:{port}"
+            f"tailscale serve --bg --https={MOBILE_VOICE_HTTPS_PORT} http://127.0.0.1:{port}"
         ),
         "diagnostic": "Tailscale is not installed on this machine.",
         # Where the CLI was found, so a support reader can tell an off-PATH
@@ -698,7 +699,7 @@ async def enable_mobile_voice_serve(
     try:
         outcome = await run_bounded(
             [executable, "serve", "--bg", f"--https={https_port}", f"http://127.0.0.1:{port}"],
-            label="tailscale-serve",
+            label=ui_message("tailscale.a9cc65a275"),
             timeout_seconds=30,
             output_limit=_OUTPUT_LIMIT,
             stderr_limit=_STDERR_LIMIT,
@@ -718,9 +719,7 @@ async def enable_mobile_voice_serve(
             "diagnostic": "Could not configure Tailscale Serve: the serve command timed out.",
         }
     output = "\n".join(
-        part.decode("utf-8", "replace").strip()
-        for part in (outcome.stdout, outcome.stderr)
-        if part
+        part.decode("utf-8", "replace").strip() for part in (outcome.stdout, outcome.stderr) if part
     ).strip()
     output_urls = _text_urls(output)
     authorization_url = next(
@@ -765,7 +764,7 @@ async def _run_serve(executable: str, args: list[str]) -> tuple[bool, str]:
     try:
         outcome = await run_bounded(
             [executable, "serve", *args],
-            label="tailscale-serve",
+            label=ui_message("tailscale.a9cc65a275"),
             timeout_seconds=30,
             output_limit=_OUTPUT_LIMIT,
             stderr_limit=_STDERR_LIMIT,
@@ -775,9 +774,7 @@ async def _run_serve(executable: str, args: list[str]) -> tuple[bool, str]:
     if outcome.timed_out:
         return False, "the serve command timed out"
     output = "\n".join(
-        part.decode("utf-8", "replace").strip()
-        for part in (outcome.stdout, outcome.stderr)
-        if part
+        part.decode("utf-8", "replace").strip() for part in (outcome.stdout, outcome.stderr) if part
     ).strip()
     return outcome.exit_code == 0, output
 
@@ -859,8 +856,7 @@ async def reconcile_gateway_serve(
         return _gateway_mount_result(
             "skipped",
             current,
-            f"Port {https_port} is exposed by Tailscale Funnel; the terminal gateway "
-            "stays off it.",
+            f"Port {https_port} is exposed by Tailscale Funnel; the terminal gateway stays off it.",
         )
     ok, output = await _run_serve(
         executable,

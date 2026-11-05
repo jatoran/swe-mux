@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from .ui_messages import ui_message
 from .verify_progress import VerifyProgress
 from .worktree_exec import (
     WorktreeCommand,
@@ -324,9 +325,7 @@ class VerifyApprovalStore:
         if digest is None:
             del store[root]
         else:
-            remaining = [
-                item for item in self._approvals(project_root) if item["digest"] != digest
-            ]
+            remaining = [item for item in self._approvals(project_root) if item["digest"] != digest]
             if len(remaining) == len(self._approvals(project_root)):
                 return
             if remaining:
@@ -388,9 +387,7 @@ def approval_diff(info: VerifyCommandInfo, *, limit: int = MAX_BYPASS_DIFF_CHARS
         return ""
     before = (info.approved_snapshot or "").splitlines(keepends=True)
     after = info.current_source.splitlines(keepends=True)
-    text = "".join(
-        difflib.unified_diff(before, after, fromfile="approved", tofile="current", n=3)
-    )
+    text = "".join(difflib.unified_diff(before, after, fromfile="approved", tofile="current", n=3))
     if len(text) > limit:
         text = text[:limit] + "\n... diff truncated ...\n"
     return text
@@ -476,7 +473,7 @@ async def run_worktree_verify(
         worktree,
         timeout_seconds=VERIFY_TIMEOUT_SECONDS,
         output_limit=MAX_VERIFY_OUTPUT_BYTES,
-        label="verification",
+        label=ui_message("worktree_verify.4183b7793f"),
         on_chunk=progress.feed if progress is not None else None,
     )
     steps: tuple[str, ...] = ()

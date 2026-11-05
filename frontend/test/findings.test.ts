@@ -1,9 +1,10 @@
+import { withCatalogText } from './support/localizedSource.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 
-const source = (name: string) => readFileSync(join(import.meta.dirname, '..', 'src', name), 'utf8')
+const source = (name: string) => withCatalogText(readFileSync(join(import.meta.dirname, '..', 'src', name), 'utf8'))
 
 test('Activity draws Timeline, Findings, and the Change Map, gating only the timeline segment', () => {
   const segments = source('drawerSegments.ts')

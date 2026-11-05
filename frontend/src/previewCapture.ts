@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 /**
  * The pure half of preview capture: what the daemon's typed unavailable state
  * reads as. Separated from `PreviewPane.tsx` for the reason `processRows.ts` is
@@ -24,9 +25,9 @@ export type CaptureResult = {
 }
 
 const HEADLINE: Record<CaptureState, string> = {
-  ready: 'Preview capture is ready.',
-  extra_missing: 'Preview capture is not installed.',
-  browser_missing: 'Preview capture is installed but has no browser to render with.',
+  get ready() { return t("previewCapture.4aab06c7c7") },
+  get extra_missing() { return t("previewCapture.f4b7309736") },
+  get browser_missing() { return t("previewCapture.5dade93e87") },
 }
 
 /**
@@ -37,10 +38,10 @@ const HEADLINE: Record<CaptureState, string> = {
  * missing.
  */
 export function captureUnavailableNote(result: CaptureResult): string {
-  const headline = HEADLINE[result.state ?? 'extra_missing'] ?? 'Capture unavailable.'
+  const headline = HEADLINE[result.state ?? 'extra_missing'] ?? t("previewCapture.10e0a77fdd")
   const reason = result.reason ? ` ${result.reason}.` : ''
   const remedy = result.remedy
     ? ` Run: ${result.remedy}`
-    : ' No command on this machine enables it.'
+    : t("previewCapture.e79500bc32")
   return `${headline}${reason}${remedy}`
 }

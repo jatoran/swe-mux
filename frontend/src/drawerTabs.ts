@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // The right-edge utility drawer: tab registry, persistence, and pure helpers.
 //
 // One singleton host per tab, with two responsive projections. On mobile it is an
@@ -89,17 +90,17 @@ export type DrawerTab = {
 // Every title leads with its tab's compact label so the icon controls announce and tooltip the
 // same identity. The longer heading is drawn once inside the active content surface.
 export const DRAWER_TABS: DrawerTab[] = [
-  { id: 'notes', label: 'Notes', heading: 'Notes', title: 'Notes - create and edit Project-owned notes here, or open one in a pane', scope: 'project' },
-  { id: 'files', label: 'Files', heading: 'File Explorer', title: 'Files - browse or search this Project, then open here or in a pane', scope: 'project' },
-  { id: 'actions', label: 'Actions', heading: 'Actions', title: 'Actions - quick shortcuts, skills, prompt templates, and clipboard history', scope: 'session' },
-  { id: 'queue', label: 'Queue', heading: 'Prompt Queue', title: 'Queue - messages staged for the focused agent', scope: 'session' },
-  { id: 'transcript', label: 'Transcript', heading: 'Transcript', title: 'Transcript - read and copy this session’s conversation', scope: 'session' },
-  { id: 'activity', label: 'Activity', heading: 'Activity', title: 'Activity - what this session narrated, what the detectors found, and what it changed', scope: 'session' },
-  { id: 'agent', label: 'Agent', heading: 'Agent', title: 'Agent - configuration, tools, and instructions this session is running with', scope: 'session' },
-  { id: 'git', label: 'Git', heading: 'Git', title: 'Git - worktree map and commit graph for this Project', scope: 'project' },
-  { id: 'processes', label: 'Processes', heading: 'Processes', title: 'Processes - what this Project’s sessions are running, and what they are serving', scope: 'project' },
-  { id: 'schedule', label: 'Schedule', heading: 'Scheduled Runs', title: 'Schedule - sessions this Project starts on its own, and what they did last time', scope: 'project' },
-  { id: 'notifications', label: 'Alerts', heading: 'Alerts', title: 'Alerts - what needs you now, and every attention record behind it', scope: 'app' },
+  { id: 'notes', get label() { return t("drawerTabs.8a7525b149") }, get heading() { return t("drawerTabs.8a7525b149") }, get title() { return t("drawerTabs.57bcd2f112") }, scope: 'project' },
+  { id: 'files', get label() { return t("drawerTabs.abc7e98928") }, get heading() { return t("drawerTabs.d6f6a04891") }, get title() { return t("drawerTabs.4775fae232") }, scope: 'project' },
+  { id: 'actions', get label() { return t("drawerTabs.ff8059dc67") }, get heading() { return t("drawerTabs.ff8059dc67") }, get title() { return t("drawerTabs.3132dec65f") }, scope: 'session' },
+  { id: 'queue', get label() { return t("drawerTabs.3b2fe03e36") }, get heading() { return t("drawerTabs.5529558b7f") }, get title() { return t("drawerTabs.9b9848f7b3") }, scope: 'session' },
+  { id: 'transcript', get label() { return t("drawerTabs.721164f0dc") }, get heading() { return t("drawerTabs.721164f0dc") }, get title() { return t("drawerTabs.e5b5342825") }, scope: 'session' },
+  { id: 'activity', get label() { return t("drawerTabs.38da1505ca") }, get heading() { return t("drawerTabs.38da1505ca") }, get title() { return t("drawerTabs.8bdc9786f7") }, scope: 'session' },
+  { id: 'agent', get label() { return t("drawerTabs.11b39c9377") }, get heading() { return t("drawerTabs.11b39c9377") }, get title() { return t("drawerTabs.748d297113") }, scope: 'session' },
+  { id: 'git', get label() { return t("drawerTabs.b949c922b6") }, get heading() { return t("drawerTabs.b949c922b6") }, get title() { return t("drawerTabs.07122b4979") }, scope: 'project' },
+  { id: 'processes', get label() { return t("drawerTabs.4a81a7ba53") }, get heading() { return t("drawerTabs.4a81a7ba53") }, get title() { return t("drawerTabs.a6ffbf769c") }, scope: 'project' },
+  { id: 'schedule', get label() { return t("drawerTabs.f4830a1dae") }, get heading() { return t("drawerTabs.a96e6f574b") }, get title() { return t("drawerTabs.ac8b3bff03") }, scope: 'project' },
+  { id: 'notifications', get label() { return t("drawerTabs.f62e9267d1") }, get heading() { return t("drawerTabs.f62e9267d1") }, get title() { return t("drawerTabs.374eee20eb") }, scope: 'app' },
 ]
 
 /** Tabs that open a document into the workspace instead of typing into it.
@@ -177,8 +178,8 @@ export const DRAWER_BADGE_CAP = 99
  * than `0`: a badge is a claim that there is something, and an empty queue is not.
  */
 export function drawerTabBadge(id: DrawerTabId, counts: DrawerTabCounts): DrawerTabBadge | null {
-  if (id === 'notifications') return countBadge(counts.unread, 'unread alert')
-  if (id === 'queue') return countBadge(counts.queueDepth, 'queued message')
+  if (id === 'notifications') return countBadge(counts.unread, t("drawerTabs.8dda7e664f"))
+  if (id === 'queue') return countBadge(counts.queueDepth, t("drawerTabs.2891026185"))
   return null
 }
 
@@ -187,6 +188,6 @@ function countBadge(count: number, noun: string): DrawerTabBadge | null {
   const whole = Math.floor(count)
   return {
     text: whole > DRAWER_BADGE_CAP ? `${DRAWER_BADGE_CAP}+` : String(whole),
-    label: `${whole} ${noun}${whole === 1 ? '' : 's'}`,
+    get label() { return t("drawerTabs.243ed1919b", { whole: whole, noun: noun, value3: (whole === 1) ? 'yes' : 'no' }) },
   }
 }

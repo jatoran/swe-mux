@@ -15,6 +15,7 @@ from ..models import (
     ProjectRecord,
 )
 from ..prompt_library import PromptScope
+from ..ui_messages import error_text, ui_message
 
 log = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ log = logging.getLogger(__name__)
 def _prompt_scope(request: web.Request) -> PromptScope:
     value = request.match_info.get("scope") or ""
     if value not in {"global", "project"}:
-        raise ValueError("prompt scope must be global or project")
+        raise ValueError(ui_message("prompts.d5091266e7"))
     return cast(PromptScope, value)
 
 
@@ -32,7 +33,7 @@ def _prompt_project(request: web.Request, body: dict[str, Any] | None = None):  
         return None
     project = request.app[keys.PROJECTS].projects.get(project_id)
     if project is None:
-        raise ValueError("unknown project")
+        raise ValueError(ui_message("prompts.e222820974"))
     return project
 
 
@@ -77,7 +78,7 @@ async def put_prompt(request: web.Request) -> web.Response:
         )
     except ValueError as exc:
         if "changed externally" in str(exc):
-            return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+            return json_response({"error": error_text(exc), "code": "revision_conflict"}, 409)
         raise
     await request.app[keys.EVENTS].emit(
         "prompt_template_changed", source="user", operation="updated", template_id=item["id"]
@@ -96,7 +97,7 @@ async def delete_prompt(request: web.Request) -> web.Response:
         )
     except ValueError as exc:
         if "changed externally" in str(exc):
-            return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+            return json_response({"error": error_text(exc), "code": "revision_conflict"}, 409)
         raise
     await request.app[keys.EVENTS].emit(
         "prompt_template_changed",

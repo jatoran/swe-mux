@@ -56,6 +56,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .ui_messages import ui_message
+
 if TYPE_CHECKING:  # pragma: no cover - import cycle at runtime, types only
     from .config import Config
 
@@ -127,14 +129,14 @@ AUTHORITY_FIELDS: dict[str, AuthorityField] = {
             field="session_control_grant",
             levels=("draft", "granted"),
             builtin="granted",
-            label="Interrupt and end sessions",
+            label=ui_message("agent_authority.dea242baeb"),
             gated_by="session_control",
         ),
         AuthorityField(
             field="spawn_grant",
             levels=("draft", "granted"),
             builtin="granted",
-            label="Start new sessions here",
+            label=ui_message("agent_authority.f4db61e77e"),
             gated_by="session_control",
         ),
         AuthorityField(
@@ -143,7 +145,7 @@ AUTHORITY_FIELDS: dict[str, AuthorityField] = {
             # The one field that starts narrow. Landing moves a repository's
             # trunk, so it stays at the inert draft until somebody raises it.
             builtin="draft",
-            label="Land a branch onto the trunk",
+            label=ui_message("agent_authority.3675b3e222"),
             gated_by="land_queue",
         ),
         AuthorityField(
@@ -159,14 +161,14 @@ AUTHORITY_FIELDS: dict[str, AuthorityField] = {
             # *else* put on the branch, is refused by provenance rather than by
             # this level (`verify_provenance.py`).
             builtin="granted",
-            label="Change the verification command",
+            label=ui_message("agent_authority.291b4ebfaa"),
             gated_by="land_queue",
         ),
         AuthorityField(
             field="interject_grant",
             levels=("off", "granted"),
             builtin="granted",
-            label="Write into a running turn",
+            label=ui_message("agent_authority.312048bb88"),
             # Gated by the delivery-readiness predicate rather than by an
             # automation opt-in, so there is no registry id to grey it against.
             gated_by=None,
@@ -178,7 +180,7 @@ AUTHORITY_FIELDS: dict[str, AuthorityField] = {
             # one whose messages may arrive looking like the operator's.
             levels=(ENVELOPE_FULL, ENVELOPE_COMPACT, ENVELOPE_BARE),
             builtin=ENVELOPE_COMPACT,
-            label="Metadata on delivered agent messages",
+            label=ui_message("agent_authority.ef3d97e337"),
             gated_by=None,
         ),
     )

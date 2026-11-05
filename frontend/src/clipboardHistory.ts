@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // Clipboard history capture and client.
 //
 // Capture works through two hooks installed once at boot instead of at each copy
@@ -294,24 +295,24 @@ export async function clearClipboardHistory(includePinned = false): Promise<numb
  *  would report a just-copied entry as a minute old, or as "now" long after. */
 export function relativeAge(seconds: number, now: number = serverNow()): string {
   const delta = Math.max(0, now - seconds)
-  if (delta < 45) return 'now'
-  if (delta < 3600) return `${Math.round(delta / 60)}m`
-  if (delta < 86400) return `${Math.round(delta / 3600)}h`
-  return `${Math.round(delta / 86400)}d`
+  if (delta < 45) return t("clipboardHistory.ed5eb9a37e")
+  if (delta < 3600) return t("clipboardHistory.10767db0b0", { value1: Math.round(delta / 60) })
+  if (delta < 86400) return t("clipboardHistory.9f42db020f", { value1: Math.round(delta / 3600) })
+  return t("clipboardHistory.eb20d8f12a", { value1: Math.round(delta / 86400) })
 }
 
 const SOURCE_LABELS: Record<string, string> = {
-  app: 'copy',
-  selection: 'selection',
-  cut: 'cut',
-  terminal: 'terminal',
-  reply: 'agent reply',
-  resume: 'resume cmd',
-  composer: 'composer',
-  note: 'note',
-  history: 'history',
+  get app() { return t("clipboardHistory.6f5a6034e7") },
+  get selection() { return t("clipboardHistory.6504513406") },
+  get cut() { return t("clipboardHistory.378bfce5cd") },
+  get terminal() { return t("clipboardHistory.4e686af7bd") },
+  get reply() { return t("clipboardHistory.6918acd830") },
+  get resume() { return t("clipboardHistory.a4d95e0bc2") },
+  get composer() { return t("clipboardHistory.42cc848a9f") },
+  get note() { return t("clipboardHistory.edb4656242") },
+  get history() { return t("clipboardHistory.259aa8ef98") },
 }
 
 export function sourceLabel(source: string): string {
-  return SOURCE_LABELS[source] || source || 'copy'
+  return SOURCE_LABELS[source] || source || t("clipboardHistory.6f5a6034e7")
 }

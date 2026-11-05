@@ -70,6 +70,7 @@ from .mcp_contract import (
     READ_TOOL_NAMES,
     WRITE_TOOL_NAMES,
 )
+from .ui_messages import ui_message
 
 #: Shipped guide prose. Under ``assets/`` because that is what the wheel and the
 #: PyInstaller bundle both carry; see the module docstring.
@@ -176,8 +177,7 @@ GUIDES: tuple[Guide, ...] = (
     Guide(
         "diagnostics",
         "Symptom to evidence",
-        "Which report answers which complaint, so a diagnosis reads a fact "
-        "instead of guessing.",
+        "Which report answers which complaint, so a diagnosis reads a fact instead of guessing.",
     ),
     Guide(
         "modifying-swe-mux",
@@ -471,9 +471,7 @@ def mcp_catalog() -> dict[str, list[str]]:
 
 
 def guide_index() -> list[dict[str, str]]:
-    return [
-        {"id": guide.id, "title": guide.title, "summary": guide.summary} for guide in GUIDES
-    ]
+    return [{"id": guide.id, "title": guide.title, "summary": guide.summary} for guide in GUIDES]
 
 
 def read_guide(guide_id: str) -> str:
@@ -497,8 +495,7 @@ def read_guide(guide_id: str) -> str:
         return guide.path.read_text(encoding="utf-8")
     except OSError as exc:
         raise RuntimeError(
-            f"guide {guide.id!r} is listed but its file is missing from this "
-            f"build ({guide.path}); this is a packaging fault, not a missing topic"
+            ui_message("configurator.2a1e210381", value1=repr(guide.id), value2=guide.path)
         ) from exc
 
 
@@ -562,11 +559,14 @@ def build_manifest(
     unknown = sorted(set(sections) - set(MANIFEST_SECTIONS))
     if unknown:
         raise ValueError(
-            f"unknown manifest section(s): {', '.join(unknown)}; "
-            f"available: {', '.join(MANIFEST_SECTIONS)}"
+            ui_message(
+                "configurator.4452456c0e",
+                value1=", ".join(unknown),
+                value2=", ".join(MANIFEST_SECTIONS),
+            )
         )
     if not wanted:
-        raise ValueError(f"name at least one of: {', '.join(MANIFEST_SECTIONS)}")
+        raise ValueError(ui_message("configurator.f639531b5a", value1=", ".join(MANIFEST_SECTIONS)))
     checkout = source_checkout()
     listed = projects if projects is not None else []
 
@@ -599,9 +599,12 @@ def build_manifest(
         "mcp_tools": mcp_catalog,
         "guides": guide_index,
         "projects": lambda: [
-            {**entry, "is_this_session_project": bool(
-                session and entry.get("id") == session.get("project_id")
-            )}
+            {
+                **entry,
+                "is_this_session_project": bool(
+                    session and entry.get("id") == session.get("project_id")
+                ),
+            }
             for entry in listed
         ],
     }
@@ -646,9 +649,7 @@ _RAIL_STORAGE_NOTE = (
 )
 
 
-def _rail_row_view(
-    row: Any, labels: dict[str, str], pointer: str
-) -> dict[str, Any]:
+def _rail_row_view(row: Any, labels: dict[str, str], pointer: str) -> dict[str, Any]:
     entries: list[dict[str, Any]] = []
     for raw in row.get("items") or []:
         item_id = raw if isinstance(raw, str) else str((raw or {}).get("id") or "")
@@ -685,7 +686,7 @@ def rail_projection(
     warning about another Project's button (2026-08-24).
     """
     if not isinstance(document, dict):
-        return {"readable": False, "reason": "the stored rail is not an object"}
+        return {"readable": False, "reason": ui_message("configurator.c9979ff67d")}
     labels = {
         str(item.get("id") or ""): str(item.get("label") or "")
         for item in (document.get("items") or [])
@@ -780,9 +781,9 @@ def device_settings_view(
 
     names = project_names or {}
     if profile and profile not in PROFILES:
-        raise ValueError(f"profile must be one of {', '.join(PROFILES)}")
+        raise ValueError(ui_message("configurator.3913f8e8e7", value1=", ".join(PROFILES)))
     if domain and domain not in DOMAINS:
-        raise ValueError(f"domain must be one of {', '.join(DOMAINS)}")
+        raise ValueError(ui_message("configurator.3ef9c7ec22", value1=", ".join(DOMAINS)))
 
     index: dict[str, Any] = {}
     for name in PROFILES:
@@ -916,7 +917,7 @@ class ConfiguratorService:
         session_project_id: str = "",
     ) -> dict[str, Any]:
         if self._settings_store is None:
-            raise RuntimeError("device settings are not available on this daemon")
+            raise RuntimeError(ui_message("configurator.2c83e71f22"))
         return await asyncio.to_thread(
             device_settings_view,
             self._settings_store(),
@@ -930,21 +931,21 @@ class ConfiguratorService:
         self, *, profile: str, domain: str, operations: Any, expect_digest: str = ""
     ) -> dict[str, Any]:
         if self._edit_device_settings is None:
-            raise RuntimeError("device settings are not writable on this daemon")
+            raise RuntimeError(ui_message("configurator.90ab1a3eb7"))
         return await self._edit_device_settings(
             profile=profile, domain=domain, operations=operations, expect_digest=expect_digest
         )
 
     async def project_settings(self, project: str = "") -> dict[str, Any]:
         if self._read_project_settings is None:
-            raise RuntimeError("project settings are not available on this daemon")
+            raise RuntimeError(ui_message("configurator.eab974a0df"))
         return await self._read_project_settings(project)
 
     async def apply_project_settings(
         self, *, project: str, changes: dict[str, Any]
     ) -> dict[str, Any]:
         if self._apply_project_settings is None:
-            raise RuntimeError("project settings are not writable on this daemon")
+            raise RuntimeError(ui_message("configurator.03b3fb2a5f"))
         return await self._apply_project_settings(project=project, changes=changes)
 
 

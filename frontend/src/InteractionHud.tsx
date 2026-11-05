@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import {
   CLIPBOARD_COPIED_EVENT,
@@ -45,7 +46,7 @@ export function InteractionHud() {
     }
     const onClipboardCopied = (event: Event) => {
       const detail = (event as CustomEvent<ClipboardCopiedDetail>).detail
-      show(detail?.action === 'cut' ? 'Cut to clipboard' : 'Copied to clipboard')
+      show(detail?.action === 'cut' ? t("InteractionHud.a954b4a315") : t("InteractionHud.d37078fe6a"))
     }
 
     window.addEventListener(INTERACTION_HUD_EVENT, onInteraction)

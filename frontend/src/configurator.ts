@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 /**
  * The configurator launcher: one button that opens an agent session about swe-mux
  * itself.
@@ -51,12 +52,12 @@ export type ConfiguratorLaunchState = {
   harness: string
 }
 
-const NO_HARNESS =
-  'No agent CLI is installed and enabled, so there is nothing to launch the ' +
-  'configurator into. Install one, or enable it in Settings → Harnesses.'
-const NO_PROJECT =
-  'The configurator runs inside a Project, and none is registered yet. Add a ' +
-  'Project first.'
+const noHarnessMessage =
+  () => (t("configurator.771cd33082") +
+  t("configurator.6c423d198e"))
+const noProjectMessage =
+  () => (t("configurator.31290470da") +
+  t("configurator.6fe0df5ed6"))
 
 /**
  * What the button should say and whether it should be pressable.
@@ -68,18 +69,18 @@ const NO_PROJECT =
  */
 export function launchState(options: ConfiguratorOptions | null): ConfiguratorLaunchState {
   if (!options) {
-    return { enabled: true, blocker: null, reason: 'Ask an agent about swe-mux', harness: '' }
+    return { enabled: true, blocker: null, get reason() { return t("configurator.676aebfe2c") }, harness: '' }
   }
   if (!options.harnesses.length || !options.default_harness) {
-    return { enabled: false, blocker: 'no-harness', reason: NO_HARNESS, harness: '' }
+    return { enabled: false, blocker: 'no-harness', reason: noHarnessMessage(), harness: '' }
   }
   if (options.projects < 1) {
-    return { enabled: false, blocker: 'no-project', reason: NO_PROJECT, harness: '' }
+    return { enabled: false, blocker: 'no-project', reason: noProjectMessage(), harness: '' }
   }
   return {
     enabled: true,
     blocker: null,
-    reason: `Ask ${options.default_harness} about swe-mux — settings, diagnostics, and how it works`,
+    get reason() { return t("configurator.0cb3545539", { default_harness: options.default_harness }) },
     harness: options.default_harness,
   }
 }

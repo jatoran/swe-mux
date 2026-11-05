@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 export type AgentEnvironmentScope = 'built_in' | 'managed' | 'user' | 'project' | 'local' | 'session' | 'unknown'
 
 export interface AgentEnvironmentMeta {
@@ -98,10 +99,10 @@ export interface McpToolCatalog {
 }
 
 const EVIDENCE_LABELS: Record<McpToolEvidence, string> = {
-  swe_mux_owned: 'swe-mux owned',
-  live_process: 'Live session',
-  parallel_probe: 'Runtime probe',
-  not_supported: 'Not reportable',
+  get swe_mux_owned() { return t("agentEnvironment.60257385ed") },
+  get live_process() { return t("agentEnvironment.94f506b7d3") },
+  get parallel_probe() { return t("agentEnvironment.b00ddded31") },
+  get not_supported() { return t("agentEnvironment.15f6993e8b") },
 }
 
 export function mcpEvidenceLabel(evidence: McpToolEvidence): string {
@@ -110,10 +111,10 @@ export function mcpEvidenceLabel(evidence: McpToolEvidence): string {
 
 const STATUS_LABELS: Record<McpToolStatus, string> = {
   ok: '',
-  auth_required: 'auth required · not probed',
-  unsupported: 'not probed',
-  unavailable: 'not reported',
-  error: 'probe failed',
+  get auth_required() { return t("agentEnvironment.e0255ee725") },
+  get unsupported() { return t("agentEnvironment.366c030ffe") },
+  get unavailable() { return t("agentEnvironment.2087cb5f8b") },
+  get error() { return t("agentEnvironment.5a414e1bab") },
 }
 
 export function mcpStatusLabel(status: McpToolStatus): string {
@@ -121,13 +122,13 @@ export function mcpStatusLabel(status: McpToolStatus): string {
 }
 
 const SCOPE_LABELS: Record<AgentEnvironmentScope, string> = {
-  built_in: 'Built in',
-  managed: 'Managed',
-  user: 'Global',
-  project: 'Project',
-  local: 'Local',
-  session: 'Session',
-  unknown: 'Other',
+  get built_in() { return t("agentEnvironment.78a6a8fe9b") },
+  get managed() { return t("agentEnvironment.8f2de600bf") },
+  get user() { return t("agentEnvironment.a258b30f88") },
+  get project() { return t("agentEnvironment.9859597853") },
+  get local() { return t("agentEnvironment.8c31e6e722") },
+  get session() { return t("agentEnvironment.6959b41595") },
+  get unknown() { return t("agentEnvironment.f97e9da0e3") },
 }
 
 export function agentScopeLabel(scope: AgentEnvironmentScope): string {
@@ -138,7 +139,7 @@ export function agentStateLabel(state: string): string {
   return state.replaceAll('_', ' ')
 }
 
-const OWNER_LABELS: Record<string, string> = { swe_mux: 'swe-mux' }
+const OWNER_LABELS: Record<string, string> = { get swe_mux() { return t("agentEnvironment.142caaf1c5") } }
 
 export function agentOwnerLabel(owner: string): string {
   return OWNER_LABELS[owner] || agentStateLabel(owner)
@@ -167,13 +168,13 @@ export function groupAgentEnvironmentItems(
 
 export function agentCompletenessLabel(completeness: string): string {
   const labels: Record<string, string> = {
-    documented_catalog: 'Documented catalog',
-    runtime_dependent: 'Runtime dependent',
-    current_filesystem: 'Current files',
-    configured_only: 'Configured only',
+    get documented_catalog() { return t("agentEnvironment.ec9551cc75") },
+    get runtime_dependent() { return t("agentEnvironment.cf3123840b") },
+    get current_filesystem() { return t("agentEnvironment.eef7a2320b") },
+    get configured_only() { return t("agentEnvironment.0752fa4725") },
     installed_config: 'Installed + configured',
     documented_and_configured: 'Documented + configured',
-    resolved_known_keys: 'Resolved keys',
+    get resolved_known_keys() { return t("agentEnvironment.45a3aa1edc") },
   }
   return labels[completeness] || agentStateLabel(completeness)
 }

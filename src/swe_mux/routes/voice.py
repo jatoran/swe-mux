@@ -35,6 +35,7 @@ from ..session import (
     session_cli_state_status,
 )
 from ..tts_profiles import resolve_tts_profile
+from ..ui_messages import ui_message
 from ..voice import (
     COMMAND_PROFILE,
     DICTATION_PROFILE,
@@ -101,22 +102,18 @@ async def edge_provider_install(request: web.Request) -> web.Response:
     """Explicitly create or repair the managed external Edge TTS environment."""
 
     if request.headers.get("X-Mux-User-Gesture") != "edge-tts-install":
-        return json_response(
-            {"error": "managed Edge TTS installation requires an explicit user action"}, 403
-        )
+        return json_response({"error": ui_message("route_voice.9a91c4a880")}, 403)
     voice: VoiceService = request.app[keys.VOICE]
     try:
         started = voice.edge_tts.start_managed_install()
     except OSError as exc:
-        return json_response({"error": f"could not start the managed installation: {exc}"}, 500)
+        return json_response({"error": ui_message("route_voice.0069159688", value1=exc)}, 500)
     return json_response({"started": started, **voice.edge_tts.status()}, 202)
 
 
 async def edge_voice_catalog(request: web.Request) -> web.Response:
     voice: VoiceService = request.app[keys.VOICE]
-    return json_response(
-        voice.edge_tts.catalog.snapshot(selected=voice.config.tts_edge_voice)
-    )
+    return json_response(voice.edge_tts.catalog.snapshot(selected=voice.config.tts_edge_voice))
 
 
 async def edge_voice_refresh(request: web.Request) -> web.Response:
@@ -133,7 +130,7 @@ async def edge_voice_preview(request: web.Request) -> web.Response:
     voice: VoiceService = request.app[keys.VOICE]
     voice_id = str(request.query.get("voice") or "")
     if not voice_id or len(voice_id) > 160 or not voice_id.endswith("Neural"):
-        return json_response({"error": "invalid Edge voice id"}, 400)
+        return json_response({"error": ui_message("route_voice.aedd5dc133")}, 400)
     profile = resolve_tts_profile(voice.config, provider="edge", voice_override=voice_id)
     destination = voice.clip_directory / f"edge-preview-{uuid.uuid4().hex}.mp3"
     try:
@@ -251,9 +248,7 @@ async def whisper_model_download(request: web.Request) -> web.Response:
         started = voice.whisper_models.start_download(name, progress)
     except VoiceModelError as exc:
         return json_response({"error": str(exc)}, 400)
-    return json_response(
-        {"started": started, **voice.whisper_models.status(name)}, 202
-    )
+    return json_response({"started": started, **voice.whisper_models.status(name)}, 202)
 
 
 async def kokoro_voice_preview(request: web.Request) -> web.Response:
@@ -310,9 +305,7 @@ async def voice_lexicon_build(request: web.Request) -> web.Response:
     if not isinstance(body, dict):
         raise ValueError("lexicon build body must be an object")
     try:
-        result = await voice.build_lexicon_entry(
-            body.get("word") or "", body.get("value") or ""
-        )
+        result = await voice.build_lexicon_entry(body.get("word") or "", body.get("value") or "")
     except VoiceError as exc:
         return json_response({"error": str(exc)}, 400)
     return json_response(result)
@@ -376,9 +369,7 @@ async def kokoro_model_download(request: web.Request) -> web.Response:
 
     started = voice.kokoro_models.start_download(progress)
     g2p_started = voice.g2p_model.start_download(g2p_progress)
-    runtime_started = voice.voice_runtime.start_download(
-        _runtime_progress(events, voice)
-    )
+    runtime_started = voice.voice_runtime.start_download(_runtime_progress(events, voice))
     return json_response(
         {
             "started": started or g2p_started or runtime_started,
@@ -418,11 +409,11 @@ async def voice_transcribe(request: web.Request) -> web.Response:
     if sid:
         session = request.app[keys.SESSIONS].resolve(sid)
         if not is_agent_harness(session.record.backend):
-            return json_response({"error": "conversation mode requires an agent session"}, 409)
+            return json_response({"error": ui_message("route_voice.ce4ed1e99c")}, 409)
     if request.content_type not in {"audio/wav", "audio/x-wav", "application/octet-stream"}:
-        return json_response({"error": "voice transcription requires WAV audio"}, 415)
+        return json_response({"error": ui_message("route_voice.f82d9303ea")}, 415)
     if request.content_length is not None and request.content_length > 2 * 1024 * 1024:
-        return json_response({"error": "voice utterance must not exceed 2 MiB"}, 413)
+        return json_response({"error": ui_message("route_voice.2e15061065")}, 413)
     correlation_id = re.sub(
         r"[^A-Za-z0-9_.:-]", "", str(request.headers.get("X-Mux-Utterance-Id", ""))[:100]
     )
@@ -529,7 +520,7 @@ def _voice_delivery_protected(app: Any, session: Any) -> list[str]:
 def _voice_delivery_protected_response(protected: list[str]) -> web.Response:
     return json_response(
         {
-            "error": "voice delivery is protected until the agent prompt is safe",
+            "error": ui_message("route_voice.59cd86b03a"),
             "code": "delivery_protected",
             "reasons": protected,
         },
@@ -589,12 +580,10 @@ async def voice_submit(request: web.Request) -> web.Response:
         # long enough to become a paste chip is exactly the one whose Enter a CLI
         # swallows (`features/prompt-queue.md`).
         await asyncio.sleep(
-            paste_submit_settle_seconds(
-                session.record.backend, len(payload.encode("utf-8"))
-            )
+            paste_submit_settle_seconds(session.record.backend, len(payload.encode("utf-8")))
         )
         if session.record.state in {"exited", "crashed"}:
-            return json_response({"error": "the agent session ended during delivery"}, 409)
+            return json_response({"error": ui_message("route_voice.601f08512d")}, 409)
         operator_input.record_operator_input(
             request.app[keys.EVENTS], session, SUBMIT_SEQUENCE, source="voice"
         )
@@ -646,7 +635,7 @@ async def voice_approval(request: web.Request) -> web.Response:
         return json_response({"ok": True, "cancelled": True})
     current = _current_voice_approval(session)
     if current is None:
-        return json_response({"error": "the focused session is not showing an approval"}, 409)
+        return json_response({"error": ui_message("route_voice.7556829630")}, 409)
     operation, fingerprint = current
     run_id = str(session.record.agent_run_id or "")
     if action == "prepare":
@@ -678,7 +667,7 @@ async def voice_approval(request: web.Request) -> web.Response:
 async def voice_interrupt(request: web.Request) -> web.Response:
     session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     if not delivers_prompts_through_pty(session.record.backend):
-        return json_response({"error": "conversation mode requires an agent session"}, 409)
+        return json_response({"error": ui_message("route_voice.ce4ed1e99c")}, 409)
     if session.record.state in {"exited", "crashed"}:
         return json_response({"ok": True, "already_ended": True})
     operator_input.record_operator_input(request.app[keys.EVENTS], session, "\x03", source="voice")

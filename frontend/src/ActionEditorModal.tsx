@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { RailEditor } from './RailEditor'
 import { railProjectScopeKind, type RailBlob } from './commandRail'
 import { currentRailBlob } from './deviceSettings'
@@ -11,7 +12,7 @@ export function actionEditorInitialScope(projectId: string | undefined, blob: Ra
 export function ActionEditorPanel({ projectId }: { projectId?: string }) {
   const initialScope = actionEditorInitialScope(projectId, currentRailBlob())
   return <div class="action-editor-body">
-    <p class="profile-hint">Layout and catalog changes apply immediately, separately from Settings Save.</p>
+    <p class="profile-hint">{t("ActionEditorModal.017019c95a")}</p>
     <RailEditor initialScope={initialScope} contextProjectId={projectId} />
   </div>
 }

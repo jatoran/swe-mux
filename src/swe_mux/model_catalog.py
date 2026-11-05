@@ -49,6 +49,7 @@ from .harness import (
     normalize_model_name,
     resolve_launch_model,
 )
+from .ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -213,18 +214,16 @@ async def catalog_for(harness: str, *, refresh: bool = False) -> CatalogResult:
     name = str(harness or "").strip()
     if name not in agent_harnesses():
         return CatalogResult(
-            harness=name, command="", error=f"{name!r} is not a registered agent harness"
+            harness=name,
+            command="",
+            error=ui_message("model_catalog.cf9e71c3ca", value1=repr(name)),
         )
     catalog = model_catalog(name)
     if catalog is None:
         return CatalogResult(
             harness=name,
             command="",
-            error=(
-                f"{descriptor(name).display_name} has no command that lists models, "
-                f"so mux cannot enumerate them; the names it accepts are in the "
-                f"refusal a wrong one produces"
-            ),
+            error=(ui_message("model_catalog.c22d5e03d0", value1=descriptor(name).display_name)),
         )
     command = " ".join((descriptor(name).executable, *catalog.argv))
     async with _lock:
@@ -244,12 +243,12 @@ async def _probe(
         return CatalogResult(
             harness=harness,
             command=command,
-            error=f"{descriptor(harness).executable} is not installed on this host",
+            error=ui_message("model_catalog.610f0c1c02", value1=descriptor(harness).executable),
         )
     try:
         outcome = await run_bounded(
             [executable, *catalog.argv],
-            label=f"model_catalog:{harness}",
+            label=ui_message("model_catalog.f0f1dc1a39", value1=harness),
             timeout_seconds=PROBE_TIMEOUT_SECONDS,
             output_limit=OUTPUT_LIMIT_BYTES,
             merge_stderr=True,
@@ -259,7 +258,9 @@ async def _probe(
             "model_catalog_probe_failed harness=%s error_type=%s", harness, type(exc).__name__
         )
         return CatalogResult(
-            harness=harness, command=command, error=f"could not run `{command}`: {exc}"
+            harness=harness,
+            command=command,
+            error=ui_message("model_catalog.dce9d26f6e", value1=command, value2=exc),
         )
     text = outcome.stdout.decode("utf-8", "replace")
     models = parse_models(catalog, text)

@@ -18,6 +18,7 @@ from ..http_support import json_response
 from ..session import (
     SessionManager,
 )
+from ..ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -36,9 +37,7 @@ async def list_lineage(request: web.Request) -> web.Response:
     return json_response({"items": edges})
 
 
-async def _decorate_lineage_endpoints(
-    app: web.Application, edges: list[dict[str, Any]]
-) -> None:
+async def _decorate_lineage_endpoints(app: web.Application, edges: list[dict[str, Any]]) -> None:
     """Attach `{name, live, known}` for each edge's parent and child run.
 
     ``known: false`` is a deliberate third state rather than an empty name. An edge
@@ -50,9 +49,7 @@ async def _decorate_lineage_endpoints(
         return
     manager: SessionManager = app[keys.SESSIONS]
     endpoints = {
-        str(edge.get(field) or "")
-        for edge in edges
-        for field in ("parent_run_id", "child_run_id")
+        str(edge.get(field) or "") for edge in edges for field in ("parent_run_id", "child_run_id")
     }
     endpoints.discard("")
     rows = await app[keys.HISTORY].history_naming_rows(sorted(endpoints))
@@ -86,14 +83,19 @@ async def create_lineage(request: web.Request) -> web.Response:
     parent = str(body.get("parent_run_id") or "")
     child = str(body.get("child_run_id") or "")
     relation = str(body.get("relation") or "")
-    if not parent or not child or relation not in {
-        "resume",
-        "handoff",
-        "continuation",
-        "review",
-        "branch",
-    }:
-        raise ValueError("parent_run_id, child_run_id, and a valid relation are required")
+    if (
+        not parent
+        or not child
+        or relation
+        not in {
+            "resume",
+            "handoff",
+            "continuation",
+            "review",
+            "branch",
+        }
+    ):
+        raise ValueError(ui_message("attention.7b11576ca4"))
     return json_response(
         await request.app[keys.AUTOMATION_STORE].add_lineage(
             parent, child, relation, body.get("metadata")
@@ -139,7 +141,7 @@ async def attention_rule_decision(request: web.Request) -> web.Response:
     incident_class = str(body.get("incident_class") or "")
     channel = str(body.get("channel") or "")
     if not incident_class or not channel:
-        raise ValueError("incident_class and channel are required")
+        raise ValueError(ui_message("attention.fe475241bb"))
     ranking = request.app[keys.ATTENTION_RANKING]
     await ranking.decide_rule(incident_class, channel, bool(body.get("accept", False)))
     return json_response({"rules": [rule.snapshot() for rule in await ranking.rules()]})

@@ -6,6 +6,13 @@ A four-page path to a working session, followed by optional setup and a UI tour.
 The browser, desktop WebView, and phone share progress through the daemon.
 Getting started remains above Usage in the sidebar until hidden, and Help restores it.
 
+## Language
+
+The setup header exposes English / 简体中文 through the shared language selector.
+The selection uses the ordinary global configuration flow and remains editable in Settings → General.
+Language selection is independent of setup progress and does not add another setup page.
+See [UI localization](localization.md) for detection, fallback, and persistence.
+
 ## Core sequence
 
 1. Experience: Just terminals, Agent workspace, or Smart workspace.

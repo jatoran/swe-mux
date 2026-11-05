@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import type { VNode } from 'preact'
 import { cloneElement } from 'preact'
 import { useEffect, useRef } from 'preact/hooks'
@@ -80,7 +81,7 @@ export function RailArrangePanel({
   const caretFor = (rowId: string): number | null =>
     preview.caret && preview.caret.rowId === rowId ? preview.caret.at : null
 
-  return <div class="rail-arrange" role="group" aria-label="Arrange actions" onMouseDown={holdSoftKeyboard}>
+  return <div class="rail-arrange" role="group" aria-label={t("RailArrangePanel.c5012fc803")} onMouseDown={holdSoftKeyboard}>
     <div class="rail-arrange-head">
       <span class="rail-arrange-scope" title={scopeDetail}>{scopeLabel}</span>
       <div class="rail-arrange-head-actions">
@@ -88,34 +89,32 @@ export function RailArrangePanel({
           type="button"
           class={catalogOpen ? 'rail-arrange-on' : undefined}
           aria-expanded={catalogOpen}
-          title="Show every action, to drag one onto a row"
+          title={t("RailArrangePanel.619f8befc4")}
           onClick={onToggleCatalog}
-        >Add</button>
-        <button type="button" disabled={!canUndo} title="Undo the last arrangement change" onClick={onUndo}>Undo</button>
-        <button type="button" class="rail-arrange-done" title="Stop arranging (Escape)" onClick={onDone}>Done</button>
+        >{t("RailArrangePanel.9fd728c66c")}</button>
+        <button type="button" disabled={!canUndo} title={t("RailArrangePanel.de03766514")} onClick={onUndo}>{t("RailArrangePanel.a8283ade31")}</button>
+        <button type="button" class="rail-arrange-done" title={t("RailArrangePanel.c98ae19941")} onClick={onDone}>{t("RailArrangePanel.11a6767d56")}</button>
       </div>
     </div>
 
-    {catalogOpen && <div class="rail-arrange-catalog" role="group" aria-label="Actions available to add">
-      {catalog.length
-        ? catalog.map(entry => <span
+    {catalogOpen && <div class="rail-arrange-catalog" role="group" aria-label={t("RailArrangePanel.d43053834d")}>
+      {catalog.length ? catalog.map(entry => <span
           key={entry.id}
           class="rail-arrange-catalog-chip"
           data-rail-catalog-item={entry.id}
-          title={`Drag ${entry.label} onto a row`}
+          title={t("RailArrangePanel.fc5e13b06b", { label: entry.label })}
           onPointerDown={event => onCatalogPointerDown(event as unknown as PointerEvent, entry.id, entry.label)}
-        >{cloneElement(entry.chip)}</span>)
-        : <span class="rail-arrange-empty">Every action this session offers is already on the rail.</span>}
+        >{cloneElement(entry.chip)}</span>) : <span class="rail-arrange-empty">{t("RailArrangePanel.d7de23366e")}</span>}
     </div>}
 
     <div class="rail-arrange-rows" data-rail-arrange-surface="panel" ref={rowsRef}>
       {rows.map((row, index) => <div class="rail-arrange-row" key={row.id}>
-        <span class="rail-arrange-row-label">{row.label || `Row ${index + 1}`}</span>
+        <span class="rail-arrange-row-label">{row.label || t("RailArrangePanel.b78831f446", { value1: index + 1 })}</span>
         <div
           class="rail-arrange-grid"
           data-rail-row={`${device}|strip|${row.id}`}
           role="group"
-          aria-label={row.label || `Row ${index + 1}`}
+          aria-label={row.label || t("RailArrangePanel.b78831f446", { value1: index + 1 })}
         >{arrangeChildren(row.chips.map(chip => cloneElement(chip)), caretFor(row.id))}</div>
       </div>)}
     </div>
@@ -127,11 +126,11 @@ export function RailArrangePanel({
       <div
         class={`rail-arrange-zone rail-arrange-remove${preview.zone === 'remove' ? ' rail-arrange-zone-over' : ''}`}
         data-rail-arrange-zone="remove"
-      >✕<span class="rail-arrange-zone-text">Remove</span></div>
+      >✕<span class="rail-arrange-zone-text">{t("RailArrangePanel.c3812fc4ac")}</span></div>
       <div
         class={`rail-arrange-zone rail-arrange-new-row${preview.zone === 'new-row' ? ' rail-arrange-zone-over' : ''}`}
         data-rail-arrange-zone="new-row"
-      >+<span class="rail-arrange-zone-text">New row</span></div>
+      >+<span class="rail-arrange-zone-text">{t("RailArrangePanel.8ea6cab3dc")}</span></div>
     </div>
   </div>
 }

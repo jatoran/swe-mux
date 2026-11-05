@@ -1,3 +1,4 @@
+import { withCatalogText } from './support/localizedSource.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
@@ -69,7 +70,7 @@ test('Settings sends one request for the whole save', () => {
   // The two-request shape is what made a half-commit possible at all, so its absence is
   // the invariant rather than an implementation detail. Source-level because the panel is
   // far too large to mount here; the renderer suite covers the behaviour.
-  const panel = readFileSync(join(import.meta.dirname, '..', 'src', 'Settings.tsx'), 'utf8')
+  const panel = withCatalogText(readFileSync(join(import.meta.dirname, '..', 'src', 'Settings.tsx'), 'utf8'))
   const save = code(panel.slice(panel.indexOf('const save = async'), panel.indexOf('const reset = async')))
   // The host descriptor rides the query since 2026-08-30, so the daemon resolves the
   // keymap it hands back for the keyboard that is actually saving.
@@ -80,7 +81,7 @@ test('Settings sends one request for the whole save', () => {
 })
 
 test('Restore defaults is confirmed and its failure is visible', () => {
-  const panel = readFileSync(join(import.meta.dirname, '..', 'src', 'Settings.tsx'), 'utf8')
+  const panel = withCatalogText(readFileSync(join(import.meta.dirname, '..', 'src', 'Settings.tsx'), 'utf8'))
   // The button raises the decision; it does not call the endpoint.
   assert.ok(panel.includes('onClick={()=>setResetIntent(true)}>Restore defaults<'))
   const reset = panel.slice(panel.indexOf('const reset = async'), panel.indexOf('const exportConfig'))

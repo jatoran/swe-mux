@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from .keybindings import Rule, normalize_rule
+from .ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -86,11 +87,11 @@ def _read(name: str) -> dict[str, Any]:
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:  # pragma: no cover - a packaging fault, not a user one
-        raise ValueError(f"keymap {name!r} is not installed at {path}") from exc
+        raise ValueError(ui_message("keymaps.845f7d2a32", value1=repr(name), value2=path)) from exc
     except json.JSONDecodeError as exc:
-        raise ValueError(f"keymap {name!r} is not valid JSON: {exc}") from exc
+        raise ValueError(ui_message("keymaps.bb54f4638b", value1=repr(name), value2=exc)) from exc
     if not isinstance(document, dict):
-        raise ValueError(f"keymap {name!r} must be an object")
+        raise ValueError(ui_message("keymaps.2e1791c79c", value1=repr(name)))
     return document
 
 
@@ -112,17 +113,17 @@ def _document_rules(document: dict[str, Any], leader: str, *, source: str) -> li
     rules: list[Rule] = []
     bindings = document.get("bindings") or {}
     if not isinstance(bindings, dict):
-        raise ValueError(f"{source}: `bindings` must be an object")
+        raise ValueError(ui_message("keymaps.2e7050afbd", value1=source))
     for keys, command in bindings.items():
         rules.append(
             normalize_rule({"keys": _substitute_leader(str(keys), leader), "command": command})
         )
     extra = document.get("rules") or []
     if not isinstance(extra, list):
-        raise ValueError(f"{source}: `rules` must be a list")
+        raise ValueError(ui_message("keymaps.02e1537934", value1=source))
     for raw in extra:
         if not isinstance(raw, dict):
-            raise ValueError(f"{source}: every entry in `rules` must be an object")
+            raise ValueError(ui_message("keymaps.ab1526934e", value1=source))
         rules.append(
             normalize_rule({**raw, "keys": _substitute_leader(str(raw.get("keys", "")), leader)})
         )
@@ -187,7 +188,7 @@ def preset_rules(preset_id: str) -> list[Rule]:
     """The rule list for one preset, or ValueError naming the unknown id."""
     preset = presets().get(preset_id)
     if preset is None:
-        raise ValueError(f"unknown keymap preset {preset_id!r}")
+        raise ValueError(ui_message("keymaps.7459374b9b", value1=repr(preset_id)))
     return list(preset.rules)
 
 

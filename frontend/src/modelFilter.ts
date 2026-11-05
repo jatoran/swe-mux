@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import type { ModelPricingFacts } from './modelPricing.ts'
 
 /**
@@ -15,7 +16,7 @@ export type ModelOption = ModelPricingFacts & {id:string;name:string}
 export function includeSelectedModel(models:ModelOption[],selected:string):ModelOption[]{
   const items=[...models]
   if(selected&&!items.some(item=>item.id===selected)){
-    items.unshift({id:selected,name:'Configured model (catalog unavailable)'})
+    items.unshift({id:selected,name: t("modelFilter.477708a643")})
   }
   return items
 }

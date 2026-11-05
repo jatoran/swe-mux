@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 /**
  * Turning a switch on from the surface that cannot work without it.
  *
@@ -103,25 +104,25 @@ export const isGrantable = (id: SettingTargetId): id is GrantId => id in GRANTS
  */
 export function grantKey(id: GrantId): string {
   const setting = SETTING_TARGETS[id].setting
-  if (!setting) throw new Error(`grant ${id} points at a target with no control`)
+  if (!setting) throw new Error(t("grants.346e8f6544", { id: id }))
   return setting.startsWith('automation:') ? setting.slice('automation:'.length) : setting
 }
 
 /** Where a grant's change is written, in the words the operator needs before pressing. */
 export function grantWrittenTo(id: GrantId): string {
   const grant: GrantDescriptor = GRANTS[id]
-  if (grant.scope === 'install') return 'this machine’s swe-mux configuration'
-  if (grant.scope === 'device') return 'this device’s own settings'
+  if (grant.scope === 'install') return t("grants.a20ff8a4fd")
+  if (grant.scope === 'device') return t("grants.62e834f9df")
   // Worth spelling out every time: a Project opt-in is committed repository content, so
   // it reaches every clone, every worktree, and everyone else who works here.
-  return 'this Project’s .swe-mux/config.toml, which travels with the checkout'
+  return t("grants.3e14c44346")
 }
 
 /** How wide the change reaches, for the scope chip on the button. */
 export const GRANT_SCOPE_LABEL: Record<GrantScope, string> = {
-  install: 'all projects',
-  project: 'this Project',
-  device: 'this device',
+  get install() { return t("grants.1ff8ad6301") },
+  get project() { return t("grants.475ef7961e") },
+  get device() { return t("grants.cf3cc23e5a") },
 }
 
 export type AutomationEntry = ProjectAutomationState['automations'][number]
@@ -206,7 +207,7 @@ export async function applyGrants(request: GrantRequest): Promise<GrantResult> {
     else values[grantKey(id)] = grant.value
   }
   if (needsProject && !request.projectId) {
-    throw new Error('Select a Project first — that switch belongs to one Project.')
+    throw new Error(t("grants.b353e1ea37"))
   }
   if (!Object.keys(install).length && !automations.length && !Object.keys(values).length) {
     return { applied: { install: [], automations: [], values: [] }, spends: false, resumed_lands: [] }

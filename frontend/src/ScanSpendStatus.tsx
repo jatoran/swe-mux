@@ -1,3 +1,5 @@
+import { locale as uiLocale } from './localization/index.ts'
+import { t } from './localization/index.ts'
 import { useEffect, useState } from 'preact/hooks'
 import { api } from './api'
 import type { Budget, Session } from './types'
@@ -31,11 +33,11 @@ export function ScanSpendStatus({session,onOpen}:{session:Session|null;onOpen:()
   const enforcesUsd=budget.mode!=='tokens'&&budget.usd!=null
   const spent=enforcesUsd
     ?`$${state.spend_today.cost_usd.toFixed(4)}`
-    :state.spend_today.tokens.toLocaleString()
+    :state.spend_today.tokens.toLocaleString(uiLocale.value)
   const cap=enforcesUsd
     ?`$${(budget.usd??0).toFixed(2)}`
-    :(budget.tokens??0).toLocaleString()
+    :(budget.tokens??0).toLocaleString(uiLocale.value)
   const unpriced=state.spend_today.unpriced_calls||0
-  const title=`Scan timeline ${state.run_enabled?'on for this run':'off for this run'} · ${spent} of ${cap} today${enforcesUsd?` · ${state.spend_today.tokens.toLocaleString()} tokens`:''}${enforcesUsd&&unpriced?` · ${unpriced} of today's calls reported no cost`:''}`
-  return <button class={`scan-spend-status ${state.run_enabled?'active':''}`} title={title} aria-label={title} onClick={onOpen}><span>SCAN</span><strong>{spent}</strong><em>/ {cap}</em></button>
+  const title=t("ScanSpendStatus.943d9e7218", { value1: (state.run_enabled) ? 'yes' : 'no', value2: spent, value3: cap, value4: enforcesUsd?` · ${state.spend_today.tokens.toLocaleString(uiLocale.value)} tokens`:'', value5: enforcesUsd&&unpriced?t("ScanSpendStatus.0b51f91882", { value1: unpriced }):'' })
+  return <button class={`scan-spend-status ${state.run_enabled?'active':''}`} title={title} aria-label={title} onClick={onOpen}><span>{t("ScanSpendStatus.7a1580c49e")}</span><strong>{spent}</strong><em>/ {cap}</em></button>
 }

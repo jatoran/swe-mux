@@ -1,3 +1,6 @@
+import { numberFormatter, dateTimeFormatter } from './localization/index.ts'
+import { codeLabel } from './localization/codeLabels.ts'
+import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import type { ComponentChildren } from 'preact'
 import { memo } from 'preact/compat'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
@@ -97,7 +100,7 @@ type Props={
   onHandoff:(entry:HistoryEntry)=>void|Promise<void>
 }
 
-const money=new Intl.NumberFormat(undefined,{style:'currency',currency:'USD',maximumFractionDigits:4})
+const money=numberFormatter({style:'currency',currency:'USD',maximumFractionDigits:4})
 const COPIED_FLASH_MS=1200
 /** How soon an open conversation first asks whether its background reindex has finished,
  *  and the ceiling its backoff grows to. A first index of a long conversation is a parse
@@ -110,7 +113,7 @@ const PAGE_PREFETCH_MARGIN='600px 0px'
 // One formatter for every local timestamp the browser draws. `Date.toLocaleString` built a
 // new one per call, twice per results row and once per commit, note and timeline entry.
 // These options are exactly the ones it defaults to, so no label changes.
-const localStamp=new Intl.DateTimeFormat(undefined,{year:'numeric',month:'numeric',day:'numeric',hour:'numeric',minute:'numeric',second:'numeric'})
+const localStamp=dateTimeFormatter({year:'numeric',month:'numeric',day:'numeric',hour:'numeric',minute:'numeric',second:'numeric'})
 const historyName=(entry:HistoryEntry)=>runDisplayName(entry)
 const timestampDate=(value?:string|number|null)=>{
   if(value===undefined||value===null||value==='')return null
@@ -118,23 +121,23 @@ const timestampDate=(value?:string|number|null)=>{
   const date=new Date(numeric===null?value:numeric>10_000_000_000?numeric:numeric*1000)
   return Number.isNaN(date.getTime())?null:date
 }
-const timestampLabel=(value?:string|number|null)=>{const date=timestampDate(value);return date?localStamp.format(date):'timestamp unavailable'}
+const timestampLabel=(value?:string|number|null)=>{const date=timestampDate(value);return date?localStamp.format(date):t("HistoryBrowser.16d524056e")}
 const epochLabel=(seconds:number)=>localStamp.format(new Date(seconds*1000))
 const timestampIso=(value?:string|number|null)=>timestampDate(value)?.toISOString()
 const historyStart=(entry:HistoryEntry)=>entry.native_started_at??(entry.external?null:entry.spawned_at)
-const heldLabel=(entry:HistoryEntry)=>!entry.held_by?null:entry.held_by.kind==='bg'?'running as a background agent':'open in another CLI'
+const heldLabel=(entry:HistoryEntry)=>!entry.held_by?null:entry.held_by.kind==='bg'?t("HistoryBrowser.4cbd1763bb"):t("HistoryBrowser.414b10906a")
 const transcriptBytes=(entry:HistoryEntry)=>entry.transcript_size??entry.time_summary_size??null
 const providerIdentity=(entry:HistoryEntry)=>{
   const pins=Object.entries(entry.provider_account_hashes||{})
   if(!entry.provider&&!pins.length)return null
-  const accounts=pins.map(([provider,hash])=>`${provider} account sha256 ${hash}`).join(' · ')
+  const accounts=pins.map(([provider,hash])=>t("HistoryBrowser.c39adeaae5", { value1: provider, value2: hash })).join(' · ')
   return [entry.provider?`provider ${entry.provider}`:'',accounts].filter(Boolean).join(' · ')
 }
 const formatBytes=(bytes?:number|null)=>{
   if(bytes===undefined||bytes===null||bytes<=0)return null
   const units=['B','KB','MB','GB'];let value=bytes,unit=0
   while(value>=1024&&unit<units.length-1){value/=1024;unit++}
-  return `${value>=100||unit===0?Math.round(value):value.toFixed(1)} ${units[unit]}`
+  return t("HistoryBrowser.4040b7c06c", { value1: value>=100||unit===0?Math.round(value):value.toFixed(1), value2: units[unit] })
 }
 const errorText=(cause:unknown)=>cause instanceof Error?cause.message:String(cause)
 const isAbort=(cause:unknown)=>cause instanceof Error&&cause.name==='AbortError'
@@ -150,8 +153,8 @@ const HistoryRow=memo(function HistoryRow({entry,active,confirming,onOpen,onRemo
   const bytes=formatBytes(transcriptBytes(entry))
   const held=heldLabel(entry)
   return <article class={`history-row ${active?'active':''}`}>
-    <button onClick={()=>onOpen(entry)}><strong>[{entry.backend}] {historyName(entry)}</strong><span class="history-times"><time dateTime={timestampIso(historyStart(entry))}>Started {timestampLabel(historyStart(entry))}</time><time dateTime={timestampIso(entry.last_message_at)}>Last {entry.last_message_role==='assistant'?'agent':entry.last_message_role==='user'?'you':'message'} · {timestampLabel(entry.last_message_at)}</time></span><small>{entry.final_state||entry.exit_reason||'indexed'}{held?` · ${held}`:''}{entry.external?' · external':''}{entry.compaction_count?` · compacted ${entry.compaction_count}×`:''}{bytes?` · ${bytes}`:''}</small>{entry.matches?.map(match=><span class={`history-match ${match.role}`} key={match.ordinal}><b>{match.role==='assistant'?'agent':'you'}</b>{match.excerpt}</span>)}</button>
-    <button class={confirming?'danger confirming':'danger'} aria-label={`Delete history index entry ${historyName(entry)}`} onClick={()=>onRemove(entry)}>{confirming?'✓':'×'}</button>
+    <button onClick={()=>onOpen(entry)}><strong>[{entry.backend}] {historyName(entry)}</strong><span class="history-times"><time dateTime={timestampIso(historyStart(entry))}>{rich("HistoryBrowser.9f89ffe4bb", { value1: timestampLabel(historyStart(entry)) })}</time><time dateTime={timestampIso(entry.last_message_at)}>{rich("HistoryBrowser.01c8140d5f", { value1: entry.last_message_role==='assistant' ? t("HistoryBrowser.d4f0bc5a29") : entry.last_message_role==='user' ? t("HistoryBrowser.bb0347a468") : t("HistoryBrowser.ab530a13e4"), value2: timestampLabel(entry.last_message_at) })}</time></span><small>{entry.final_state||entry.exit_reason || t("HistoryBrowser.658a3e8d64")}{held ? t("HistoryBrowser.608122da28", { held: held }) : ''}{entry.external ? t("HistoryBrowser.855e847f67") : ''}{entry.compaction_count ? t("HistoryBrowser.33e5435426", { compaction_count: entry.compaction_count }) : ''}{bytes ? t("HistoryBrowser.775ed9e437", { bytes: bytes }) : ''}</small>{entry.matches?.map(match=><span class={`history-match ${match.role}`} key={match.ordinal}><b>{match.role==='assistant' ? t("HistoryBrowser.d4f0bc5a29") : t("HistoryBrowser.bb0347a468")}</b>{match.excerpt}</span>)}</button>
+    <button class={confirming?'danger confirming':'danger'} aria-label={t("HistoryBrowser.bb5c4341ca", { value1: historyName(entry) })} onClick={()=>onRemove(entry)}>{confirming ? '✓' : '×'}</button>
   </article>
 })
 
@@ -184,11 +187,11 @@ const HistoryMessage=memo(function HistoryMessage({message,toolCalls,showToolCal
   const speaker=transcriptSpeaker(message.role)
   const stamp=transcriptTimestampLabel(message.ts)
   return <article data-message-ordinal={message.ordinal} class={`transcript-message ${message.role} ${matched?'search-match-message':''} ${active?'active-search-match':''}`}>
-    {text&&<div class="transcript-copy-anchor"><button class={copied?'transcript-copy copied':'transcript-copy'} aria-label={`Copy this ${speaker==='you'?'message':'reply'}`} title={`Copy this ${speaker==='you'?'message':'reply'}`} onClick={()=>onCopy(message)}>{copied?'Copied':'Copy'}</button></div>}
-    <header><span class="transcript-speaker">{speaker}</span>{stamp&&<time dateTime={transcriptTimestampIso(message.ts)}>{stamp}</time>}</header>
-    {text&&<div class={`history-transcript-content ${foldable&&!open?'clamped':''}`}><p>{text}</p></div>}
-    {foldable&&!matched&&<button class="transcript-expand" onClick={()=>onToggle(message.ordinal)}>{open?'Show less':'Show more'}</button>}
-    {showToolCalls&&<TranscriptToolCalls calls={toolCalls}/>}
+    {text && <div class="transcript-copy-anchor"><button class={copied?'transcript-copy copied':'transcript-copy'} aria-label={t("HistoryBrowser.a82fe04fd1", { value1: (speaker==='you') ? 'yes' : 'no' })} title={t("HistoryBrowser.a82fe04fd1", { value1: (speaker==='you') ? 'yes' : 'no' })} onClick={()=>onCopy(message)}>{copied ? t("HistoryBrowser.8d525e5f15") : t("HistoryBrowser.e21f935f11")}</button></div>}
+    <header><span class="transcript-speaker">{speaker}</span>{stamp && <time dateTime={transcriptTimestampIso(message.ts)}>{stamp}</time>}</header>
+    {text && <div class={`history-transcript-content ${foldable&&!open?'clamped':''}`}><p>{text}</p></div>}
+    {foldable&&!matched && <button class="transcript-expand" onClick={()=>onToggle(message.ordinal)}>{open ? t("HistoryBrowser.94ea9b1d33") : t("HistoryBrowser.f5c9bd1314")}</button>}
+    {showToolCalls && <TranscriptToolCalls calls={toolCalls}/>}
   </article>
 })
 
@@ -445,8 +448,8 @@ const HistoryDetail=memo(function HistoryDetail({selection,showToolCalls,onShowT
     }
   },[showToolCalls,available,messageWindow])
 
-  const rows=useMemo(()=>historyReaderRows(messageWindow,tools,showToolCalls),[messageWindow,tools,showToolCalls])
-  const matchedOrdinals=useMemo(()=>new Set(matches.map(match=>match.ordinal)),[matches])
+  const rows=useMemo(()=>historyReaderRows(messageWindow,tools,showToolCalls), [messageWindow, tools, showToolCalls, uiLocale.value, catalogRevision.value])
+  const matchedOrdinals=useMemo(()=>new Set(matches.map(match=>match.ordinal)), [matches, uiLocale.value, catalogRevision.value])
 
   useLayoutEffect(()=>{
     const container=body.current
@@ -489,7 +492,7 @@ const HistoryDetail=memo(function HistoryDetail({selection,showToolCalls,onShowT
     const text=message.text
     if(manualCopyArea.current)manualCopyArea.current.value=text
     const ok=await withoutClipboardCapture(()=>copyPreparedText(text,manualCopyArea.current))
-    if(!ok){setNotice('The browser refused the copy. Select the message and copy it manually.');return}
+    if(!ok){setNotice(t("HistoryBrowser.7ac8bccfaf"));return}
     setNotice('');setCopiedMessage(message.ordinal)
     window.setTimeout(()=>setCopiedMessage(current=>current===message.ordinal?null:current),COPIED_FLASH_MS)
   },[])
@@ -503,10 +506,10 @@ const HistoryDetail=memo(function HistoryDetail({selection,showToolCalls,onShowT
   const abandoned=index?.abandoned_messages||0
   const transcriptKeys=!index?'loading'
     :`${countLabel(index.message_count,'message')}${index.indexing?index.indexed?' · updating':' · indexing':''}`
-  const emptyTranscript=windowLoading||!index?'Loading conversation…'
-    :index.indexing&&!index.indexed?'Indexing this conversation for the first time…'
-    :!index.available&&!index.indexed?'That conversation’s transcript is no longer on disk. The agent CLI prunes its own history on its own timer, and mux does not own that file.'
-    :'No native transcript is available for this session.'
+  const emptyTranscript=windowLoading||!index?t("HistoryBrowser.5eb1e4a3be")
+    :index.indexing&&!index.indexed?t("HistoryBrowser.03d578b235")
+    :!index.available&&!index.indexed?t("HistoryBrowser.f26630779c")
+    :t("HistoryBrowser.f5f31297d1")
   /** One collapsible band: a title, what it says while closed, and its body.
    *
    *  `sectionKeysVisible` is what keeps a closed band one line high. Most summary lines are
@@ -514,48 +517,48 @@ const HistoryDetail=memo(function HistoryDetail({selection,showToolCalls,onShowT
    *  band is open, where its rows say the same thing per commit. */
   const section=(key:HistorySectionKey,title:string,keys:ComponentChildren,content:ComponentChildren)=>
     <details class={`transcript-section transcript-section-${key}`} open={sections[key]} onToggle={event=>toggleSection(key,event.currentTarget.open)}>
-      <summary><span class="transcript-section-title">{title}</span>{sectionKeysVisible(key,sections[key])&&<span class="transcript-section-keys">{keys}</span>}</summary>
+      <summary><span class="transcript-section-title">{title}</span>{sectionKeysVisible(key,sections[key]) && <span class="transcript-section-keys">{keys}</span>}</summary>
       <div class="transcript-section-body">{content}</div>
     </details>
   const scanRow=(item:ScanRecord)=><details class="transcript-row" key={item.id}>
-    <summary><code>{item.work_phase||'unknown'}</code><span>{item.summary||item.intent||'—'}</span></summary>
-    <div><small>{epochLabel(item.t0)}{item.blocked_on&&item.blocked_on!=='none'?` · blocked on ${item.blocked_on}`:''}{item.claim?` · claims: ${item.claim}`:''}{(item.target?.length??0)>0?` · ${item.target!.slice(0,4).join(', ')}`:''}</small></div>
+    <summary><code>{item.work_phase || t("HistoryBrowser.b23a6a8439")}</code><span>{item.summary||item.intent || '—'}</span></summary>
+    <div><small>{epochLabel(item.t0)}{item.blocked_on&&item.blocked_on!=='none' ? t("HistoryBrowser.f7c2296a8b", { blocked_on: item.blocked_on }) : ''}{item.claim ? t("HistoryBrowser.0a2785a626", { claim: item.claim }) : ''}{(item.target?.length??0)>0 ? t("HistoryBrowser.f6b53f9c8a", { value1: item.target!.slice(0,4).join(', ') }) : ''}</small></div>
   </details>
   /* Resume is drawn from the row the reader clicked, so it is there on the click. It is
      withheld for the two cases it would refuse: a live CLI holds the conversation, or the
      daemon looked for the transcript (`/detail` repairs one that only moved) and it is gone. */
   const resumeControl=(shown:HistoryEntry)=>shown.held_by
-    ?<span class="transcript-held" role="note" title={shown.held_by.detail}>Cannot resume — {heldLabel(shown)}</span>
+    ?<span class="transcript-held" role="note" title={shown.held_by.detail}>{rich("HistoryBrowser.aa3ee6fe0f", { value1: heldLabel(shown) })}</span>
     :index&&!index.available
-      ?<span class="transcript-held" role="note" title="The agent CLI prunes its own history; this is the copy mux indexed before it went.">Cannot resume - the transcript is no longer on disk</span>
-      :<button class="primary" onClick={()=>void onResume(shown)}>Resume</button>
+      ?<span class="transcript-held" role="note" title={t("HistoryBrowser.281b09f058")}>{t("HistoryBrowser.3b5b83691e")}</span>
+      :<button class="primary" onClick={()=>void onResume(shown)}>{t("HistoryBrowser.d640c7421d")}</button>
   return <><div class="transcript-heading">
       {/* Back belongs in this view's own top bar rather than above it: on a phone the
           detail view replaces the results list, and a full-width row of its own was a
           band of chrome subtracted from the transcript on every conversation opened. */}
-      <button class="history-back" aria-label="Back to results" onClick={onBack}>← Results</button>
-      {entry?<div><h3>[{entry.backend}] {historyName(entry)}</h3><span>{entry.project_label||'Unassigned'} · {entry.cwd}</span></div>:<div><h3>Opening conversation…</h3><span>{historyId}</span></div>}
+      <button class="history-back" aria-label={t("HistoryBrowser.c7ef0e278b")} onClick={onBack}>{t("HistoryBrowser.75c7f7d007")}</button>
+      {entry ? <div><h3>[{entry.backend}] {historyName(entry)}</h3><span>{entry.project_label || t("HistoryBrowser.14d33bd014")} · {entry.cwd}</span></div> : <div><h3 data-heading-message="HistoryBrowser.12a7ad1d37">{t("HistoryBrowser.12a7ad1d37")}</h3><span>{historyId}</span></div>}
     </div>
-    {entry&&<div class="transcript-actions">{resumeControl(entry)}<button title="Schedule a session that reopens this conversation later" onClick={()=>onScheduleResume(entry)}>Schedule Resume</button><button onClick={()=>void onHandoff(entry)}>Export handoff</button><label class="transcript-tool-toggle"><input type="checkbox" checked={showToolCalls} disabled={!toolCallsAvailable} onChange={event=>toggleToolCalls(event.currentTarget.checked)}/>Tool calls</label>{matches.length>0&&<div class="transcript-match-nav"><button aria-label="Previous search match" onClick={()=>moveMatch(-1)}>↑</button><span>{activeMatch+1}/{matches.length}</span><button aria-label="Next search match" onClick={()=>moveMatch(1)}>↓</button></div>}</div>}
-    {notice&&<div class="history-inline-state error" role="alert">{notice}</div>}
-    {entry&&section('stats','Session',
-      keyStats.map(stat=><span class="transcript-stat" key={stat.label}><b>{stat.label}</b>{stat.model?<ModelName model={stat.value}/>:stat.value}</span>),
+    {entry && <div class="transcript-actions">{resumeControl(entry)}<button title={t("HistoryBrowser.53d86c4f63")} onClick={()=>onScheduleResume(entry)}>{t("HistoryBrowser.3674c1e2b9")}</button><button onClick={()=>void onHandoff(entry)}>{t("HistoryBrowser.7970f98488")}</button><label class="transcript-tool-toggle">{rich("HistoryBrowser.55f4978af9", { value1: <input type="checkbox" checked={showToolCalls} disabled={!toolCallsAvailable} onChange={event=>toggleToolCalls(event.currentTarget.checked)}/> })}</label>{matches.length>0 && <div class="transcript-match-nav"><button aria-label={t("HistoryBrowser.0b03c2b9ac")} onClick={()=>moveMatch(-1)}>↑</button><span>{activeMatch+1}/{matches.length}</span><button aria-label={t("HistoryBrowser.68572dddb3")} onClick={()=>moveMatch(1)}>↓</button></div>}</div>}
+    {notice && <div class="history-inline-state error" role="alert">{notice}</div>}
+    {entry && section('stats','Session',
+      keyStats.map(stat=><span class="transcript-stat" key={stat.label}><b>{stat.label}</b>{stat.model ? <ModelName model={stat.value}/> : stat.value}</span>),
       <>
-        <small>Started {timestampLabel(historyStart(entry))} · last {speakerLabel(entry.last_message_role)} {timestampLabel(entry.last_message_at)} · {entry.external?'external':'mux session'}</small>
-        {providerIdentity(entry)&&<small>{providerIdentity(entry)}</small>}
-        <small>{entry.context_window?`context final ${Math.round((entry.final_context_pct||0)*100)}% · peak ${Math.round((entry.peak_context_pct||0)*100)}% · ${entry.measurement_source||'native observation'}`:'context unavailable'} · tokens in {entry.tokens_in||0} / out {entry.tokens_out||0} · cache read {entry.tokens_cache_read||0} / write {entry.tokens_cache_write||0}{formatBytes(transcriptBytes(entry))?` · transcript ${formatBytes(transcriptBytes(entry))}`:''}</small>
-        <small>{entry.compaction_count?`explicit compactions ${entry.compaction_count} · ${entry.compaction_capability||'native evidence'} · confidence ${entry.compaction_confidence||'unknown'}`:'compaction count unavailable - token drops are not treated as compaction evidence'}</small>
-        {abandoned>0&&<small title="Retries and rewinds append a new branch and leave the previous attempt in the transcript. Those turns were never sent to the model, so they are not shown here.">{abandoned} message{abandoned===1?'':'s'} from abandoned branches are not shown</small>}
+        <small>{rich("HistoryBrowser.91fbee18d6", { value1: timestampLabel(historyStart(entry)), value2: speakerLabel(entry.last_message_role), value3: timestampLabel(entry.last_message_at), value4: (entry.external) ? 'yes' : 'no' })}</small>
+        {providerIdentity(entry) && <small>{providerIdentity(entry)}</small>}
+        <small>{rich("HistoryBrowser.bc411474ed", { value1: entry.context_window ? t("HistoryBrowser.da8c458df4", { value1: Math.round((entry.final_context_pct||0)*100), value2: Math.round((entry.peak_context_pct||0)*100), value3: entry.measurement_source||t("HistoryBrowser.baa1358cc2") }) : t("HistoryBrowser.5de190ecc4"), value2: entry.tokens_in || 0, value3: entry.tokens_out || 0, value4: entry.tokens_cache_read || 0, value5: entry.tokens_cache_write || 0, value6: formatBytes(transcriptBytes(entry)) ? t("HistoryBrowser.5a476977ae", { value1: formatBytes(transcriptBytes(entry)) }) : '' })}</small>
+        <small>{entry.compaction_count ? t("HistoryBrowser.436525f218", { compaction_count: entry.compaction_count, value2: entry.compaction_capability||t("HistoryBrowser.e644e3f2e8"), value3: entry.compaction_confidence||'unknown' }) : t("HistoryBrowser.d2f5128f68")}</small>
+        {abandoned>0 && <small title={t("HistoryBrowser.3a3a280ff4")}>{rich("HistoryBrowser.fb2471cb9e", { abandoned: abandoned, value2: (abandoned===1) ? 'yes' : 'no' })}</small>}
       </>)}
     {/* Commits and lineage are lists, so they read as rows that open. They used to be a
         horizontal strip of fixed-width cards, which put the subject - the only part
         anyone scans for - behind a sideways scroll on every viewport. */}
-    {gitProvenance.length>0&&section('commits','Commits',commitsSummary(gitProvenance,shortSha),
+    {gitProvenance.length>0 && section('commits','Commits',commitsSummary(gitProvenance,shortSha),
       gitProvenance.map(item=><details class="transcript-row" key={item.id}>
-        <summary><code>{shortSha(item.commitOid)}</code><span>{item.subject||'subject unavailable'}</span></summary>
+        <summary><code>{shortSha(item.commitOid)}</code><span>{item.subject || t("HistoryBrowser.fed8f3715f")}</span></summary>
         <div><small>{provenanceRoleLabel(item)} · {item.confidence}</small><small>{epochLabel(item.observedAt)}</small></div>
       </details>))}
-    {lineage.length>0&&section('lineage','Work lineage',countLabel(lineage.length,'link'),
+    {lineage.length>0 && section('lineage',t("HistoryBrowser.47e4b3db7c"),countLabel(lineage.length,'link'),
       orderedLineage(lineage).map(edge=>{
         const direction=lineageDirection(edge,historyId)
         const {endpoint,runId}=lineageCounterpart(edge,historyId)
@@ -565,26 +568,26 @@ const HistoryDetail=memo(function HistoryDetail({selection,showToolCalls,onShowT
            a conversation that has been deleted is worse than plain text: it looks
            like the lineage is broken rather than like the row is gone. */
         return <details class={`transcript-row ${endpoint.known?'':'lineage-missing'}`} key={edge.id}>
-          <summary><code>{lineageVerb(edge.relation,direction)}</code><span>{label}{endpoint.live?<span class="lineage-live" title="a session is still open on this conversation"> · open</span>:null}</span></summary>
+          <summary><code>{lineageVerb(edge.relation,direction)}</code><span>{label}{endpoint.live ? <span class="lineage-live" title={t("HistoryBrowser.502091c563")}>{t("HistoryBrowser.1aad7179a8")}</span> : null}</span></summary>
           <div>
-            {endpoint.known&&<button type="button" class="lineage-open" title={`Open ${label}`} onClick={()=>onOpenRun(runId)}>Open {label}</button>}
-            {cut?<small class="lineage-cut" title={cut}>{cut}</small>:null}
+            {endpoint.known && <button type="button" class="lineage-open" title={t("HistoryBrowser.d1bcb33590", { label: label })} onClick={()=>onOpenRun(runId)}>{rich("HistoryBrowser.d1bcb33590", { label: label })}</button>}
+            {cut ? <small class="lineage-cut" title={cut}>{cut}</small> : null}
             <small>{epochLabel(edge.created_at)}</small>
           </div>
         </details>
       }))}
-    {annotations.length>0&&section('notes','Run notes',countLabel(annotations.length,'note'),
+    {annotations.length>0 && section('notes',t("HistoryBrowser.8b0e163954"),countLabel(annotations.length,'note'),
       annotations.map(item=><details class="transcript-row" key={item.id}>
         <summary><code>{item.tag}</code><span>{item.content}</span></summary>
-        <div><small>{epochLabel(item.created_at)} · {item.provenance} · model::<ModelName model={item.resolved_model} fallback="deterministic"/> · confidence::{item.confidence??'—'} · cost::{money.format(item.cost_usd||0)}</small></div>
+        <div><small>{rich("HistoryBrowser.c62e3f66bb", { value1: epochLabel(item.created_at), provenance: item.provenance, value3: <ModelName model={item.resolved_model} fallback={t("HistoryBrowser.0badac3c6d")}/>, value4: item.confidence ?? '—', value5: money.format(item.cost_usd||0) })}</small></div>
       </details>))}
     {/* Two entries, newest first, and the rest behind a second disclosure. A run that
         scanned forty times is a wall of rows nobody reads past the top of. */}
-    {scanCount>0&&section('timeline','Behavioral timeline',countLabel(scanCount,'entry','entries'),
+    {scanCount>0 && section('timeline',t("HistoryBrowser.e56ef5abf5"),countLabel(scanCount,'entry','entries'),
       <>
         {scanRecords.recent.map(item=>scanRow(item))}
-        {scanRecords.earlier.length>0&&<details class="transcript-more" open={timelineExpanded} onToggle={event=>setTimelineExpanded(event.currentTarget.open)}>
-          <summary>{countLabel(scanRecords.earlier.length,'earlier entry','earlier entries')}</summary>
+        {scanRecords.earlier.length>0 && <details class="transcript-more" open={timelineExpanded} onToggle={event=>setTimelineExpanded(event.currentTarget.open)}>
+          <summary>{countLabel(scanRecords.earlier.length,t("HistoryBrowser.272677c89e"),t("HistoryBrowser.98a8600d1f"))}</summary>
           {scanRecords.earlier.map(item=>scanRow(item))}
         </details>}
       </>)}
@@ -595,13 +598,12 @@ const HistoryDetail=memo(function HistoryDetail({selection,showToolCalls,onShowT
         take the leftover height from inside one - it sizes to its text and the view ends
         in dead space. `aria-controls` is what ties the two back together. */}
     <button type="button" class="transcript-section-toggle" aria-expanded={sections.transcript} aria-controls="history-transcript-body" onClick={()=>toggleSection('transcript',!sections.transcript)}>
-      <span class="transcript-section-title">Transcript</span><span class="transcript-section-keys">{transcriptKeys}</span>
+      <span class="transcript-section-title">{t("HistoryBrowser.721164f0dc")}</span><span class="transcript-section-keys">{transcriptKeys}</span>
     </button>
-    {sections.transcript&&<div class="messages" id="history-transcript-body" ref={body}>
-      {messageWindow.hasMoreBefore&&<div class="history-page-edge" ref={topEdge}>{edgeLoading.before?'Loading earlier messages…':''}</div>}
-      {rows.length?rows.map(({message,toolCalls})=><HistoryMessage key={message.ordinal} message={message} toolCalls={toolCalls} showToolCalls={showToolCalls} matched={matchedOrdinals.has(message.ordinal)} active={activeOrdinal===message.ordinal} expanded={expandedMessages.has(message.ordinal)} copied={copiedMessage===message.ordinal} onToggle={toggleMessage} onCopy={copyMessage}/>)
-        :<div class="no-transcript">{emptyTranscript}</div>}
-      {messageWindow.hasMoreAfter&&<div class="history-page-edge" ref={bottomEdge}>{edgeLoading.after?'Loading later messages…':''}</div>}
+    {sections.transcript && <div class="messages" id="history-transcript-body" ref={body}>
+      {messageWindow.hasMoreBefore && <div class="history-page-edge" ref={topEdge}>{edgeLoading.before ? t("HistoryBrowser.b8507b92ee") : ''}</div>}
+      {rows.length ? rows.map(({message,toolCalls})=><HistoryMessage key={message.ordinal} message={message} toolCalls={toolCalls} showToolCalls={showToolCalls} matched={matchedOrdinals.has(message.ordinal)} active={activeOrdinal===message.ordinal} expanded={expandedMessages.has(message.ordinal)} copied={copiedMessage===message.ordinal} onToggle={toggleMessage} onCopy={copyMessage}/>) : <div class="no-transcript">{emptyTranscript}</div>}
+      {messageWindow.hasMoreAfter && <div class="history-page-edge" ref={bottomEdge}>{edgeLoading.after ? t("HistoryBrowser.a4d884c090") : ''}</div>}
     </div>}
     <textarea ref={manualCopyArea} class="transcript-manual" readOnly aria-hidden="true" tabIndex={-1}/></>
 })
@@ -690,7 +692,7 @@ function HistoryBrowserImpl({projects,initialProjectId,initialEntryId,onClose,on
       // itself. A search that outran the daemon's ceiling is not a broken History.
       const failure=cause as ApiError
       setError(failure?.detail?.code==='search_budget_exceeded'
-        ? 'That search took too long and was stopped. Narrow it - a longer phrase, one Project, or a date range.'
+        ? t("HistoryBrowser.3b96bbee55")
         : errorText(cause))
     }
     finally{if(sequence===requestSequence.current)setLoading(false)}
@@ -723,7 +725,7 @@ function HistoryBrowserImpl({projects,initialProjectId,initialEntryId,onClose,on
 
   // Both levels keep the feed's order (`historyFeed.ts`): a heading appears where its most
   // recent conversation does, so changing the sort moves the top of the list.
-  const grouped=useMemo(()=>groupHistoryFeed(items,historyProjects,projects),[items,historyProjects,projects])
+  const grouped=useMemo(()=>groupHistoryFeed(items,historyProjects,projects), [items, historyProjects, projects, uiLocale.value, catalogRevision.value])
 
   const openEntry=useCallback((entry:HistoryEntry)=>{
     setError('')
@@ -740,7 +742,7 @@ function HistoryBrowserImpl({projects,initialProjectId,initialEntryId,onClose,on
   const openFailed=useCallback((historyId:string,cause:unknown)=>{
     setSelected(current=>current?.id===historyId?null:current)
     setError(notFound(cause)
-      ? 'That session has no History row any more, so its conversation cannot be opened. Search below for it by name.'
+      ? t("HistoryBrowser.42c5f937c6")
       : errorText(cause))
   },[])
 
@@ -768,34 +770,32 @@ function HistoryBrowserImpl({projects,initialProjectId,initialEntryId,onClose,on
   const scopeProject=projects.find(item=>item.id===project)
   const historyHarnesses=transcriptHarnesses()
   return <div class="modal-layer history-layer" onMouseDown={event=>event.target===event.currentTarget&&onClose()}>
-    <section ref={panel} class="modal history-modal" role="dialog" aria-modal="true" aria-label="Agent session history">
-    <div class="modal-heading"><div><span>SESSION HISTORY</span><h2>{scopeProject?scopeProject.name:'All projects'}</h2></div><button type="button" aria-label="Close session history" onClick={onClose}>×</button></div>
-    <section class="history-workspace" aria-label="Agent session history">
+    <section ref={panel} class="modal history-modal" role="dialog" aria-modal="true" aria-label={t("HistoryBrowser.5ee3c464f3")}>
+    <div class="modal-heading"><div><span>{t("HistoryBrowser.05a87bb74b")}</span><h2>{scopeProject ? scopeProject.name : t("HistoryBrowser.4b87271b6b")}</h2></div><button type="button" aria-label={t("HistoryBrowser.2c57063b8a")} onClick={onClose}>×</button></div>
+    <section class="history-workspace" aria-label={t("HistoryBrowser.5ee3c464f3")}>
     <div class="history-body">
       <aside>
         <div class="history-search">
-          <div class="history-query-row"><input aria-label="Search session history" placeholder="Search prompts, replies, titles, and paths…" value={query} onInput={event=>setQuery(event.currentTarget.value)}/><Dropdown ariaLabel="Search within" value={scope} onChange={value=>setScope(value as SearchScope)} options={[{value:'all',label:'All content'},{value:'user',label:'User prompts'},{value:'assistant',label:'Agent replies'},{value:'metadata',label:'Titles + paths'}]}/></div>
-          <Dropdown ariaLabel="Filter history project" value={project} onChange={value=>{setProject(value);setSelected(null)}} filter filterPlaceholder="Filter Projects…" options={[{value:'',label:'All projects'},...projectDropdownOptions(projects,item=>({value:item.id,label:item.name,detail:item.root})),{value:'__ungrouped__',label:'Unassigned'}]}/>
-          <Dropdown ariaLabel="Filter history provider" value={backend} onChange={setBackend} options={[{value:'',label:'All agents'},...historyHarnesses.map(harness=>({value:harness.name,label:harness.display_name}))]}/>
-          <Dropdown ariaLabel="Filter history state" value={state} onChange={setState} options={[{value:'',label:'All states'},{value:'idle',label:'Completed'},{value:'exited',label:'Exited'},{value:'crashed',label:'Crashed'}]}/>
-          <Dropdown ariaLabel="Filter history origin" value={external} onChange={setExternal} options={[{value:'',label:'Mux + external'},{value:'false',label:'Mux sessions'},{value:'true',label:'External sessions'}]}/>
+          <div class="history-query-row"><input aria-label={t("HistoryBrowser.ea93c82afd")} placeholder={t("HistoryBrowser.d5a8d1f50a")} value={query} onInput={event=>setQuery(event.currentTarget.value)}/><Dropdown ariaLabel={t("HistoryBrowser.e861939a44")} value={scope} onChange={value=>setScope(value as SearchScope)} options={[{value:'all',get label() { return t("HistoryBrowser.cd588d55d6") }},{value:'user',get label() { return t("HistoryBrowser.218ee0bc34") }},{value:'assistant',get label() { return t("HistoryBrowser.9e99bb9727") }},{value:'metadata',get label() { return t("HistoryBrowser.7a00d909f8") }}]}/></div>
+          <Dropdown ariaLabel={t("HistoryBrowser.1ac801eabe")} value={project} onChange={value=>{setProject(value);setSelected(null)}} filter filterPlaceholder={t("HistoryBrowser.2e0060c45e")} options={[{value:'',get label() { return t("HistoryBrowser.4b87271b6b") }},...projectDropdownOptions(projects,item=>({value:item.id,label:item.name,detail:item.root})),{value:'__ungrouped__',get label() { return t("HistoryBrowser.14d33bd014") }}]}/>
+          <Dropdown ariaLabel={t("HistoryBrowser.d111d64051")} value={backend} onChange={setBackend} options={[{value:'',get label() { return t("HistoryBrowser.54c32d3e2c") }},...historyHarnesses.map(harness=>({value:harness.name,label:harness.display_name}))]}/>
+          <Dropdown ariaLabel={t("HistoryBrowser.c7728f385c")} value={state} onChange={setState} options={[{value:'',get label() { return t("HistoryBrowser.f189411452") }},{value:'idle',get label() { return t("HistoryBrowser.22a970d2e5") }},{value:'exited',get label() { return t("HistoryBrowser.85fc46c17c") }},{value:'crashed',get label() { return t("HistoryBrowser.4006e15c5e") }}]}/>
+          <Dropdown ariaLabel={t("HistoryBrowser.8cdf01aed3")} value={external} onChange={setExternal} options={[{value:'',get label() { return t("HistoryBrowser.c78c801207") }},{value:'false',get label() { return t("HistoryBrowser.cabca11021") }},{value:'true',get label() { return t("HistoryBrowser.18d55ecea9") }}]}/>
           {/* Named for what it does. It reads as a sort because it is one, and the date
               range under it narrows the same timestamp - one field, two uses, so a
               conversation can never sort by one clock and be filtered by another. */}
-          <Dropdown ariaLabel="Sort and date-filter history by" value={timeBasis} onChange={value=>setTimeBasis(value as typeof timeBasis)} options={[{value:'last_message',label:'Sort: last activity'},{value:'started',label:'Sort: session started'}]}/>
-          <label>from<input type="datetime-local" value={dateFrom} onChange={event=>setDateFrom(event.currentTarget.value)}/></label><label>to<input type="datetime-local" value={dateTo} onChange={event=>setDateTo(event.currentTarget.value)}/></label>
-          <div class="history-backfill-control"><button disabled={!project||project==='__ungrouped__'||!!job&&['queued','running'].includes(job.status)} onClick={()=>void startBackfill()}>Scan historical sessions</button><small>{project&&project!=='__ungrouped__'?'Discovers and indexes all native history for this Project.':'Select one Project to scan its complete native history.'}</small></div>
-          {job&&<div class={`history-backfill-status ${job.status}`}><div><strong>{job.phase}</strong><span>{job.total?`${job.processed}/${job.total}`:`${job.scanned} scanned`}</span></div>{['queued','running'].includes(job.status)&&<progress max={Math.max(1,job.total)} value={job.processed}/>}<small>{job.discovered} discovered · {job.indexed} indexed ({job.indexed_messages} messages) · {job.unchanged} unchanged · {job.unreadable} unreadable{job.ambiguous?` · ${job.ambiguous} ambiguous`:''}</small>{job.error&&<small class="error">{job.error}</small>}{['queued','running'].includes(job.status)&&<button onClick={()=>void cancelBackfill()}>Cancel scan</button>}</div>}
+          <Dropdown ariaLabel={t("HistoryBrowser.a5748be93c")} value={timeBasis} onChange={value=>setTimeBasis(value as typeof timeBasis)} options={[{value:'last_message',get label() { return t("HistoryBrowser.07101ec0b8") }},{value:'started',get label() { return t("HistoryBrowser.03a3aed514") }}]}/>
+          <label>{rich("HistoryBrowser.28cc769395", { value1: <input type="datetime-local" value={dateFrom} onChange={event=>setDateFrom(event.currentTarget.value)}/> })}</label><label>{rich("HistoryBrowser.26dc189e3e", { value1: <input type="datetime-local" value={dateTo} onChange={event=>setDateTo(event.currentTarget.value)}/> })}</label>
+          <div class="history-backfill-control"><button disabled={!project||project==='__ungrouped__'||!!job&&['queued','running'].includes(job.status)} onClick={()=>void startBackfill()}>{t("HistoryBrowser.9ded55eefa")}</button><small>{project&&project!=='__ungrouped__' ? t("HistoryBrowser.d7684bc2dd") : t("HistoryBrowser.cee311f1cf")}</small></div>
+          {job && <div class={`history-backfill-status ${job.status}`}><div><strong>{codeLabel(job.phase)}</strong><span>{job.total ? t("HistoryBrowser.e1572c2062", { processed: job.processed, total: job.total }) : t("HistoryBrowser.cbadb395ea", { scanned: job.scanned })}</span></div>{['queued','running'].includes(job.status) && <progress max={Math.max(1,job.total)} value={job.processed}/>}<small>{rich("HistoryBrowser.d0bb91ee4f", { discovered: job.discovered, indexed: job.indexed, indexed_messages: job.indexed_messages, unchanged: job.unchanged, unreadable: job.unreadable, value6: job.ambiguous ? t("HistoryBrowser.18ea31054b", { ambiguous: job.ambiguous }) : '' })}</small>{job.error && <small class="error">{job.error}</small>}{['queued','running'].includes(job.status) && <button onClick={()=>void cancelBackfill()}>{t("HistoryBrowser.298360e0b1")}</button>}</div>}
         </div>
-        {error&&<div class="history-inline-state error" role="alert">{error}</div>}
-        {!loading&&!error&&!items.length&&<div class="history-inline-state">No agent history matches these filters.</div>}
+        {error && <div class="history-inline-state error" role="alert">{error}</div>}
+        {!loading&&!error&&!items.length && <div class="history-inline-state">{t("HistoryBrowser.fe476c92d8")}</div>}
         <HistoryList groups={grouped} activeId={selected?.id||''} confirmDelete={confirmDelete} onOpen={openEntry} onRemove={remove}/>
-        {loading&&<div class="history-inline-state">Searching agent history…</div>}
-        {nextCursor&&!loading&&<button class="history-load-more" onClick={()=>void load(true)}>Load more</button>}
+        {loading && <div class="history-inline-state">{t("HistoryBrowser.e725ae7a26")}</div>}
+        {nextCursor&&!loading && <button class="history-load-more" onClick={()=>void load(true)}>{t("HistoryBrowser.ac8991ef01")}</button>}
       </aside>
-      <main>{selected
-        ?<HistoryDetail key={selected.id} selection={selected} showToolCalls={showToolCalls} onShowToolCalls={setShowToolCalls} onBack={closeDetail} onOpenRun={openById} onOpenFailed={openFailed} onResume={onResume} onScheduleResume={onScheduleResume} onHandoff={onHandoff}/>
-        :<div class="history-placeholder"><span>◷</span><strong>Select a session</strong><p>Search prompts and replies, then inspect the native transcript.</p></div>}</main>
+      <main>{selected ? <HistoryDetail key={selected.id} selection={selected} showToolCalls={showToolCalls} onShowToolCalls={setShowToolCalls} onBack={closeDetail} onOpenRun={openById} onOpenFailed={openFailed} onResume={onResume} onScheduleResume={onScheduleResume} onHandoff={onHandoff}/> : <div class="history-placeholder"><span>◷</span><strong>{t("HistoryBrowser.c938f630cc")}</strong><p>{t("HistoryBrowser.c33a1310f9")}</p></div>}</main>
     </div>
     </section>
     </section>

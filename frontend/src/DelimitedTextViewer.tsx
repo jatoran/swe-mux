@@ -1,3 +1,4 @@
+import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { parseDelimitedText } from './delimitedText'
 
@@ -9,7 +10,7 @@ const OVERSCAN_ROWS = 12
 const displayCell = (value: string) => value.replace(/\r?\n/g, ' ↵ ')
 
 export function DelimitedTextViewer({ text, delimiter }: { text: string; delimiter: ',' | '\t' }) {
-  const preview = useMemo(() => parseDelimitedText(text, delimiter), [text, delimiter])
+  const preview = useMemo(() => parseDelimitedText(text, delimiter), [text, delimiter, uiLocale.value, catalogRevision.value])
   const [firstRowHeader, setFirstRowHeader] = useState(true)
   const [scrollTop, setScrollTop] = useState(0)
   const [viewportHeight, setViewportHeight] = useState(400)
@@ -22,7 +23,7 @@ export function DelimitedTextViewer({ text, delimiter }: { text: string; delimit
   const end = Math.min(bodyRows.length, start + visibleCount)
   const columnCount = Math.max(preview.columnCount, 1)
   const tableWidth = ROW_NUMBER_WIDTH + columnCount * COLUMN_WIDTH
-  const gridTemplateColumns = `${ROW_NUMBER_WIDTH}px repeat(${columnCount}, ${COLUMN_WIDTH}px)`
+  const gridTemplateColumns = t("DelimitedTextViewer.c39995e782", { value1: ROW_NUMBER_WIDTH, value2: columnCount, value3: COLUMN_WIDTH })
 
   useEffect(() => {
     const element = scroller.current
@@ -36,16 +37,14 @@ export function DelimitedTextViewer({ text, delimiter }: { text: string; delimit
 
   return <div class="delimited-viewer">
     <div class="delimited-toolbar">
-      <span>{delimiter === '\t' ? 'TSV' : 'CSV'} · {preview.rows.length.toLocaleString()} preview rows · {preview.columnCount.toLocaleString()} columns</span>
-      <label><input type="checkbox" checked={firstRowHeader} onChange={event => setFirstRowHeader(event.currentTarget.checked)} /> First row is header</label>
+      <span>{rich("DelimitedTextViewer.30d8291405", { value1: (delimiter === '\t') ? 'yes' : 'no', value2: preview.rows.length.toLocaleString(uiLocale.value), value3: preview.columnCount.toLocaleString(uiLocale.value) })}</span>
+      <label>{rich("DelimitedTextViewer.7c0c158f18", { value1: <input type="checkbox" checked={firstRowHeader} onChange={event => setFirstRowHeader(event.currentTarget.checked)} /> })}</label>
     </div>
     {(preview.truncated || preview.malformed) && <p class="delimited-warning" role="status">
-      {preview.malformed ? 'Malformed quoting detected. ' : ''}
-      {preview.truncated ? 'The table preview is bounded; Raw text still contains the complete file.' : ''}
+      {preview.malformed ? t("DelimitedTextViewer.38054a2269") : ''}
+      {preview.truncated ? t("DelimitedTextViewer.1758c7eb61") : ''}
     </p>}
-    {!preview.rows.length
-      ? <div class="resource-unavailable">This delimited file is empty.</div>
-      : <div
+    {!preview.rows.length ? <div class="resource-unavailable">{t("DelimitedTextViewer.bcb94c1dbd")}</div> : <div
           class="delimited-scroll"
           ref={scroller}
           role="table"

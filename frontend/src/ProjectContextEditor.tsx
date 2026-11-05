@@ -1,5 +1,7 @@
+import { locale as uiLocale } from './localization/index.ts'
+import { rich, t } from './localization/index.ts'
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { api } from './api'
+import { api, type ApiError } from './api'
 
 export type ProjectContext = {
   project_id: string; path: string; exists: boolean; revision: string
@@ -58,31 +60,31 @@ export function ProjectContextEditor({ projectId, busy, onError }: {
       setContext(value); setDraft(value.markdown)
       saved.current = value.markdown; live.current = value.markdown
       revision.current = value.revision
-      setMessage('Saved')
+      setMessage(t("ProjectContextEditor.b5c120b316"))
     } catch (cause) {
       const text = cause instanceof Error ? cause.message : String(cause)
-      if (text.includes('changed externally')) setMessage('File changed externally. Copy your draft, then reopen this panel to reload it.')
+      if ((cause as ApiError)?.detail?.code === 'revision_conflict') setMessage(t("ProjectContextEditor.0bb12a2719"))
       else onError?.(text)
     } finally { setSaving(false) }
   }
 
   const copyPrompt = async () => {
     if (!context) return
-    try { await navigator.clipboard.writeText(context.generation_prompt); setMessage('Setup prompt copied') }
-    catch { setMessage('Clipboard access failed') }
+    try { await navigator.clipboard.writeText(context.generation_prompt); setMessage(t("ProjectContextEditor.b30303bc53")) }
+    catch { setMessage(t("ProjectContextEditor.f59058f806")) }
   }
 
-  if (!context) return <div class="scan-context-editor"><p>Loading Project context…</p></div>
+  if (!context) return <div class="scan-context-editor"><p>{t("ProjectContextEditor.f2d41df516")}</p></div>
   const bytes = new TextEncoder().encode(draft).length
   const disabled = !!busy || saving
   return <div class="scan-context-editor">
-    <p>User-authored Markdown sent with timeline scans. swe-mux does not derive it from repository docs. · <code>{context.path}</code></p>
-    <textarea value={draft} placeholder="Describe this Project for timeline scans…"
+    <p>{rich("ProjectContextEditor.59ff26176c", { value1: <code>{context.path}</code> })}</p>
+    <textarea value={draft} placeholder={t("ProjectContextEditor.6527ebfa11")}
       onInput={event => { live.current = event.currentTarget.value; setDraft(event.currentTarget.value); setMessage('') }} />
     <div>
-      <span>{bytes.toLocaleString()} / {context.max_bytes.toLocaleString()} bytes</span>
-      <button disabled={disabled || draft === context.markdown || bytes > context.max_bytes} onClick={() => void save()}>Save</button>
-      <button disabled={disabled} onClick={() => void copyPrompt()}>Copy setup prompt</button>
+      <span>{rich("ProjectContextEditor.7bc5a74dd0", { value1: bytes.toLocaleString(uiLocale.value), value2: context.max_bytes.toLocaleString(uiLocale.value) })}</span>
+      <button disabled={disabled || draft === context.markdown || bytes > context.max_bytes} onClick={() => void save()}>{t("ProjectContextEditor.1509f561f2")}</button>
+      <button disabled={disabled} onClick={() => void copyPrompt()}>{t("ProjectContextEditor.9a5d81ccb4")}</button>
     </div>
     {message && <small role="status">{message}</small>}
   </div>

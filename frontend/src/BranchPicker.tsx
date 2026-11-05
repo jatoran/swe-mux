@@ -1,3 +1,4 @@
+import { catalogRevision, t, locale as uiLocale } from './localization/index.ts'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { agentTargetName } from './agentTargets'
 import { api } from './api'
@@ -63,7 +64,7 @@ export function BranchPicker({ session, onClose, onBranch }: Props) {
     }
   }, [session.id])
 
-  const points = useMemo(() => orderedBranchPoints(data?.points || []), [data])
+  const points = useMemo(() => orderedBranchPoints(data?.points || []), [data, uiLocale.value, catalogRevision.value])
   const point = points.find(item => item.message_id === chosen) || null
   const mode: BranchMode = point ? branchModeFor(point) : 'after'
   const ready = !!point && branchPointEligible(point, mode)
@@ -104,10 +105,8 @@ export function BranchPicker({ session, onClose, onBranch }: Props) {
             {stamp && <time>{stamp}</time>}
             <span class="branch-point-action">{branchActionLabel(itemMode)}</span>
           </strong>
-          <small>{branchPointPreview(item.text) || '(no text in this message)'}</small>
-          {!state.eligible && (
-            <em class="branch-point-blocked">{branchIneligibilityMessage(state.reason)}</em>
-          )}
+          <small>{branchPointPreview(item.text) || t("BranchPicker.66d85990a4")}</small>
+          {!state.eligible && (<em class="branch-point-blocked">{branchIneligibilityMessage(state.reason)}</em>)}
         </span>
       </label>
     )
@@ -118,55 +117,38 @@ export function BranchPicker({ session, onClose, onBranch }: Props) {
       class="modal-layer control-plane-modal-layer"
       role="dialog"
       aria-modal="true"
-      aria-label="Choose where to branch this conversation"
+      aria-label={t("BranchPicker.662cf95234")}
       onMouseDown={event => event.target === event.currentTarget && !busy && onClose()}
     >
       <section class="modal control-plane-modal branch-picker-modal" ref={panel}>
         <div class="modal-heading">
           <div>
-            <span>BRANCH::POINT</span>
+            <span>{t("BranchPicker.1c24a0217a")}</span>
             <h2>{agentTargetName(session)}</h2>
           </div>
-          <button type="button" aria-label="Close branch picker" disabled={busy} onClick={onClose}>
+          <button type="button" aria-label={t("BranchPicker.a2c20531f0")} disabled={busy} onClick={onClose}>
             ×
           </button>
         </div>
         <div class="control-plane-modal-body">
-          <p>
-            A branch is a new session carrying this conversation up to the point you pick. This
-            session is not touched: it keeps its conversation, its history and whatever it is
-            doing right now.
-          </p>
-          {error && (
-            <p class="modal-warning" role="alert">
+          <p>{t("BranchPicker.dade73f655")}</p>
+          {error && (<p class="modal-warning" role="alert">
               {error}
-            </p>
-          )}
-          {loading && <p class="drawer-empty">Reading the conversation…</p>}
-          {!loading && !points.length && (
-            <p class="drawer-empty">
+            </p>)}
+          {loading && <p class="drawer-empty">{t("BranchPicker.65c280a9a0")}</p>}
+          {!loading && !points.length && (<p class="drawer-empty">
               {branchPointsEmptyMessage(data?.reason ?? null, session.backend)}
-            </p>
-          )}
-          {data?.truncated && !!points.length && (
-            <p class="branch-picker-note">
-              Older messages are not listed, but a branch always carries the conversation from its
-              first message.
-            </p>
-          )}
-          {!!points.length && (
-            <div class="branch-point-list" role="radiogroup" aria-label="Branch point">
+            </p>)}
+          {data?.truncated && !!points.length && (<p class="branch-picker-note">{t("BranchPicker.1a3fe74ff2")}</p>)}
+          {!!points.length && (<div class="branch-point-list" role="radiogroup" aria-label={t("BranchPicker.a6dbc20d03")}>
               {points.map(row)}
-            </div>
-          )}
+            </div>)}
         </div>
         <div class="modal-footer">
           <span>{point ? branchOutcomeSummary(mode) : ''}</span>
-          <button type="button" disabled={busy} onClick={onClose}>
-            Cancel
-          </button>
+          <button type="button" disabled={busy} onClick={onClose}>{t("BranchPicker.19766ed6cc")}</button>
           <button type="button" class="primary" disabled={busy || !ready} onClick={() => void branch()}>
-            {busy ? 'Branching…' : 'Branch here'}
+            {busy ? t("BranchPicker.bd3eda4be9") : t("BranchPicker.bf7f43a656")}
           </button>
         </div>
       </section>

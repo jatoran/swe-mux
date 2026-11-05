@@ -12,6 +12,7 @@ from .config import Config, LaunchProfile
 from .harness import is_agent_harness, reserved_launch_arg_conflict
 from .host_platform import IS_POSIX, IS_WINDOWS, platform_key, platform_label
 from .subprocess_flags import background_creation_flags
+from .ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -323,12 +324,7 @@ def resolve_agent_profile(config: Config, profile_id: str, backend: str) -> Reso
         raise ValueError({"profile_id": f"unknown launch profile: {profile_id}"})
     if profile.backend != backend:
         raise ValueError(
-            {
-                "profile_id": (
-                    f"launch profile {profile_id} starts {profile.backend}, "
-                    f"not {backend}"
-                )
-            }
+            {"profile_id": (f"launch profile {profile_id} starts {profile.backend}, not {backend}")}
         )
     if not profile.enabled:
         raise ValueError({"profile_id": f"launch profile is disabled: {profile_id}"})
@@ -383,7 +379,7 @@ def _wsl_cwd(executable: str, args: list[str], cwd: Path) -> str:
     match = re.match(r"^([A-Za-z]):[\\/](.*)$", str(cwd))
     if match:
         return f"/mnt/{match.group(1).lower()}/{match.group(2).replace('\\', '/')}"
-    raise ValueError(f"cannot translate cwd for WSL: {cwd}")
+    raise ValueError(ui_message("profiles.5fdf9fbcbb", value1=cwd))
 
 
 _POWERSHELL_NAMES = {"powershell", "powershell.exe", "pwsh", "pwsh.exe"}
@@ -544,9 +540,7 @@ def resolve_profile(
             argv.extend(
                 [
                     "-Command",
-                    _powershell_bootstrap(
-                        osc7=profile.cwd_integration, breakpoints=breakpoints
-                    ),
+                    _powershell_bootstrap(osc7=profile.cwd_integration, breakpoints=breakpoints),
                 ]
             )
     start_cwd = str(cwd)

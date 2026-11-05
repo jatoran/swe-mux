@@ -1,3 +1,4 @@
+import { withCatalogText } from './support/localizedSource.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -90,7 +91,7 @@ test('registry lookup falls back safely for an unknown tab', () => {
 })
 
 test('App restores desktop state per Project without persisting mobile visibility', () => {
-  const app = readFileSync(join(import.meta.dirname, '..', 'src', 'App.tsx'), 'utf8')
+  const app = withCatalogText(readFileSync(join(import.meta.dirname, '..', 'src', 'App.tsx'), 'utf8'))
   assert.match(app, /const activeDrawerPresentation=projectId[\s\S]*?drawerProjectPresentationFor\(drawerProjectPresentations,projectId,drawerLayout\)/)
   assert.match(app, /const clipboardOpen=mobileWorkspace\?mobileDrawerOpen:\(drawerResizeOpen\?\?activeDrawerPresentation\.desktop_expanded\)/)
   assert.match(app, /if\(mobileWorkspace\)\{\s*const open=.*?setMobileDrawerOpen\(open\).*?return\s*\}/s)
@@ -103,8 +104,8 @@ test('App restores desktop state per Project without persisting mobile visibilit
 })
 
 test('headered bodies keep compact headings while content-first bodies start with their rails', () => {
-  const host = readFileSync(join(import.meta.dirname, '..', 'src', 'UtilityDrawer.tsx'), 'utf8')
-  const css = readFileSync(join(import.meta.dirname, '..', 'src', 'style.css'), 'utf8')
+  const host = withCatalogText(readFileSync(join(import.meta.dirname, '..', 'src', 'UtilityDrawer.tsx'), 'utf8'))
+  const css = withCatalogText(readFileSync(join(import.meta.dirname, '..', 'src', 'style.css'), 'utf8'))
   assert.ok(host.includes('class={`drawer-body drawer-body-${selected}`}'))
   assert.ok(host.includes('<h2 class="drawer-panel-title" title={active.title}>{heading}</h2>'))
   assert.ok(host.includes('!contentFirst && <div class="drawer-pane-heading">'))
@@ -142,9 +143,9 @@ test('Alerts badges the unread count and no other tab badges at all', () => {
 })
 
 test('both rails draw their badges from one rule, and the Queue badge sits at the foot', () => {
-  const host = readFileSync(join(import.meta.dirname, '..', 'src', 'UtilityDrawer.tsx'), 'utf8')
-  const app = readFileSync(join(import.meta.dirname, '..', 'src', 'App.tsx'), 'utf8')
-  const css = readFileSync(join(import.meta.dirname, '..', 'src', 'style.css'), 'utf8')
+  const host = withCatalogText(readFileSync(join(import.meta.dirname, '..', 'src', 'UtilityDrawer.tsx'), 'utf8'))
+  const app = withCatalogText(readFileSync(join(import.meta.dirname, '..', 'src', 'App.tsx'), 'utf8'))
+  const css = withCatalogText(readFileSync(join(import.meta.dirname, '..', 'src', 'style.css'), 'utf8'))
   // The drawer's strips and the collapsed launcher each call the shared rule rather than
   // testing ids inline, so neither can badge a tab the other does not or cap differently.
   assert.ok(host.includes('drawerTabBadge(id, { unread: props.unread, queueDepth: props.queueDepth })'))
@@ -178,9 +179,9 @@ test('both rails draw their badges from one rule, and the Queue badge sits at th
 })
 
 test('both tab-icon surfaces mark session scope without using notification badges', () => {
-  const host = readFileSync(join(import.meta.dirname, '..', 'src', 'UtilityDrawer.tsx'), 'utf8')
-  const app = readFileSync(join(import.meta.dirname, '..', 'src', 'App.tsx'), 'utf8')
-  const css = readFileSync(join(import.meta.dirname, '..', 'src', 'style.css'), 'utf8')
+  const host = withCatalogText(readFileSync(join(import.meta.dirname, '..', 'src', 'UtilityDrawer.tsx'), 'utf8'))
+  const app = withCatalogText(readFileSync(join(import.meta.dirname, '..', 'src', 'App.tsx'), 'utf8'))
+  const css = withCatalogText(readFileSync(join(import.meta.dirname, '..', 'src', 'style.css'), 'utf8'))
   assert.ok(host.includes('data-scope={item.scope}'))
   assert.ok(app.includes('data-scope={tab.scope}'))
   assert.match(css, /button\[data-scope="session"\]:before[^}]*width:3px[^}]*height:3px[^}]*border-radius:50%/)
@@ -188,14 +189,14 @@ test('both tab-icon surfaces mark session scope without using notification badge
 })
 
 test('Notes exposes one revision-safe action model through inline and pointer menus', () => {
-  const notes = readFileSync(join(import.meta.dirname, '..', 'src', 'NotesTab.tsx'), 'utf8')
-  const css = readFileSync(join(import.meta.dirname, '..', 'src', 'style.css'), 'utf8')
+  const notes = withCatalogText(readFileSync(join(import.meta.dirname, '..', 'src', 'NotesTab.tsx'), 'utf8'))
+  const css = withCatalogText(readFileSync(join(import.meta.dirname, '..', 'src', 'style.css'), 'utf8'))
   assert.ok(notes.includes("await api('DELETE',`/api/projects/${note.project_id}/notes/"))
   assert.ok(notes.includes('{revision:note.revision}'))
-  assert.ok(notes.includes("confirming?'delete?':'×'"), 'inline delete must expose its second step')
+  assert.ok(/confirming\s*\?\s*'delete\?'\s*:\s*'×'/.test(notes), 'inline delete must expose its second step')
   assert.ok(notes.includes('onContextMenu={event=>openContextMenu(note,event)}'))
   assert.ok(notes.includes('const LONG_PRESS_MS=550'))
-  assert.ok(notes.includes("'Confirm delete':'Delete note'"), 'context delete must expose the same second step')
+  assert.ok(/'Confirm delete'\s*:\s*'Delete note'/.test(notes), 'context delete must expose the same second step')
   assert.ok(notes.includes("setTitlePrompt({mode:'create',title:'Untitled note'})"))
   assert.match(css, /\.project-note-row\{[^}]*grid-template-columns:/)
 })
@@ -237,8 +238,8 @@ test('desktop sidebar drags collapse reversibly beyond their minimum widths', ()
 })
 
 test('App previews drag-collapse but persists only the final state', () => {
-  const app = readFileSync(join(import.meta.dirname, '..', 'src', 'App.tsx'), 'utf8')
-  const css = readFileSync(join(import.meta.dirname, '..', 'src', 'style.css'), 'utf8')
+  const app = withCatalogText(readFileSync(join(import.meta.dirname, '..', 'src', 'App.tsx'), 'utf8'))
+  const css = withCatalogText(readFileSync(join(import.meta.dirname, '..', 'src', 'style.css'), 'utf8'))
   assert.ok(app.includes('drawerResizeOpen??activeDrawerPresentation.desktop_expanded'))
   assert.ok(app.includes('setDrawerResizeOpen(dragOpen)'))
   assert.ok(app.includes('setClipboardOpen(dragOpen)'))

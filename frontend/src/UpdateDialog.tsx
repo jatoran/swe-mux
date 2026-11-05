@@ -1,3 +1,4 @@
+import { rich, t } from './localization/index.ts'
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 import { useModalFocus } from './modalFocus'
 import {
@@ -140,17 +141,17 @@ export function UpdateDialog({ version, changelog, onClose }: Props) {
     || (stage.name === 'refused' && refusalNeedsConsent(stage.refusal))
   const sourceInstall = stage.name === 'refused' && stage.refusal.error === 'source_install'
 
-  return <div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label={`Install swe-mux ${version}`} onClick={() => { if (closable) onClose() }}>
+  return <div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label={t("UpdateDialog.0413c989d0", { version: version })} onClick={() => { if (closable) onClose() }}>
     <div class="modal daemon-reload-modal update-dialog" ref={ref} onClick={event => event.stopPropagation()}>
-      <h2>Install swe-mux {version}?</h2>
-      {stage.name === 'planning' && <p>Reading the release…</p>}
+      <h2>{rich("UpdateDialog.ed4cd11140", { version: version })}</h2>
+      {stage.name === 'planning' && <p>{t("UpdateDialog.eac20d51d7")}</p>}
 
       {plan && <>
         <p>{planInstallLine(plan)}</p>
         {planCostLine(plan) && <p>{planCostLine(plan)}</p>}
         {/* The one line that matters, drawn as the refusal it is when sessions end. */}
         <p class={`redeploy-interrupts${reaps ? ' redeploy-blocked' : ''}`}>
-          <strong>{reaps ? 'Every live session ends.' : plan.supervisor.known ? 'Sessions are preserved.' : 'Sessions: decided after download.'}</strong>
+          <strong>{reaps ? t("UpdateDialog.3682687382") : plan.supervisor.known ? t("UpdateDialog.ebfff37c59") : t("UpdateDialog.db872f6358")}</strong>
           <span>{optedIn ? offer : planSessionsLine(plan)}</span>
         </p>
         {offer && <label class="update-dialog-supervisor">
@@ -160,50 +161,46 @@ export function UpdateDialog({ version, changelog, onClose }: Props) {
             disabled={busy}
             onChange={event => setWithSupervisor((event.target as HTMLInputElement).checked)}
           />
-          <span>Also update the PTY supervisor, ending every live session</span>
+          <span>{t("UpdateDialog.2c62e1c183")}</span>
         </label>}
         {offer && !optedIn && <p class="update-dialog-offer">{offer}</p>}
       </>}
 
       {stage.name === 'installing' && <p class="update-dialog-progress" aria-live="polite">
-        <span class="redeploy-spinner" aria-hidden="true" /> {installPhaseLabel(stage.status) || 'Working'}
+        <span class="redeploy-spinner" aria-hidden="true" /> {installPhaseLabel(stage.status) || t("UpdateDialog.a92f0449a9")}
       </p>}
 
       {stage.name === 'refused' && <>
         {sourceInstall && <p>{stage.refusal.message}</p>}
         {sourceInstall && stage.refusal.upgrade_command && <p class="update-dialog-command">
           <code>{stage.refusal.upgrade_command}</code>
-          <button type="button" onClick={() => void navigator.clipboard?.writeText(stage.refusal.upgrade_command || '')}>Copy</button>
+          <button type="button" onClick={() => void navigator.clipboard?.writeText(stage.refusal.upgrade_command || '')}>{t("UpdateDialog.e21f935f11")}</button>
         </p>}
         {!sourceInstall && <p class={`redeploy-interrupts${consentNeeded ? ' redeploy-blocked' : ''}`}>
-          <strong>{consentNeeded ? 'Every live session ends.' : 'Not installed.'}</strong>
+          <strong>{consentNeeded ? t("UpdateDialog.3682687382") : t("UpdateDialog.9983d6fd3d")}</strong>
           <span>{stage.refusal.message}</span>
         </p>}
       </>}
 
       {stage.name === 'done' && <p class="redeploy-interrupts redeploy-blocked">
-        <strong>Not installed.</strong>
-        <span>{stage.status.message || 'The update did not complete. Check daemon.log in the data directory.'}</span>
+        <strong>{t("UpdateDialog.9983d6fd3d")}</strong>
+        <span>{stage.status.message || t("UpdateDialog.9105a83bfc")}</span>
       </p>}
 
       {stage.name === 'error' && <p class="redeploy-interrupts redeploy-blocked">
-        <strong>Could not plan the update.</strong>
+        <strong>{t("UpdateDialog.53e75ac53b")}</strong>
         <span>{stage.message}</span>
       </p>}
 
-      {changelog && stage.name !== 'installing' && <p><a href={changelog} target="_blank" rel="noreferrer">Release notes</a></p>}
+      {changelog && stage.name !== 'installing' && <p><a href={changelog} target="_blank" rel="noreferrer">{t("UpdateDialog.1254829bd9")}</a></p>}
 
       <div class="modal-actions">
-        <button type="button" onClick={onClose} disabled={!closable}>{stage.name === 'refused' || stage.name === 'done' || stage.name === 'error' ? 'Close' : 'Cancel'}</button>
-        {(stage.name === 'planned' || (stage.name === 'refused' && !sourceInstall)) && (
-          consentNeeded
-            ? <button type="button" class="primary update-dialog-reap" disabled={busy} onClick={() => void install(true, optedIn)}>
-              {busy ? 'Starting…' : 'End every session and install'}
-            </button>
-            : <button type="button" class="primary" disabled={busy} onClick={() => void install(false, false)}>
-              {busy ? 'Starting…' : 'Install'}
-            </button>
-        )}
+        <button type="button" onClick={onClose} disabled={!closable}>{stage.name === 'refused' || stage.name === 'done' || stage.name === 'error' ? t("UpdateDialog.7d9eb7acb1") : t("UpdateDialog.19766ed6cc")}</button>
+        {(stage.name === 'planned' || (stage.name === 'refused' && !sourceInstall)) && (consentNeeded ? <button type="button" class="primary update-dialog-reap" disabled={busy} onClick={() => void install(true, optedIn)}>
+              {busy ? t("UpdateDialog.bbe5fc3b9e") : t("UpdateDialog.ca3f07ee9f")}
+            </button> : <button type="button" class="primary" disabled={busy} onClick={() => void install(false, false)}>
+              {busy ? t("UpdateDialog.bbe5fc3b9e") : t("UpdateDialog.569ca49f4a")}
+            </button>)}
       </div>
     </div>
   </div>

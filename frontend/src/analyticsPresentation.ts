@@ -1,7 +1,8 @@
+import { numberFormatter } from './localization/index.ts'
 import { sumUsageRows, type UsageRow, type UsageSource } from './usageAnalytics.ts'
 
-export const compactNumber = (value: number) => new Intl.NumberFormat('en', {notation:'compact', maximumFractionDigits:1}).format(value)
-export const exactNumber = (value: number) => new Intl.NumberFormat().format(value)
+export const compactNumber = (value: number) => numberFormatter({notation:'compact', maximumFractionDigits:1}).format(value)
+export const exactNumber = (value: number) => numberFormatter().format(value)
 
 /** Calendar windows end on the newest cached date, including days with no records. */
 export function usageWindow(sources: UsageSource[], days: number): UsageRow[] {

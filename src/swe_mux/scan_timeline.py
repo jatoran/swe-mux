@@ -31,6 +31,7 @@ from .models import MuxEvent
 from .openrouter import OpenRouterError
 from .text_safety import utf8_safe_value
 from .transcript_view import parse_transcript_cached
+from .ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -254,8 +255,13 @@ _ENUM_FALLBACKS: dict[str, tuple[frozenset[str], str]] = {
     "blocked_on": (BLOCKED_ON, "none"),
     "approach_status": (APPROACH_STATUS, "unknown"),
 }
-_TEXT_LIMITS = (("intent", 500), ("claim", 500), ("user_ask", 500), ("summary", 600),
-                ("dead_end", 500))
+_TEXT_LIMITS = (
+    ("intent", 500),
+    ("claim", 500),
+    ("user_ask", 500),
+    ("summary", 600),
+    ("dead_end", 500),
+)
 
 
 def _response_excerpt(value: Any, limit: int = 800) -> str:
@@ -305,7 +311,7 @@ def _validate_semantics(value: dict[str, Any]) -> tuple[dict[str, Any], list[str
     an empty row on the timeline and move the cursor past real transcript.
     """
     if not isinstance(value, dict):
-        raise ValueError("scan response was not an object")
+        raise ValueError(ui_message("scan_timeline.1f8aa3c834"))
     repairs: list[str] = []
     required = set(SCAN_SCHEMA["required"])
     extra = set(value) - required
@@ -346,7 +352,7 @@ def _validate_semantics(value: dict[str, Any]) -> tuple[dict[str, Any], list[str
         # Nothing survived. A record built from this would be a blank row that
         # still advances the transcript cursor, which is strictly worse than
         # retrying or leaving the window for the next trigger.
-        raise ValueError("scan response carried no usable semantic content")
+        raise ValueError(ui_message("scan_timeline.9c0e4cca5a"))
     return result, repairs
 
 
@@ -445,12 +451,12 @@ class ScanTimelineService:
     async def set_enabled(self, session_id: str, enabled: bool) -> dict[str, Any]:
         context = await self.resolve_context(session_id)
         if context is None:
-            raise ValueError("scan timeline is not permitted for this Project")
+            raise ValueError(ui_message("scan_timeline.23f5247fc8"))
         session = self.sessions.sessions.get(session_id)
         if session is None or session.record.agent_run_id != context.agent_run_id:
-            raise ValueError("the current agent run is unavailable")
+            raise ValueError(ui_message("scan_timeline.ccfa8f2b99"))
         if enabled and not bool(getattr(self.config, "scan_timeline_enabled", False)):
-            raise ValueError("the global scan timeline switch is off")
+            raise ValueError(ui_message("scan_timeline.47b95d87db"))
         row = await self.store.set_scan_run_enabled(
             agent_run_id=context.agent_run_id,
             session_id=session_id,
@@ -469,9 +475,7 @@ class ScanTimelineService:
         # body is an unparseable response that costs a record.
         return int(getattr(self.config, "automation_max_output_tokens", 1000))
 
-    async def _grant_for(
-        self, session_id: str, context: ScanContext
-    ) -> dict[str, Any] | None:
+    async def _grant_for(self, session_id: str, context: ScanContext) -> dict[str, Any] | None:
         """The run's grant, creating one first if the Project auto-enables.
 
         The grant belongs to a provider conversation, not to the terminal
@@ -542,14 +546,14 @@ class ScanTimelineService:
             *scan_share,
             {
                 "id": "automation_hourly_calls",
-                "label": "Automation calls this hour",
+                "label": ui_message("scan_timeline.85f677d145"),
                 "unit": "calls",
                 "used": int(calls),
                 "limit": int(getattr(self.config, "automation_hourly_call_cap", 1200)),
             },
             {
                 "id": "scan_hourly_calls",
-                "label": "Scans this hour",
+                "label": ui_message("scan_timeline.dfd0d43346"),
                 "unit": "calls",
                 "used": int(scan_calls),
                 "limit": int(getattr(self.config, "automation_hourly_call_cap", 1200)),
@@ -594,9 +598,7 @@ class ScanTimelineService:
             "global_enabled": bool(getattr(self.config, "scan_timeline_enabled", False)),
             "last_scan_at": (run or {}).get("last_scan_at"),
             "skip_reason": (
-                self._skip_reasons.get(session_id)
-                if self._skip_terminal.get(session_id)
-                else None
+                self._skip_reasons.get(session_id) if self._skip_terminal.get(session_id) else None
             ),
         }
         if session is None:
@@ -725,7 +727,7 @@ class ScanTimelineService:
                 backend = ""
                 native_id = None
             if transcript_path is None or not backend:
-                raise ValueError("the source transcript is unavailable")
+                raise ValueError(ui_message("scan_timeline.b53dddc439"))
             try:
                 messages = await asyncio.wait_for(
                     asyncio.to_thread(
@@ -765,9 +767,7 @@ class ScanTimelineService:
             self._chain_catchup(session_id, trigger, saved)
         return saved
 
-    def _chain_catchup(
-        self, session_id: str, trigger: str, saved: dict[str, Any] | None
-    ) -> None:
+    def _chain_catchup(self, session_id: str, trigger: str, saved: dict[str, Any] | None) -> None:
         """Come straight back when the window left unscanned transcript behind.
 
         This lives here rather than in the debounce wrapper so that *every*
@@ -786,12 +786,12 @@ class ScanTimelineService:
         context = await self.resolve_context(session_id)
         session = self.sessions.sessions.get(session_id)
         if context is None:
-            raise ValueError("scan timeline is not permitted for this Project")
+            raise ValueError(ui_message("scan_timeline.23f5247fc8"))
         if session is None or session.record.agent_run_id != context.agent_run_id:
-            raise ValueError("the current agent run is unavailable")
+            raise ValueError(ui_message("scan_timeline.ccfa8f2b99"))
         run = await self.store.scan_run(context.agent_run_id)
         if not run or not run.get("enabled"):
-            raise ValueError("enable Scan timeline for this run before scanning the full session")
+            raise ValueError(ui_message("scan_timeline.edf63ecabd"))
         task = self._backfill_tasks.get(context.agent_run_id)
         if task and not task.done():
             return self._backfills[context.agent_run_id]
@@ -839,9 +839,7 @@ class ScanTimelineService:
         return await self._backfill_state(run_id)
 
     @staticmethod
-    def _slice(
-        messages: list[dict[str, Any]], *, truncated: bool = False
-    ) -> TranscriptSlice:
+    def _slice(messages: list[dict[str, Any]], *, truncated: bool = False) -> TranscriptSlice:
         safe = cast(list[dict[str, Any]], utf8_safe_value(messages))
         encoded = json.dumps(safe, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
         return TranscriptSlice(
@@ -854,9 +852,7 @@ class ScanTimelineService:
         )
 
     @classmethod
-    def _backfill_message(
-        cls, message: dict[str, Any]
-    ) -> tuple[dict[str, Any], bool]:
+    def _backfill_message(cls, message: dict[str, Any]) -> tuple[dict[str, Any], bool]:
         """Reduce one parsed message to exactly what ``TranscriptSlice.render`` uses.
 
         Native tool inputs can be hundreds of kilobytes even though the scan prompt
@@ -890,9 +886,7 @@ class ScanTimelineService:
                 content.append(
                     {
                         "type": "tool_use",
-                        "name": str(
-                            utf8_safe_value(str(raw_block.get("name") or "tool"))
-                        )[:200],
+                        "name": str(utf8_safe_value(str(raw_block.get("name") or "tool")))[:200],
                         "input": str(utf8_safe_value(digest)) if digest else None,
                     }
                 )
@@ -900,9 +894,7 @@ class ScanTimelineService:
         truncated = len(blocks) > 64
         while cls._slice([normalized]).bytes > MAX_INPUT_BYTES:
             text_blocks = [
-                block
-                for block in content
-                if block.get("type") == "text" and block.get("text")
+                block for block in content if block.get("type") == "text" and block.get("text")
             ]
             if not text_blocks:
                 normalized = {
@@ -914,9 +906,7 @@ class ScanTimelineService:
                 break
             longest = max(text_blocks, key=lambda block: len(str(block["text"])))
             encoded = str(longest["text"]).encode("utf-8")
-            longest["text"] = encoded[: max(1, len(encoded) // 2)].decode(
-                "utf-8", errors="ignore"
-            )
+            longest["text"] = encoded[: max(1, len(encoded) // 2)].decode("utf-8", errors="ignore")
             truncated = True
         return normalized, truncated
 
@@ -943,13 +933,11 @@ class ScanTimelineService:
             chunks.append(cls._slice(current, truncated=current_truncated))
         return chunks
 
-    async def _backfill_plan(
-        self, session_id: str, context: ScanContext
-    ) -> list[TranscriptSlice]:
+    async def _backfill_plan(self, session_id: str, context: ScanContext) -> list[TranscriptSlice]:
         """Chunks for every message the stored records do not already cover."""
         session = self.sessions.sessions.get(session_id)
         if session is None or session.record.agent_run_id != context.agent_run_id:
-            raise ValueError("the current agent run changed before the scan started")
+            raise ValueError(ui_message("scan_timeline.9c14dcb47f"))
         messages = await asyncio.wait_for(
             asyncio.to_thread(
                 parse_transcript_cached,
@@ -1321,8 +1309,7 @@ class ScanTimelineService:
         t0 = min(message_times, default=max(since, time.time()))
         t1 = max(message_times, default=time.time())
         if any(
-            transcript.input_hash == str(item.get("input_hash") or "")
-            for item in prior_records
+            transcript.input_hash == str(item.get("input_hash") or "") for item in prior_records
         ):
             self._skip(session_id, "this transcript slice was already scanned")
             return None
@@ -1332,9 +1319,7 @@ class ScanTimelineService:
         max_output_tokens = self._max_output_tokens()
         global_spend = await self.store.spend()
         estimated_input_tokens = (
-            transcript.estimated_tokens
-            + max(1, len(project_context.encode("utf-8")) // 4)
-            + 1_200
+            transcript.estimated_tokens + max(1, len(project_context.encode("utf-8")) // 4) + 1_200
         )
         max_tokens = estimated_input_tokens + max_output_tokens
         # The scan's dedicated budgets were retired: the global automation
@@ -1352,7 +1337,7 @@ class ScanTimelineService:
         token_verdict = budget.would_exceed(
             self.config.automation_daily_budget,
             global_spend,
-            label="the global daily automation",
+            label=ui_message("scan_timeline.acfc9410dc"),
             tokens=max_tokens,
             phrasing="exhausted",
         )
@@ -1373,7 +1358,7 @@ class ScanTimelineService:
         dollar_verdict = budget.would_exceed(
             self.config.automation_daily_budget,
             global_spend,
-            label="the global daily automation",
+            label=ui_message("scan_timeline.acfc9410dc"),
             tokens=max_tokens,
             usd=estimated_cost,
             phrasing="exhausted",
@@ -1685,7 +1670,7 @@ class ScanTimelineService:
                 agent_run_id=context.agent_run_id,
             )
             return completion, semantic, repairs
-        raise last or RuntimeError("scan timeline made no provider attempt")
+        raise last or RuntimeError(ui_message("scan_timeline.fd1ffbd2a3"))
 
     def _ledger_cost(self, reported: float | None, estimated: float) -> float | None:
         """What this call costs the ledger, or `None` when nobody can say.

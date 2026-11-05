@@ -113,7 +113,7 @@ test('a reply that a newer write has superseded updates the record but not the l
 })
 
 test('a rejected write re-reads the fleet and names the conflict', async () => {
-  const bench = harness({ patch: async () => { throw new Error('stale layout revision (expected 9)') } })
+  const bench = harness({ patch: async () => { throw Object.assign(new Error('布局已更改'), {detail:{code:'layout_revision_conflict'}}) } })
   const writer = createLayoutWriter(bench.ports)
   assert.equal(await writer.write('p1', layoutWith('a')), false)
   assert.equal(bench.refreshes, 1)

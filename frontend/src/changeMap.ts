@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // Pure helpers behind the Change Map (Phase 7.9): the daemon's response shape, the
 // role palette, the layout worker's protocol, and the geometry that worker starts
 // from. JSX-free and DOM-free so it runs under plain `node --experimental-strip-types`
@@ -64,15 +65,14 @@ export type ChangeMapExcluded = {
 export type ChangeMapScope = 'session' | 'branch' | 'project'
 
 export const SCOPE_LABELS: Record<ChangeMapScope, string> = {
-  session: 'this session',
-  branch: 'this branch',
-  project: 'all sessions',
+  get session() { return t("changeMap.028cdc72b3") },
+  get branch() { return t("changeMap.5d796caaf6") },
+  get project() { return t("changeMap.8711ba8489") },
 }
 export const SCOPE_DESCRIPTIONS: Record<ChangeMapScope, string> = {
-  session: 'Files this session wrote this run, plus everything it has landed in a commit.',
-  branch: 'Every file this checkout has changed against its base, committed or not. '
-    + 'Describes the checkout, so it is not attributed to a session.',
-  project: 'Every session’s edits in this Project, one hue per session.',
+  get session() { return t("changeMap.fb60f9382f") },
+  get branch() { return t("changeMap.scopeBranchDescription") },
+  get project() { return t("changeMap.383f6e9fbd") },
 }
 
 export type ChangeMapCheckout = {
@@ -165,14 +165,14 @@ export const DEFAULT_ROLE_PALETTE: RolePalette = {
 
 export const ROLE_ORDER: ChangeMapRole[] = ['seed', 'blast', 'context']
 export const ROLE_LABELS: Record<ChangeMapRole, string> = {
-  seed: 'Edited here',
-  blast: 'Blast radius',
-  context: 'Imports',
+  get seed() { return t("changeMap.8b0b97a2e4") },
+  get blast() { return t("changeMap.8638fdf109") },
+  get context() { return t("changeMap.7df60b64e7") },
 }
 export const ROLE_DESCRIPTIONS: Record<ChangeMapRole, string> = {
-  seed: 'Source files this session wrote since the baseline commit.',
-  blast: 'Files that import or call an edited file, so what this change can reach.',
-  context: 'What the edited files themselves import, one hop out.',
+  get seed() { return t("changeMap.4040241a10") },
+  get blast() { return t("changeMap.c42081fb54") },
+  get context() { return t("changeMap.0aa623b775") },
 }
 
 const HEX = (value: number): string => Math.round(value).toString(16).padStart(2, '0')
@@ -303,8 +303,8 @@ export const unindexedCount = (nodes: ChangeMapNode[]): number =>
  *  edges, and "nothing depends on this" is a conclusion a reader would act on. */
 export function unindexedNote(count: number): string {
   if (count <= 0) return ''
-  return `${UNINDEXED_MARK} ${count} file${count === 1 ? '' : 's'} not in the code index yet`
-    + ' — new on this branch, so nothing here can link to them until they land.'
+  return t("changeMap.e2c0c41b64", { value1: UNINDEXED_MARK, value2: count, value3: (count === 1) ? 'yes' : 'no' })
+    + t("changeMap.ef374da716")
 }
 
 export type RoleGroup = { role: ChangeMapRole; label: string; nodes: ChangeMapNode[] }
@@ -420,7 +420,7 @@ export function checkoutNote(map: Pick<ChangeMap, 'scope' | 'checkout'>): string
   const where = checkout.worktree ? `worktree ${checkout.worktree}` : checkout.branch || ''
   if (map.scope !== 'branch') return where
   const against = checkout.ref ? ` vs ${checkout.ref}` : ''
-  return `${where || 'this checkout'}${against}`
+  return `${where || t("changeMap.71b27d1772")}${against}`
 }
 
 /** What the map refused to draw, as one sentence, or '' when it drew everything. */
@@ -429,29 +429,29 @@ export function excludedNote(excluded: ChangeMapExcluded | undefined): string {
   const unindexable = excluded?.unindexable || 0
   if (!outside && !unindexable) return ''
   const parts: string[] = []
-  if (outside) parts.push(`${outside} outside this checkout`)
-  if (unindexable) parts.push(`${unindexable} in a generated, vendored, or hidden directory`)
+  if (outside) parts.push(t("changeMap.bae04f69be", { value1: outside }))
+  if (unindexable) parts.push(t("changeMap.893118c7b1", { value1: unindexable }))
   const total = outside + unindexable
-  return `${total} edited file${total === 1 ? '' : 's'} not shown (${parts.join(', ')}). `
-    + 'The code graph does not index them, so they can have no links here.'
+  return t("changeMap.3c4bac9d57", { value1: total, value2: (total === 1) ? 'yes' : 'no', value3: parts.join(', ') })
+    + t("changeMap.b9efc97998")
 }
 
 const DISABLED_NOTES: Record<ChangeMapDisabledReason, string> = {
-  unsupported: 'This daemon has no code-structure index, so there is no change map to draw.',
-  no_project: 'This session has no registered Project, and the map is built per Project.',
-  automation_disabled: 'The “Code-structure graph” automation is off for this Project.',
+  get unsupported() { return t("changeMap.46fe1c3d7c") },
+  get no_project() { return t("changeMap.0eb1179f06") },
+  get automation_disabled() { return t("changeMap.7fa1b8987e") },
 }
 const DISABLED_HINTS: Record<ChangeMapDisabledReason, string> = {
-  unsupported: 'Restart the daemon on a build that carries the code graph.',
-  no_project: 'Register this session’s working directory as a Project to build one.',
-  automation_disabled: 'Turn on “Code-structure graph” in this Project’s settings and the map fills in on the next turn.',
+  get unsupported() { return t("changeMap.268c03c966") },
+  get no_project() { return t("changeMap.dacff78504") },
+  get automation_disabled() { return t("changeMap.75e6c1b6d2") },
 }
 
 export function disabledNote(reason: ChangeMapDisabledReason | null): { note: string; hint: string } {
   if (reason && reason in DISABLED_NOTES) return { note: DISABLED_NOTES[reason], hint: DISABLED_HINTS[reason] }
   return {
-    note: 'The change map is unavailable for this session.',
-    hint: 'Enable the “Code-structure graph” automation for this Project to build one.',
+    get note() { return t("changeMap.33fe429447") },
+    get hint() { return t("changeMap.8b1e4ae52d") },
   }
 }
 

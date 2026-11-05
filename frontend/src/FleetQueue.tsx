@@ -1,3 +1,5 @@
+import { codeLabel } from './localization/codeLabels.ts'
+import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import {
   cancelQueueMessage, decideControlRequest, decideSpawnRequest, deleteQueueMessage,
@@ -41,20 +43,20 @@ type Props = {
 }
 
 const STATE_NOTE: Record<string, string> = {
-  draft: 'waiting to be armed',
-  armed: 'armed - waiting for order and readiness',
-  blocked: 'refused; inspect the target queue',
+  get draft() { return t("FleetQueue.f77d0650bd") },
+  get armed() { return t("FleetQueue.4582cc8374") },
+  get blocked() { return t("FleetQueue.537c4703ce") },
   delivering: 'delivering...',
   sent: 'delivered',
-  failed: 'failed - verify the terminal',
+  get failed() { return t("FleetQueue.f3ea17604a") },
   cancelled: 'cancelled',
-  stranded: 'target ended or was replaced',
+  get stranded() { return t("FleetQueue.61b539ec1a") },
 }
 
 const AUTHOR_SCOPES: { id: FleetQueueAuthor; label: string; title: string }[] = [
-  { id: 'non_human', label: 'agents + automation', title: 'Messages authored by agents, rules, or observers' },
-  { id: 'human', label: 'human', title: 'Messages authored by you locally or from a remote device' },
-  { id: 'all', label: 'all authors', title: 'Messages authored by anyone' },
+  { id: 'non_human', get label() { return t("FleetQueue.820768c032") }, get title() { return t("FleetQueue.c52f9bbabe") } },
+  { id: 'human', get label() { return t("FleetQueue.79a5478768") }, get title() { return t("FleetQueue.5cc8292a19") } },
+  { id: 'all', get label() { return t("FleetQueue.f8a0d56a78") }, get title() { return t("FleetQueue.d05a071457") } },
 ]
 
 export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }: Props) {
@@ -104,19 +106,15 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
   }, [refresh])
 
   const projectNames = useMemo(
-    () => new Map(projects.map(project => [project.id, project.name])),
-    [projects],
-  )
+    () => new Map(projects.map(project => [project.id, project.name])), [projects, uiLocale.value, catalogRevision.value])
   const projectOptions = useMemo(() => {
     const ids = new Set(view.targets.map(target => target.project_id).filter((id): id is string => !!id))
     for (const request of view.spawn_requests) ids.add(request.project_id)
     for (const request of view.control_requests) ids.add(request.project_id)
     return byProjectName([...ids], id => projectNames.get(id) || id)
-  }, [projectNames, view.control_requests, view.spawn_requests, view.targets])
+  }, [projectNames, view.control_requests, view.spawn_requests, view.targets, uiLocale.value, catalogRevision.value])
   const targetOptions = useMemo(
-    () => view.targets.filter(target => !projectId || target.project_id === projectId),
-    [projectId, view.targets],
-  )
+    () => view.targets.filter(target => !projectId || target.project_id === projectId), [projectId, view.targets, uiLocale.value, catalogRevision.value])
 
   const run = async (identity: string, action: () => Promise<unknown>) => {
     setBusyId(identity)
@@ -154,24 +152,24 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
       class="usage-layer fleet-queue-layer"
       role="dialog"
       aria-modal="true"
-      aria-label="Fleet queue"
+      aria-label={t("FleetQueue.60c2b52761")}
       onMouseDown={event => event.target === event.currentTarget && onClose()}
     >
       <section class="usage-panel fleet-queue-panel" ref={panel}>
         <header>
           <div>
-            <span>QUEUE::FLEET</span>
-            <strong>Every queued message across all sessions, by who wrote it</strong>
+            <span>{t("FleetQueue.0683040cf3")}</span>
+            <strong>{t("FleetQueue.2e9f92af46")}</strong>
           </div>
           <div class="usage-header-actions">
-            <button aria-label="Close fleet queue" onClick={onClose}>×</button>
+            <button aria-label={t("FleetQueue.35c0ae4fb6")} onClick={onClose}>×</button>
           </div>
         </header>
 
         <div class="fleet-queue-controls">
           {/* Not `.queue-scope`: that class is sized for the drawer's 300px column, where
               equal-flex buttons and a bottom rule are right. Here it is a modal toolbar. */}
-          <div class="fleet-queue-author-scope" role="tablist" aria-label="Message author">
+          <div class="fleet-queue-author-scope" role="tablist" aria-label={t("FleetQueue.4a0734833f")}>
             {AUTHOR_SCOPES.map(scope => (
               <button
                 key={scope.id}
@@ -187,11 +185,11 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
             ))}
           </div>
           <label>
-            <span>Project</span>
+            <span>{t("FleetQueue.9859597853")}</span>
             <Dropdown
               value={projectId}
               filter
-              filterPlaceholder="Filter Projects…"
+              filterPlaceholder={t("FleetQueue.2e0060c45e")}
               onChange={nextProject => {
                 setProjectId(nextProject)
                 if (targetSessionId && !view.targets.some(target =>
@@ -199,13 +197,13 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
                 )) setTargetSessionId('')
               }}
               options={[
-                { value: '', label: 'All Projects' },
+                { value: '', get label() { return t("FleetQueue.cdd1b88308") } },
                 ...projectOptions.map(id => ({ value: id, label: projectNames.get(id) || id })),
               ]}
             />
           </label>
           <label>
-            <span>Session</span>
+            <span>{t("FleetQueue.6959b41595")}</span>
             <Dropdown
               value={targetSessionId}
               onChange={nextTarget => {
@@ -214,7 +212,7 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
                 if (target?.project_id) setProjectId(target.project_id)
               }}
               options={[
-                { value: '', label: 'All sessions' },
+                { value: '', get label() { return t("FleetQueue.78648d4d66") } },
                 ...targetOptions.map(target => ({
                   value: target.target_session_id,
                   label: target.label || target.target_session_id,
@@ -227,28 +225,17 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
         {/* Read-only: the controls that change this state are one gesture away on the
             Queue tab and on `autodelivery.pause`, not buried behind this overlay. */}
         <div class="fleet-queue-status" role="status">
-          <span class={auto?.paused ? 'fleet-queue-paused' : ''}>
-            auto-delivery {!auto ? '…' : !auto.master_enabled ? 'off for this install' : auto.paused ? 'paused (emergency stop)' : 'armed'}
-          </span>
+          <span class={auto?.paused ? 'fleet-queue-paused' : ''}>{rich("FleetQueue.19b3675b8b", { value1: !auto ? '…' : !auto.master_enabled ? t("FleetQueue.b57f160c0f") : auto.paused ? t("FleetQueue.358a4d279a") : t("FleetQueue.dc083dbe05") })}</span>
           {/* The emergency pause is a state to read here (its controls are on the Queue tab),
               but "off for this install" is not a state — it is a switch nobody has turned on,
               and the reader is one click from it. */}
           {auto && !auto.master_enabled && <GrantButton id="queue.autoDelivery"
-            onGranted={refresh}>turn it on</GrantButton>}
-          {promotion && (
-            <span class="queue-promotion">
-              auto sends {promotion.auto_sends}/{promotion.required_sends} · proving{' '}
-              {promotion.proving_days}/{promotion.required_days} days · unsafe {promotion.unsafe_reports}
-            </span>
-          )}
+            onGranted={refresh}>{t("FleetQueue.b67bc0ed9e")}</GrantButton>}
+          {promotion && (<span class="queue-promotion">{rich("FleetQueue.4beb1c328d", { auto_sends: promotion.auto_sends, required_sends: promotion.required_sends, proving_days: promotion.proving_days, required_days: promotion.required_days, unsafe_reports: promotion.unsafe_reports })}</span>)}
         </div>
 
         {error && <p class="usage-error" role="alert">{error}</p>}
-        {!!view.spawn_request_errors.length && (
-          <p class="usage-error" role="alert">
-            Spawn requests could not be read for {view.spawn_request_errors.length} Project(s).
-          </p>
-        )}
+        {!!view.spawn_request_errors.length && (<p class="usage-error" role="alert">{rich("FleetQueue.a656f61559", { length: view.spawn_request_errors.length })}</p>)}
 
         <main>
           <ul class="queue-list">
@@ -258,14 +245,12 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
               return (
                 <li key={`spawn:${request.project_id}:${request.id}`} class={`observation-request${pending ? '' : ' done'}`}>
                   <div class="observation-request-head">
-                    <span class="observation-request-tag">spawn request</span>
-                    <span>{request.from_name || request.from_session || 'an agent'}</span>
+                    <span class="observation-request-tag">{t("FleetQueue.5e2f6b11ae")}</span>
+                    <span>{request.from_name || request.from_session || t("FleetQueue.647936ec3e")}</span>
                     {request.backend && <span>{request.backend}</span>}
-                    {request.model && <span class="observation-request-model">on {request.model}</span>}
-                    <span class="fleet-queue-project">
-                      Project: {projectNames.get(request.project_id) || request.project_name || request.project_id}
-                    </span>
-                    <span class="observation-request-status">{request.status}</span>
+                    {request.model && <span class="observation-request-model">{rich("FleetQueue.93b522f810", { model: request.model })}</span>}
+                    <span class="fleet-queue-project">{rich("FleetQueue.b1c7dfe207", { value1: projectNames.get(request.project_id) || request.project_name || request.project_id })}</span>
+                    <span class="observation-request-status">{codeLabel(request.status)}</span>
                   </div>
                   {request.reason && <p class="observation-request-reason">{request.reason}</p>}
                   <pre class="observation-request-prompt">{request.prompt}</pre>
@@ -276,20 +261,14 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
                         class="primary"
                         disabled={busy}
                         onClick={() => void run(request.id, () => decideSpawnRequest(request.project_id, request.id, 'approve'))}
-                      >
-                        Approve and start session
-                      </button>
+                      >{t("FleetQueue.57de86e073")}</button>
                       <button
                         type="button"
                         disabled={busy}
                         onClick={() => void run(request.id, () => decideSpawnRequest(request.project_id, request.id, 'dismiss'))}
-                      >
-                        Dismiss
-                      </button>
-                    </> : (
-                      <span>{request.status === 'approved' ? 'Session started' : 'Nothing was started'}</span>
-                    )}
-                    <button type="button" disabled={busy} onClick={() => void copyPrompt(request)}>Copy prompt</button>
+                      >{t("FleetQueue.48845bff33")}</button>
+                    </> : (<span>{request.status === 'approved' ? t("FleetQueue.a6a7c4b6ed") : t("FleetQueue.701b07dbed")}</span>)}
+                    <button type="button" disabled={busy} onClick={() => void copyPrompt(request)}>{t("FleetQueue.ffc64b8bb8")}</button>
                   </div>
                 </li>
               )
@@ -301,12 +280,10 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
               return (
                 <li key={`control:${request.project_id}:${request.id}`} class={`observation-request${pending ? '' : ' done'}`}>
                   <div class="observation-request-head">
-                    <span class="observation-request-tag">{verb} request</span>
-                    <span>{request.from_name || request.from_session || 'an agent'}</span>
+                    <span class="observation-request-tag">{rich("FleetQueue.0078a87cf4", { verb: verb })}</span>
+                    <span>{request.from_name || request.from_session || t("FleetQueue.647936ec3e")}</span>
                     <span>→ {request.target_name || request.target_session_id}</span>
-                    <span class="fleet-queue-project">
-                      Project: {projectNames.get(request.project_id) || request.project_name || request.project_id}
-                    </span>
+                    <span class="fleet-queue-project">{rich("FleetQueue.b1c7dfe207", { value1: projectNames.get(request.project_id) || request.project_name || request.project_id })}</span>
                     <span class="observation-request-status">{request.outcome || request.status}</span>
                   </div>
                   {request.reason && <p class="observation-request-reason">{request.reason}</p>}
@@ -317,19 +294,13 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
                         class="primary"
                         disabled={busy}
                         onClick={() => void run(request.id, () => decideControlRequest(request.project_id, request.id, 'approve'))}
-                      >
-                        Approve and {verb}
-                      </button>
+                      >{rich("FleetQueue.13aff5f4a8", { verb: verb })}</button>
                       <button
                         type="button"
                         disabled={busy}
                         onClick={() => void run(request.id, () => decideControlRequest(request.project_id, request.id, 'dismiss'))}
-                      >
-                        Dismiss
-                      </button>
-                    </> : (
-                      <span>{request.status === 'approved' ? `Session ${request.outcome || 'acted on'}` : 'Nothing was done'}</span>
-                    )}
+                      >{t("FleetQueue.48845bff33")}</button>
+                    </> : (<span>{request.status === 'approved' ? t("FleetQueue.805b51d3d8", { value1: request.outcome || t("FleetQueue.9e4cff8361") }) : t("FleetQueue.1c9abdc73f")}</span>)}
                   </div>
                 </li>
               )
@@ -339,17 +310,11 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
               return (
                 <li key={message.id} class={`queue-item queue-item-${message.state}`}>
                   <div class="queue-item-meta">
-                    <span class={`queue-state queue-state-${message.state}`}>{message.state}</span>
-                    <span>{senderLabel(message) || 'from you'}</span>
+                    <span class={`queue-state queue-state-${message.state}`}>{codeLabel(message.state)}</span>
+                    <span>{senderLabel(message) || t("FleetQueue.7157b02b58")}</span>
                     <span class="queue-item-target">→ {message.target_label || message.target_session_id}</span>
-                    {message.project_id && (
-                      <span class="fleet-queue-project">Project: {projectNames.get(message.project_id) || message.project_id}</span>
-                    )}
-                    {scheduleStatus(message) === 'scheduled' && message.constraints?.not_before && (
-                      <span class="queue-item-schedule">
-                        scheduled {new Date(message.constraints.not_before * 1000).toLocaleString()}
-                      </span>
-                    )}
+                    {message.project_id && (<span class="fleet-queue-project">{rich("FleetQueue.b1c7dfe207", { value1: projectNames.get(message.project_id) || message.project_id })}</span>)}
+                    {scheduleStatus(message) === 'scheduled' && message.constraints?.not_before && (<span class="queue-item-schedule">{rich("FleetQueue.cabc4287ed", { value1: new Date(message.constraints.not_before * 1000).toLocaleString(uiLocale.value) })}</span>)}
                     <span class="queue-item-note">{STATE_NOTE[message.state] || ''}</span>
                   </div>
                   <pre class={`queue-item-body${message.state === 'sent' ? ' queue-item-sent' : ''}`}>{message.body}</pre>
@@ -357,23 +322,16 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
                     <button
                       type="button"
                       disabled={busy || !message.target_live}
-                      title={message.target_live ? 'Open this target session queue' : 'Target session is not live'}
+                      title={message.target_live ? t("FleetQueue.b99060a573") : t("FleetQueue.66a1d706b1")}
                       onClick={() => { onOpenQueue(message.target_session_id); onClose() }}
-                    >
-                      Open queue
-                    </button>
-                    {['draft', 'armed', 'blocked'].includes(message.state) && (
-                      <button
+                    >{t("FleetQueue.976eba72da")}</button>
+                    {['draft', 'armed', 'blocked'].includes(message.state) && (<button
                         type="button"
                         disabled={busy}
                         onClick={() => void run(message.id, () => cancelQueueMessage(message.id, 'revoked'))}
-                      >
-                        Revoke
-                      </button>
-                    )}
-                    <button type="button" disabled={busy} onClick={() => void copyBody(message)}>Copy</button>
-                    {message.state !== 'delivering' && (
-                      <button
+                      >{t("FleetQueue.87e6d00bbf")}</button>)}
+                    <button type="button" disabled={busy} onClick={() => void copyBody(message)}>{t("FleetQueue.e21f935f11")}</button>
+                    {message.state !== 'delivering' && (<button
                         type="button"
                         class={`danger${deleteConfirmId === message.id ? ' confirming' : ''}`}
                         disabled={busy}
@@ -386,16 +344,13 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
                           void run(message.id, () => deleteQueueMessage(message.id))
                         }}
                       >
-                        {deleteConfirmId === message.id ? 'Delete permanently' : 'Delete'}
-                      </button>
-                    )}
+                        {deleteConfirmId === message.id ? t("FleetQueue.280b10c89c") : t("FleetQueue.e2d0a54968")}
+                      </button>)}
                   </div>
                 </li>
               )
             })}
-            {!view.messages.length && (!view.spawn_requests.length || !!targetSessionId) && (
-              <li class="queue-empty">No messages or spawn requests match these filters.</li>
-            )}
+            {!view.messages.length && (!view.spawn_requests.length || !!targetSessionId) && (<li class="queue-empty">{t("FleetQueue.27483023ff")}</li>)}
           </ul>
         </main>
       </section>

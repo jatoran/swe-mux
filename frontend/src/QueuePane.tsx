@@ -1,3 +1,4 @@
+import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { browserUuid } from './layout'
 import { hasSoftKeyboard } from './deviceSettings'
@@ -107,7 +108,7 @@ function describeOutcome(outcome: QueueSendOutcome): string {
     case 'sent':
       return ''
     case 'queued_behind':
-      return 'An earlier pending message must go first (strict order).'
+      return t("QueuePane.4d0f820550")
     case 'blocked': {
       // Worded, not code-dumped. `Not safe right now: terminal_input_after_completion`
       // named the check that fired and answered none of what the reader needs, which
@@ -115,15 +116,15 @@ function describeOutcome(outcome: QueueSendOutcome): string {
       // same vocabulary so the refusal and the strip cannot disagree.
       const said = wordReasons(outcome.reasons)
       return outcome.protected
-        ? `Cannot be sent: ${said}. No confirmation overrides this one.`
-        : `Not safe right now: ${said}.`
+        ? t("QueuePane.856b0a9aa8", { value1: said })
+        : t("QueuePane.50e3e8391c", { value1: said })
     }
     case 'stranded':
       return outcome.error
     case 'revision_conflict':
-      return 'The message changed since this view loaded; it has been refreshed.'
+      return t("QueuePane.f50bfa553f")
     case 'not_due':
-      return `Scheduled for ${new Date(outcome.notBefore * 1000).toLocaleString()}. “Send now” overrides the clock.`
+      return t("QueuePane.48d8c7c8c1", { value1: new Date(outcome.notBefore * 1000).toLocaleString(uiLocale.value) })
     case 'expired':
       return outcome.error
     case 'error':
@@ -133,9 +134,9 @@ function describeOutcome(outcome: QueueSendOutcome): string {
 
 /** Presets for "send later"; the daemon resolves the delay to an absolute time. */
 const DELAY_PRESETS: { label: string; seconds: number }[] = [
-  { label: '+5m', seconds: 300 },
-  { label: '+15m', seconds: 900 },
-  { label: '+1h', seconds: 3600 },
+  { get label() { return t("QueuePane.d28629e18d") }, seconds: 300 },
+  { get label() { return t("QueuePane.d2cd9daf2e") }, seconds: 900 },
+  { get label() { return t("QueuePane.4e9e1f6011") }, seconds: 3600 },
 ]
 
 /** Autosave, said in the fewest words that still distinguish "your text is on the daemon"
@@ -146,15 +147,15 @@ function draftStatusLabel(state: QueueDraftState | null): string {
   if (!state) return ''
   switch (state.status) {
     case 'saving':
-      return 'saving…'
+      return t("QueuePane.945d2c0350")
     case 'pending':
-      return 'unsaved'
+      return t("QueuePane.9c80e8331a")
     case 'saved':
-      return state.dirty ? 'unsaved' : 'saved'
+      return state.dirty ? t("QueuePane.9c80e8331a") : t("QueuePane.d81c55f49c")
     case 'empty':
-      return 'empty'
+      return t("QueuePane.2e1cfa82b0")
     case 'error':
-      return 'not saved'
+      return t("QueuePane.5539672827")
     default:
       return ''
   }
@@ -169,36 +170,36 @@ function draftStatusLabel(state: QueueDraftState | null): string {
 function describeLapse(lapse: QueueAutoSession['lapse']): string {
   if (!lapse) return ''
   const parts: string[] = []
-  if (lapse.idle_seconds !== null) parts.push(`idle ${Math.round(lapse.idle_seconds / 60)} min`)
-  if (lapse.window_minutes !== null) parts.push(`${Math.round(lapse.window_minutes)} min window`)
+  if (lapse.idle_seconds !== null) parts.push(t("QueuePane.9e8dd48d9f", { value1: Math.round(lapse.idle_seconds / 60) }))
+  if (lapse.window_minutes !== null) parts.push(t("QueuePane.2c3e127a0b", { value1: Math.round(lapse.window_minutes) }))
   if (lapse.pending) parts.push(`${lapse.pending} waiting`)
   return parts.length ? ` (${parts.join(', ')})` : ''
 }
 
 function describeAuto(status: QueueAutoStatus | null, sessionId: string): string {
   if (!status) return '…'
-  if (!status.master_enabled) return 'off for this install'
-  if (status.paused) return 'paused (emergency stop)'
-  if (!sessionId) return 'armed for this install'
+  if (!status.master_enabled) return t("QueuePane.b57f160c0f")
+  if (status.paused) return t("QueuePane.358a4d279a")
+  if (!sessionId) return t("QueuePane.23dbd34e88")
   const row = status.sessions.find(item => item.session_id === sessionId)
   if (!row?.enabled) {
-    return row?.disabled_reason ? `off — ${row.disabled_reason}${describeLapse(row.lapse)}` : 'off'
+    return row?.disabled_reason ? t("QueuePane.846f1fe30a", { value1: row.disabled_reason, value2: describeLapse(row.lapse) }) : t("QueuePane.b4dc66dde8")
   }
   const minutes = row.expires_in_s === null ? null : Math.max(0, Math.round(row.expires_in_s / 60))
-  const parts = [`${row.sends_remaining} send${row.sends_remaining === 1 ? '' : 's'} left`]
-  if (minutes !== null) parts.push(`${minutes} min left`)
+  const parts = [t("QueuePane.1005c959d6", { value1: row.sends_remaining, value2: (row.sends_remaining === 1) ? 'yes' : 'no' })]
+  if (minutes !== null) parts.push(t("QueuePane.1f96d599e4", { value1: minutes }))
   // Why the grant is still here rather than lapsed: this conversation is owed an
   // answer — by a peer it messaged, or by the land queue it asked to land a branch.
   if (row.reply_window)
     parts.push(
       row.reply_window.kind === 'land'
-        ? 'land in flight'
+        ? t("QueuePane.cc74fa0bd6")
         : row.reply_window.kind === 'watch'
-          ? 'watch armed'
-          : 'reply window open',
+          ? t("QueuePane.0d31e8c699")
+          : t("QueuePane.32371990bf"),
     )
-  if (status.quiet_hours.active) parts.push('quiet hours — paused')
-  return `on · ${parts.join(' · ')}`
+  if (status.quiet_hours.active) parts.push(t("QueuePane.13ed902f40"))
+  return t("QueuePane.011d7823b6", { value1: parts.join(' · ') })
 }
 
 /** Targets are registered prompt-delivery harnesses only; a shell would execute a paste. */
@@ -245,7 +246,7 @@ export function QueuePane({
   const focusPending = useRef(false)
 
   const session = sessions.find(item => item.id === sessionId) || null
-  const editorTargetLabel = session ? agentTargetName(session) : sessionId || 'No session'
+  const editorTargetLabel = session ? agentTargetName(session) : sessionId || t("QueuePane.64f06c9698")
   // An id with no session record is an ended target the daemon still holds a queue for
   // (the pop-out tab outliving its session); only a *live non-agent* is refused here.
   const targetable = !!sessionId && (isAgentSession(session) || !session)
@@ -282,11 +283,11 @@ export function QueuePane({
         })
       },
     }
-  }, [sessionId])
+  }, [sessionId, uiLocale.value, catalogRevision.value])
   const editorSurface = {
     id: `queue:${sessionId}`,
     kind: 'queue' as const,
-    label: `Queue · ${editorTargetLabel}`,
+    get label() { return t("QueuePane.ad1a2d921d", { editorTargetLabel: editorTargetLabel }) },
   }
   useEffect(() => () => forgetEditorFocus(editorHandle), [editorHandle])
   useEffect(() => {
@@ -356,27 +357,23 @@ export function QueuePane({
   }, [sessionId])
 
   const messages = view?.messages ?? []
-  const head = useMemo(() => queueHead(messages), [messages])
+  const head = useMemo(() => queueHead(messages), [messages, uiLocale.value, catalogRevision.value])
   const editingMessage = editing?.messageId
     ? messages.find(item => item.id === editing.messageId) ?? null
     : null
   const active = useMemo(
-    () => messages.filter(item => !isDoneState(item.state)),
-    [messages],
-  )
+    () => messages.filter(item => !isDoneState(item.state)), [messages, uiLocale.value, catalogRevision.value])
   // A floating editor draws its own row, so the created item must not also draw one.
   const listed = editing?.floating && editing.messageId
     ? active.filter(item => item.id !== editing.messageId)
     : active
-  const done = useMemo(() => messages.filter(item => isDoneState(item.state)), [messages])
+  const done = useMemo(() => messages.filter(item => isDoneState(item.state)), [messages, uiLocale.value, catalogRevision.value])
   /** Nothing on screen but the compose control - not merely "no pending items", because a
    *  collapsed `N delivered or closed` disclosure is content and centring around it would
    *  put the button over the top of it. */
   const listEmpty = !listed.length && !editing?.floating && !done.length
   const liveAgents = useMemo(
-    () => agentTargets(sessions, session?.project_id ?? '').filter(item => item.id !== sessionId),
-    [sessions, session, sessionId],
-  )
+    () => agentTargets(sessions, session?.project_id ?? '').filter(item => item.id !== sessionId), [sessions, session, sessionId, uiLocale.value, catalogRevision.value])
 
   const run = async (id: string, action: () => Promise<unknown>) => {
     setBusyId(id)
@@ -603,8 +600,8 @@ export function QueuePane({
         <button
           type="button"
           class="danger queue-item-delete"
-          aria-label="Discard this draft"
-          title="Discard this draft"
+          aria-label={t("QueuePane.76e243c4e8")}
+          title={t("QueuePane.76e243c4e8")}
           onClick={discardDraft}
         >
           <TrashIcon />
@@ -616,8 +613,8 @@ export function QueuePane({
       <button
         type="button"
         class={`danger queue-item-delete${armed ? ' confirming' : ''}`}
-        aria-label={armed ? 'Confirm deleting this message' : 'Delete this message'}
-        title={armed ? 'Click again to delete permanently' : 'Delete this message'}
+        aria-label={armed ? t("QueuePane.3031f3bb96") : t("QueuePane.989ad86f28")}
+        title={armed ? t("QueuePane.41e0bd0fbe") : t("QueuePane.989ad86f28")}
         disabled={busy}
         onClick={() => {
           if (!armed) {
@@ -633,7 +630,7 @@ export function QueuePane({
           void run(message.id, () => deleteQueueMessage(message.id))
         }}
       >
-        {armed ? 'Delete permanently' : <TrashIcon />}
+        {armed ? t("QueuePane.280b10c89c") : <TrashIcon />}
       </button>
     )
   }
@@ -653,40 +650,30 @@ export function QueuePane({
     const schedule = scheduleStatus(message)
     return (
       <div class="queue-item-actions queue-item-more">
-        {pending && message.state !== 'delivering' && (
-          <>
-            <button type="button" title="Move earlier" disabled={busy} onClick={() => void run(message.id, () => moveMessage(message, -1))}>↑</button>
-            <button type="button" title="Move later" disabled={busy} onClick={() => void run(message.id, () => moveMessage(message, 1))}>↓</button>
+        {pending && message.state !== 'delivering' && (<>
+            <button type="button" title={t("QueuePane.736612d4d0")} disabled={busy} onClick={() => void run(message.id, () => moveMessage(message, -1))}>↑</button>
+            <button type="button" title={t("QueuePane.d6e856081e")} disabled={busy} onClick={() => void run(message.id, () => moveMessage(message, 1))}>↓</button>
             <button
               type="button"
               disabled={busy}
               onClick={() => void run(message.id, () => cancelQueueMessage(message.id, head?.id === message.id ? 'skipped' : 'cancelled'))}
             >
-              {head?.id === message.id ? 'Skip' : 'Cancel'}
+              {head?.id === message.id ? t("QueuePane.28d03596d2") : t("QueuePane.19766ed6cc")}
             </button>
-            {!isEditing && (
-              <button
+            {!isEditing && (<button
                 type="button"
-                title={message.constraints?.delivery === 'now'
-                  ? 'Stop asking for mid-turn delivery; wait for the agent to be idle'
-                  : 'Ask for delivery into a turn that is already running, when it is safe'}
+                title={message.constraints?.delivery === 'now' ? t("QueuePane.a624284888") : t("QueuePane.dc96a020ca")}
                 disabled={busy}
                 onClick={() => void run(message.id, () => setMessageDelivery(message, message.constraints?.delivery !== 'now'))}
               >
-                {message.constraints?.delivery === 'now' ? 'Wait for idle' : 'Deliver mid-turn'}
-              </button>
-            )}
-            {schedule === 'scheduled' ? (
-              <button type="button" disabled={busy} onClick={() => void run(message.id, () => clearSchedule(message))}>
-                Clear schedule
-              </button>
-            ) : (
-              DELAY_PRESETS.map(preset => (
+                {message.constraints?.delivery === 'now' ? t("QueuePane.7545a8a377") : t("QueuePane.90cc978f71")}
+              </button>)}
+            {schedule === 'scheduled' ? (<button type="button" disabled={busy} onClick={() => void run(message.id, () => clearSchedule(message))}>{t("QueuePane.83e854047d")}</button>) : (DELAY_PRESETS.map(preset => (
                 <button
                   key={preset.label}
                   type="button"
                   class="queue-schedule-preset"
-                  title={`Deliver no earlier than ${preset.label} from now`}
+                  title={t("QueuePane.6d4cb6b0b6", { label: preset.label })}
                   disabled={busy}
                   onClick={() =>
                     void run(message.id, () =>
@@ -705,15 +692,9 @@ export function QueuePane({
                 >
                   {preset.label}
                 </button>
-              ))
-            )}
-          </>
-        )}
-        {message.state === 'stranded' && (
-          <button type="button" disabled={busy} onClick={() => void run(message.id, () => cancelQueueMessage(message.id, 'cancelled'))}>
-            Cancel
-          </button>
-        )}
+              )))}
+          </>)}
+        {message.state === 'stranded' && (<button type="button" disabled={busy} onClick={() => void run(message.id, () => cancelQueueMessage(message.id, 'cancelled'))}>{t("QueuePane.19766ed6cc")}</button>)}
       </div>
     )
   }
@@ -727,9 +708,9 @@ export function QueuePane({
           ref={editorRef}
           class="queue-edit-field"
           value={editing.body}
-          placeholder="Write the message for this agent…"
-          aria-label="Queued message text"
-          title="Saves as you type · Ctrl+Enter saves and arms · Esc closes the editor"
+          placeholder={t("QueuePane.c3a5d000c9")}
+          aria-label={t("QueuePane.a2d0c4fa53")}
+          title={t("QueuePane.d6587c66fe")}
           onFocus={() => noteEditorFocus(editorHandle, editorSurface)}
           onInput={event => onEditorInput(event.currentTarget)}
           // The gesture this whole surface exists for: leaving the field is a save, so
@@ -746,11 +727,9 @@ export function QueuePane({
             void armFromEditor(true)
           }}
         />
-        {status && (
-          <span class={`queue-edit-status queue-edit-${draftState?.status ?? 'idle'}`} role="status">
+        {status && (<span class={`queue-edit-status queue-edit-${draftState?.status ?? 'idle'}`} role="status">
             {status}
-          </span>
-        )}
+          </span>)}
         {draftState?.error && <p class="queue-edit-error">{draftState.error}</p>}
       </div>
     )
@@ -770,10 +749,9 @@ export function QueuePane({
     const canStage = isEditing && !detached && (!!message || !!editing?.body.trim())
     return (
       <div class={`queue-item-actions${isEditing ? ' queue-edit-actions' : ''}`}>
-        {isEditing && (
-          <label
+        {isEditing && (<label
             class="queue-edit-interrupt"
-            title="Ask for this message to land in a turn that is already running, when the readiness tracker says it is safe. Off, it waits for the agent to be idle like every message before the mode existed."
+            title={t("QueuePane.a74defd9b5")}
           >
             <input
               type="checkbox"
@@ -781,105 +759,75 @@ export function QueuePane({
               disabled={busy || detached}
               onChange={event => void toggleInterrupt(message, event.currentTarget.checked)}
             />
-            <span>Mid-turn</span>
-          </label>
-        )}
-        {(pending && settled) || (isEditing && !message) ? (
-          <>
-            {isHead && message &&
-              (confirmId === message.id ? (
-                <button
+            <span>{t("QueuePane.3a56461823")}</span>
+          </label>)}
+        {(pending && settled) || (isEditing && !message) ? (<>
+            {isHead && message && (confirmId === message.id ? (<button
                   type="button"
                   class="queue-send queue-send-confirm"
                   disabled={busy}
                   onClick={() => void sendFromRow(message, isEditing, true)}
-                >
-                  Send anyway
-                </button>
-              ) : (
-                // Never pre-labelled "Send anyway" on the advisory, and never
-                // disabled by it. The confirm is always the second press against a
-                // refusal the daemon issued *this instant*, so a stale reading can
-                // neither smuggle a confirmation through nor take the override
-                // away. All the advisory earns here is a hint that a confirmation
-                // is coming; the strip above says why.
-                <button
+                >{t("QueuePane.3bdd9831a4")}</button>) : (<button
                   type="button"
                   class={`queue-send${sendHint ? ' queue-send-hinted' : ''}`}
                   title={sendHint}
                   disabled={busy}
                   onClick={() => void sendFromRow(message, isEditing, false)}
-                >
-                  Send now
-                </button>
-              ))}
+                >{t("QueuePane.5880328783")}</button>))}
             <button
               type="button"
               class={message?.state === 'armed' ? 'queue-armed' : ''}
-              title={isEditing && !message ? 'Save this draft and arm it (Ctrl+Enter)' : undefined}
+              title={isEditing && !message ? t("QueuePane.cc2a6867d8") : undefined}
               disabled={busy || (isEditing && !canStage)}
               onClick={() => void armFromRow(message, isEditing)}
             >
-              {message?.state === 'armed' ? 'Unarm' : 'Arm'}
+              {message?.state === 'armed' ? t("QueuePane.69c8264e75") : t("QueuePane.d5cb968264")}
             </button>
-          </>
-        ) : null}
-        {message?.state === 'stranded' &&
-          (retargetFor === message.id ? (
-            <Dropdown
+          </>) : null}
+        {message?.state === 'stranded' && (retargetFor === message.id ? (<Dropdown
               value=""
               disabled={busy}
-              ariaLabel="Retarget this message"
+              ariaLabel={t("QueuePane.e9b29c3345")}
               onChange={target => {
                 setRetargetFor('')
                 if (target) void run(message.id, () => retargetQueueMessage(message.id, target))
               }}
               options={[
-                { value: '', label: 'Retarget to…' },
+                { value: '', get label() { return t("QueuePane.5d156220b6") } },
                 ...liveAgents.map(item => ({ value: item.id, label: agentTargetName(item) })),
               ]}
-            />
-          ) : (
-            <button type="button" disabled={busy || !liveAgents.length} onClick={() => setRetargetFor(message.id)}>
-              Retarget
-            </button>
-          ))}
+            />) : (<button type="button" disabled={busy || !liveAgents.length} onClick={() => setRetargetFor(message.id)}>{t("QueuePane.e6c0d040b8")}</button>))}
         <span class="queue-item-spacer" />
         {/* The marks travel together. At the drawer's 300px floor the strip does not fit
             beside "Send now" and "Arm", and letting it wrap control by control leaves a
             lone red bin on a line of its own — so it wraps as one right-aligned group. */}
         <span class="queue-item-marks">
-          {!isEditing && message && pending && settled && (
-            <button
+          {!isEditing && message && pending && settled && (<button
               type="button"
               class="queue-item-icon"
-              aria-label="Edit this message"
-              title="Edit this message"
+              aria-label={t("QueuePane.03014809ab")}
+              title={t("QueuePane.03014809ab")}
               disabled={busy}
               onClick={() => startEdit(message)}
             >
               <RenameIcon />
-            </button>
-          )}
-          {!isEditing && message && (
-            <button
+            </button>)}
+          {!isEditing && message && (<button
               type="button"
               class="queue-item-icon"
-              aria-label="Copy this message"
-              title="Copy this message"
+              aria-label={t("QueuePane.e3a42b6c3b")}
+              title={t("QueuePane.e3a42b6c3b")}
               disabled={busy}
               onClick={() => copyBody(message)}
             >
               <CopyIcon />
-            </button>
-          )}
-          {message && (
-            <button
+            </button>)}
+          {message && (<button
               type="button"
               class={`queue-item-menu${menuId === message.id ? ' open' : ''}`}
               aria-expanded={menuId === message.id}
-              aria-label="More actions for this message"
-              title="More actions"
+              aria-label={t("QueuePane.6c59d8038d")}
+              title={t("QueuePane.f8d46c2570")}
               disabled={busy}
               onClick={() => {
                 setDeleteConfirmId('')
@@ -887,23 +835,18 @@ export function QueuePane({
               }}
             >
               ⋯
-            </button>
-          )}
+            </button>)}
           {/* Last, and after the overflow rather than before it: a destructive control
               does not sit where a distracted hand aims for the menu. */}
           {deleteButton(message, busy)}
         </span>
-        {isEditing && (
-          <button
+        {isEditing && (<button
             type="button"
             class="queue-edit-done"
-            title="Close the editor (Esc). Your text is already saved."
+            title={t("QueuePane.84decadec7")}
             disabled={busy}
             onClick={() => void closeEditor()}
-          >
-            Done
-          </button>
-        )}
+          >{t("QueuePane.11a6767d56")}</button>)}
       </div>
     )
   }
@@ -918,34 +861,20 @@ export function QueuePane({
         <span class={`queue-state queue-state-${message.state}`}>
           {STATE_LABEL[message.state] || message.state}
         </span>
-        {isHead && <span class="queue-next-marker">next</span>}
-        {from && (
-          <span class="queue-item-sender" title={message.origin?.reason || undefined}>
+        {isHead && <span class="queue-next-marker">{t("QueuePane.c6c1c9a9c8")}</span>}
+        {from && (<span class="queue-item-sender" title={message.origin?.reason || undefined}>
             {from}
-            {message.chain_depth > 1 ? ` · hop ${message.chain_depth}` : ''}
-          </span>
-        )}
-        {schedule === 'scheduled' && message.constraints?.not_before && (
-          <span class="queue-item-schedule">
-            scheduled {new Date(message.constraints.not_before * 1000).toLocaleTimeString()}
-          </span>
-        )}
-        {pending && message.constraints?.delivery === 'now' && (
-          <span
+            {message.chain_depth > 1 ? t("QueuePane.5c33ed947d", { chain_depth: message.chain_depth }) : ''}
+          </span>)}
+        {schedule === 'scheduled' && message.constraints?.not_before && (<span class="queue-item-schedule">{rich("QueuePane.cabc4287ed", { value1: new Date(message.constraints.not_before * 1000).toLocaleTimeString(uiLocale.value) })}</span>)}
+        {pending && message.constraints?.delivery === 'now' && (<span
             class="queue-item-schedule"
-            title="Asks to land in a running turn when the interject predicate says it is safe; otherwise it waits like any other message"
-          >
-            mid-turn
-          </span>
-        )}
-        {message.blocked_reasons?.length ? (
-          <span class="queue-item-reasons" title={message.blocked_reasons.join(', ')}>
+            title={t("QueuePane.b35bb2daa4")}
+          >{t("QueuePane.a254c3daa3")}</span>)}
+        {message.blocked_reasons?.length ? (<span class="queue-item-reasons" title={message.blocked_reasons.join(', ')}>
             {wordReasons(message.blocked_reasons)}
-          </span>
-        ) : null}
-        {message.stranded_reason && (
-          <span class="queue-item-reasons">{message.stranded_reason}</span>
-        )}
+          </span>) : null}
+        {message.stranded_reason && (<span class="queue-item-reasons">{message.stranded_reason}</span>)}
       </div>
     )
   }
@@ -961,16 +890,14 @@ export function QueuePane({
         class={`queue-item queue-item-${message.state}${isHead ? ' queue-item-head' : ''}${isEditing ? ' queue-item-editing' : ''}`}
       >
         {itemMeta(message)}
-        {isEditing ? editorField() : (
-          <pre
+        {isEditing ? editorField() : (<pre
             class={`queue-item-body${message.state === 'sent' ? ' queue-item-sent' : ''}${pending && message.state !== 'delivering' ? ' queue-item-editable' : ''}`}
             // Double-click, not single: this element is also the only place the message
             // can be selected from, and a single click would take the selection away.
             onDblClick={pending && message.state !== 'delivering' ? () => startEdit(message) : undefined}
           >
             {message.body}
-          </pre>
-        )}
+          </pre>)}
         {actionsRow(message, busy, isEditing)}
         {menuId === message.id && overflow(message, busy, isEditing)}
       </li>
@@ -986,12 +913,10 @@ export function QueuePane({
     // every row in the `draft` state carries, and reusing it dashed all of their borders.
     return (
       <li key={editing.key} class="queue-item queue-item-new queue-item-editing">
-        {message ? itemMeta(message) : (
-          <div class="queue-item-meta">
-            <span class="queue-state queue-state-draft">draft</span>
-            <span class="queue-item-reasons">not saved until you type</span>
-          </div>
-        )}
+        {message ? itemMeta(message) : (<div class="queue-item-meta">
+            <span class="queue-state queue-state-draft">{t("QueuePane.7743ce348d")}</span>
+            <span class="queue-item-reasons">{t("QueuePane.b690df13a5")}</span>
+          </div>)}
         {editorField()}
         {actionsRow(message, busy, true)}
         {message && menuId === message.id && overflow(message, busy, true)}
@@ -1037,8 +962,8 @@ export function QueuePane({
   const sendHint = !verdict || verdict.state === 'safe'
     ? ''
     : verdict.protected
-      ? `This will be refused: ${verdict.summary}.`
-      : `This will ask you to confirm: ${verdict.summary}.`
+      ? t("QueuePane.1c65f8557d", { value1: verdict.summary })
+      : t("QueuePane.fe59df8919", { value1: verdict.summary })
   /** A live agent this pane can stage for. The per-session auto-delivery policy is
    *  meaningless without one; the install-wide state and its brakes are not. */
   const sessionTargeted = targetable && live
@@ -1052,33 +977,25 @@ export function QueuePane({
     <div class="queue-pane">
       <header class="queue-pane-header">
         <StateIndicator session={session ?? undefined} shape={rowConfig.dotShape} />
-        <strong>{targetable ? targetLabel : 'no agent focused'}</strong>
-        {targetable && (
-          <span class="queue-pane-status">
-            {live ? `${view?.pending ?? 0} pending` : 'target ended — pending items are stranded'}
-          </span>
-        )}
-        {onOpenFleetQueue && (
-          <button
+        <strong>{targetable ? targetLabel : t("QueuePane.52271b2288")}</strong>
+        {targetable && (<span class="queue-pane-status">
+            {live ? t("QueuePane.6187c64929", { value1: view?.pending ?? 0 }) : t("QueuePane.8d553d2d68")}
+          </span>)}
+        {onOpenFleetQueue && (<button
             type="button"
             class={`queue-fleet-open${fleetPending > 0 ? ' has-pending' : ''}`}
-            title="Fleet queue - every queued message across all sessions, by who wrote it"
+            title={t("QueuePane.beed3fdf66")}
             onClick={onOpenFleetQueue}
-          >
-            fleet{fleetPending > 0 ? ` ${fleetPending > 99 ? '99+' : fleetPending}` : ''}
-          </button>
-        )}
-        {targetable && onOpenAsTab && (
-          <button
+          >{rich("QueuePane.f43a3a268d", { value1: fleetPending > 0 ? t("QueuePane.50843318c9", { value1: fleetPending > 99 ? '99+' : fleetPending }) : '' })}</button>)}
+        {targetable && onOpenAsTab && (<button
             type="button"
             class="queue-popout"
-            title="Open this queue as a workspace tab"
-            aria-label="Open this queue as a workspace tab"
+            title={t("QueuePane.fcb8385637")}
+            aria-label={t("QueuePane.fcb8385637")}
             onClick={() => onOpenAsTab(sessionId)}
           >
             ↗
-          </button>
-        )}
+          </button>)}
       </header>
       {/* Whether this target can take a message right now, and why not.
          *
@@ -1092,23 +1009,18 @@ export function QueuePane({
          * the Send button. A stale advisory that removes the operator's only
          * override would be a false block with no way out, which is strictly worse
          * than the wrong label. */}
-      {sessionTargeted && verdict && (
-        <div class={`queue-readiness queue-readiness-${verdict.state}`}>
+      {sessionTargeted && verdict && (<div class={`queue-readiness queue-readiness-${verdict.state}`}>
           <div class="queue-readiness-line">
             <span class="queue-readiness-headline">{verdict.headline}</span>
             {verdict.summary && <span class="queue-readiness-summary">{verdict.summary}</span>}
             {/* Shown only once it is old enough to matter. The stream holds this at
                 zero for a followed session, so a visible age is itself the signal
                 that this reading is a poll result rather than a live one. */}
-            {readinessAgeLabel(verdict) && (
-              <span class="queue-readiness-age" title="When the daemon last read this">
+            {readinessAgeLabel(verdict) && (<span class="queue-readiness-age" title={t("QueuePane.c37ee26d66")}>
                 {readinessAgeLabel(verdict)}
-              </span>
-            )}
+              </span>)}
           </div>
-          {verdict.state !== 'safe' && verdict.clears && (
-            <p class="queue-readiness-clears">{verdict.clears}</p>
-          )}
+          {verdict.state !== 'safe' && verdict.clears && (<p class="queue-readiness-clears">{verdict.clears}</p>)}
           {/* Narration, never evidence. This reason now means "typed since the turn
               ended, and no pane has read the composer since": the estimate behind
               `unsent_input` can block a delivery but never lift one, so an estimate of
@@ -1116,44 +1028,24 @@ export function QueuePane({
               composer is what actually clears it. */}
           {verdict.state === 'blocked'
             && readiness?.reasons?.includes('terminal_input_after_completion')
-            && !session?.unsent_input && (
-              <p class="queue-readiness-clears">
-                Nothing appears to be sitting in the composer; a pane showing this session will confirm it.
-              </p>
-            )}
-          {verdict.protected && (
-            <p class="queue-readiness-protected">
-              “Send anyway” will not be offered for this one — writing into it would
-              answer a prompt or write to a target that is gone.
-            </p>
-          )}
-          {verdict.also.length > 0 && (
-            <p class="queue-readiness-also">Also: {verdict.also.join('; ')}.</p>
-          )}
+            && !session?.unsent_input && (<p class="queue-readiness-clears">{t("QueuePane.d180396165")}</p>)}
+          {verdict.protected && (<p class="queue-readiness-protected">{t("QueuePane.9c0df3ed9a")}</p>)}
+          {verdict.also.length > 0 && (<p class="queue-readiness-also">{rich("QueuePane.84608cecf1", { value1: verdict.also.join('; ') })}</p>)}
           {/* A mid-turn message is decided by a second, strictly narrower predicate,
               so "this agent is mid-turn" is not the end of the story for one. */}
-          {verdict.state === 'blocked' && readiness?.interject_state === 'safe' && (
-            <p class="queue-readiness-also">
-              A message marked “mid-turn” can still be written into the running turn.
-            </p>
-          )}
-        </div>
-      )}
+          {verdict.state === 'blocked' && readiness?.interject_state === 'safe' && (<p class="queue-readiness-also">{t("QueuePane.69e7de319b")}</p>)}
+        </div>)}
       <div class="queue-auto-strip">
         <button
           type="button"
           class={`queue-auto-summary${autoOn ? ' queue-auto-on' : ''}`}
           aria-expanded={autoOpen}
-          title="Bounded, expiring, and never overrides a not-safe target"
+          title={t("QueuePane.559be70522")}
           onClick={() => setAutoOpen(value => !value)}
-        >
-          <span aria-hidden="true">{autoOpen ? '▾' : '▸'}</span> auto: {describeAuto(auto, sessionTargeted ? sessionId : '')}
-        </button>
+        >{rich("QueuePane.19bc9b1fb2", { value1: <span aria-hidden="true">{autoOpen ? '▾' : '▸'}</span>, value2: describeAuto(auto, sessionTargeted ? sessionId : '') })}</button>
       </div>
-      {autoOpen && (
-        <div class="queue-auto-detail">
-          {sessionTargeted && (
-            <>
+      {autoOpen && (<div class="queue-auto-detail">
+          {sessionTargeted && (<>
               <label class="queue-auto-toggle">
                 <input
                   type="checkbox"
@@ -1161,16 +1053,16 @@ export function QueuePane({
                   disabled={busyId === 'auto' || !auto?.master_enabled}
                   onChange={event => setPolicy({ enabled: event.currentTarget.checked })}
                 />
-                <span>auto-deliver armed messages</span>
+                <span>{t("QueuePane.4e88db33e9")}</span>
               </label>
-              <label class="queue-auto-toggle" title="Agent messages arrive armed instead of as drafts">
+              <label class="queue-auto-toggle" title={t("QueuePane.7ffdd2dd6b")}>
                 <input
                   type="checkbox"
                   checked={!!policy?.accept_agent_messages}
                   disabled={busyId === 'auto'}
                   onChange={event => setPolicy({ acceptAgentMessages: event.currentTarget.checked })}
                 />
-                <span>accept agent messages armed</span>
+                <span>{t("QueuePane.547fc3d387")}</span>
               </label>
               {/* Independent of the two above: arming decides whether a peer's
                   message counts as authorized, auto-delivery decides who presses
@@ -1180,7 +1072,7 @@ export function QueuePane({
                   agree the turn is really running. */}
               <label
                 class="queue-auto-toggle"
-                title="A peer may have an urgent message written into a running turn; the CLI takes it at the turn boundary"
+                title={t("QueuePane.80ad6e22f4")}
               >
                 <input
                   type="checkbox"
@@ -1188,59 +1080,20 @@ export function QueuePane({
                   disabled={busyId === 'auto'}
                   onChange={event => setPolicy({ acceptAgentInterjections: event.currentTarget.checked })}
                 />
-                <span>accept mid-turn agent messages</span>
+                <span>{t("QueuePane.85c148c745")}</span>
               </label>
-            </>
-          )}
+            </>)}
           {/* A lapse is the one "off" a reader cannot act on from the reason alone.
               The window is a value rather than a switch, so this is a link and not a
               gate: a gate can honestly offer "turn this on", never "pick a number". */}
-          {sessionTargeted && policy?.lapse && (
-            <p class="queue-auto-lapse">
-              This conversation's grant lapsed on its own after{' '}
-              {policy.lapse.idle_seconds !== null
-                ? `${Math.round(policy.lapse.idle_seconds / 60)} idle minutes`
-                : 'the idle window'}
-              {policy.lapse.window_minutes !== null
-                && ` of a ${Math.round(policy.lapse.window_minutes)}-minute window`}
-              {!!policy.lapse.pending && `, leaving ${policy.lapse.pending} message(s) waiting`}
-              . It comes back on its own when the conversation is used again.{' '}
-              <SettingLink variant="link" target="queue.grantWindow">Lengthen the window</SettingLink>{' '}
-              if peers keep finding each other unreachable.
-            </p>
-          )}
-          {sessionTargeted && policy?.reply_window && (
-            <p class="queue-auto-lapse">
-              {policy.reply_window.kind === 'land' ? (
-                <>
-                  Held open by a land request: this session asked to land{' '}
-                  {policy.reply_window.branch || 'a branch'} and the queue has not
-                  answered yet, so the idle window is not closing its grant.
-                </>
-              ) : policy.reply_window.kind === 'watch' ? (
-                <>
-                  Held open by a settle watch: this session asked to be told when{' '}
-                  {policy.reply_window.target_name || 'another session'} stops
-                  working, and the notice has not matured yet, so the idle window is
-                  not closing its grant.
-                </>
-              ) : (
-                <>
-                  Held open by an exchange: this session is owed a reply, so the idle
-                  window is not closing its grant yet (
-                  {policy.reply_window.thread_messages_used} of{' '}
-                  {policy.reply_window.thread_messages_limit} messages used in that
-                  thread).
-                </>
-              )}
-            </p>
-          )}
-          {auto && !auto.master_enabled && (
-            <CompactGrantFlag id="queue.autoDelivery"
-              heading="Auto-delivery is off."
-              consequence="Armed messages wait for manual Send now."
-              onGranted={() => void run('auto', async () => setAuto(await fetchAutoStatus()))}/>
-          )}
+          {sessionTargeted && policy?.lapse && (<p class="queue-auto-lapse">{rich("QueuePane.916f659105", { value1: policy.lapse.idle_seconds !== null ? t("QueuePane.2df8def6d8", { value1: Math.round(policy.lapse.idle_seconds / 60) }) : t("QueuePane.c05749bfbc"), value2: policy.lapse.window_minutes !== null && t("QueuePane.2ff113af25", { value1: Math.round(policy.lapse.window_minutes) }), value3: !!policy.lapse.pending && t("QueuePane.fa25363563", { pending: policy.lapse.pending }), value4: <SettingLink variant="link" target="queue.grantWindow">{t("QueuePane.850d678087")}</SettingLink> })}</p>)}
+          {sessionTargeted && policy?.reply_window && (<p class="queue-auto-lapse">
+              {policy.reply_window.kind === 'land' ? (<>{rich("QueuePane.a7b4c61782", { value1: policy.reply_window.branch || t("QueuePane.15e628b344") })}</>) : policy.reply_window.kind === 'watch' ? (<>{rich("QueuePane.0be4604e3b", { value1: policy.reply_window.target_name || t("QueuePane.d885d2d3c4") })}</>) : (<>{rich("QueuePane.eed769804e", { thread_messages_used: policy.reply_window.thread_messages_used, thread_messages_limit: policy.reply_window.thread_messages_limit })}</>)}
+            </p>)}
+          {auto && !auto.master_enabled && (<CompactGrantFlag id="queue.autoDelivery"
+              heading={t("QueuePane.21b48d8f7b")}
+              consequence={t("QueuePane.eb60ac7e09")}
+              onGranted={() => void run('auto', async () => setAuto(await fetchAutoStatus()))}/>)}
           {/* The two install-wide brakes. They are not per-session, and they are here
               rather than in the fleet overlay because a stop reachable only by opening
               something is not reachable at the moment you want it. */}
@@ -1249,38 +1102,27 @@ export function QueuePane({
               type="button"
               class={auto?.paused ? 'primary' : 'danger'}
               disabled={busyId === 'auto'}
-              title="Stops every automatic delivery immediately, on every session"
+              title={t("QueuePane.24460aaed7")}
               onClick={() => void run('auto', async () => setAuto(await setAutoPaused(!auto?.paused)))}
             >
-              {auto?.paused ? 'resume auto-delivery' : 'pause all auto-delivery'}
+              {auto?.paused ? t("QueuePane.2520e73720") : t("QueuePane.d4fa94833a")}
             </button>
             <button
               type="button"
               disabled={busyId === 'auto'}
-              title="Record a delivery that should not have happened; pauses auto-delivery and restarts the proving period"
+              title={t("QueuePane.e56deccbbf")}
               onClick={() => void run('auto', async () => {
-                setAuto(await reportUnsafeDelivery('reported from the queue'))
-                setError('Recorded. Auto-delivery is paused and the proving period restarted.')
+                setAuto(await reportUnsafeDelivery(t("QueuePane.0aa3dff18c")))
+                setError(t("QueuePane.9d27c6fbd8"))
               })}
-            >
-              report unsafe delivery
-            </button>
-            {auto?.promotion && (
-              <span class="queue-promotion">
-                auto sends {auto.promotion.auto_sends}/{auto.promotion.required_sends} · proving{' '}
-                {auto.promotion.proving_days}/{auto.promotion.required_days} days · unsafe{' '}
-                {auto.promotion.unsafe_reports}
-              </span>
-            )}
+            >{t("QueuePane.c755588ba5")}</button>
+            {auto?.promotion && (<span class="queue-promotion">{rich("QueuePane.4beb1c328d", { auto_sends: auto.promotion.auto_sends, required_sends: auto.promotion.required_sends, proving_days: auto.promotion.proving_days, required_days: auto.promotion.required_days, unsafe_reports: auto.promotion.unsafe_reports })}</span>)}
           </div>
-        </div>
-      )}
+        </div>)}
 
-      {error && (
-        <p class="queue-pane-error" role="alert">
+      {error && (<p class="queue-pane-error" role="alert">
           {error}
-        </p>
-      )}
+        </p>)}
 
       {/* The compose control belongs to the list, not to the panel's chrome.
          *
@@ -1293,42 +1135,26 @@ export function QueuePane({
       <ul class={`queue-list${listEmpty ? ' queue-list-empty' : ''}`}>
         {listed.map(row)}
         {draftRow()}
-        {!targetable && (
-          <li class="queue-empty">
-            Focus an agent session to stage messages for it. Shells are never targets:
-            a paste there would execute.
-          </li>
-        )}
-        {done.length > 0 && (
-          <li class="queue-done">
-            <button type="button" aria-expanded={showDone} onClick={() => setShowDone(value => !value)}>
-              <span aria-hidden="true">{showDone ? '▾' : '▸'}</span> {done.length} delivered or closed
-            </button>
-          </li>
-        )}
+        {!targetable && (<li class="queue-empty">{t("QueuePane.7d086337f3")}</li>)}
+        {done.length > 0 && (<li class="queue-done">
+            <button type="button" aria-expanded={showDone} onClick={() => setShowDone(value => !value)}>{rich("QueuePane.29dcece0e9", { value1: <span aria-hidden="true">{showDone ? '▾' : '▸'}</span>, length: done.length })}</button>
+          </li>)}
         {showDone && done.map(row)}
-        {targetable && live && (
-          <li class={`queue-compose${listEmpty ? ' queue-compose-alone' : ''}`}>
+        {targetable && live && (<li class={`queue-compose${listEmpty ? ' queue-compose-alone' : ''}`}>
             <button
               type="button"
               class="queue-new"
-              title="Add a queued message. It opens for editing and saves as you type."
+              title={t("QueuePane.da0569490c")}
               onClick={startDraft}
             >
               <PlusIcon />
-              <span>New message</span>
+              <span>{t("QueuePane.78f5975a5d")}</span>
             </button>
             {/* Said beside the button rather than instead of it: with the control right
                 there, "press New message" was a sentence explaining a thing already on
                 screen, and the part worth keeping is the queue's contract. */}
-            {listEmpty && (
-              <p class="queue-empty-note">
-                Nothing queued. A message saves as you type and waits for your explicit
-                “Send now” — nothing is ever delivered on a timer.
-              </p>
-            )}
-          </li>
-        )}
+            {listEmpty && (<p class="queue-empty-note">{t("QueuePane.a269959dae")}</p>)}
+          </li>)}
       </ul>
     </div>
   )

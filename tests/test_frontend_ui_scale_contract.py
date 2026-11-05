@@ -13,12 +13,13 @@ import re
 from pathlib import Path
 
 from swe_mux.config import UI_SCALES, Config
+from tests.support.frontend_source import localized_source, source_contains
 
 SRC = Path(__file__).parents[1] / "frontend" / "src"
 
 
 def test_browser_offers_exactly_the_steps_the_daemon_accepts() -> None:
-    source = (SRC / "uiScale.ts").read_text(encoding="utf-8")
+    source = localized_source((SRC / "uiScale.ts").read_text(encoding="utf-8"))
     steps = re.search(r"UI_SCALE_STEPS\s*=\s*\[([^\]]+)\]", source)
     assert steps, "uiScale.ts must export a literal UI_SCALE_STEPS array"
     assert {float(value) for value in steps.group(1).split(",")} == UI_SCALES
@@ -30,16 +31,16 @@ def test_both_device_classes_default_to_todays_size() -> None:
     assert config.ui_scale_desktop == 1.0
     assert config.ui_scale_mobile == 1.0
     assert 1.0 in UI_SCALES
-    source = (SRC / "uiScale.ts").read_text(encoding="utf-8")
+    source = localized_source((SRC / "uiScale.ts").read_text(encoding="utf-8"))
     assert re.search(r"DEFAULT_UI_SCALE\s*:\s*UiScale\s*=\s*1\.0", source)
 
 
 def test_the_stylesheet_derives_chrome_type_from_the_scale() -> None:
-    css = (SRC / "style.css").read_text(encoding="utf-8")
+    css = localized_source((SRC / "style.css").read_text(encoding="utf-8"))
     # `--ui-scale:1` in :root is what makes an unloaded config render at the
     # historical size, and is the value uiScale.ts releases the property back to.
-    assert "--ui-scale:1;" in css
-    assert "--ui-font-size:calc(11px*var(--ui-scale))" in css
+    assert source_contains(css, "--ui-scale:1;")
+    assert source_contains(css, "--ui-font-size:calc(11px*var(--ui-scale))")
 
 
 def test_geometry_that_holds_chrome_text_scales_with_it() -> None:
@@ -49,7 +50,7 @@ def test_geometry_that_holds_chrome_text_scales_with_it() -> None:
     pins the surfaces where a fixed height and a growing font visibly collide
     first, so a rewrite of one of them cannot quietly drop the scale.
     """
-    css = (SRC / "style.css").read_text(encoding="utf-8")
+    css = localized_source((SRC / "style.css").read_text(encoding="utf-8"))
     scaled = set(re.findall(r"([-\w]+):calc\([\d.]+px\*var\(--ui-scale\)\)", css))
     for prop in ("height", "min-height", "grid-template-rows"):
         assert prop in scaled, f"no {prop} scales with --ui-scale"
@@ -94,7 +95,7 @@ INTENTIONAL_PINS = {
 
 
 def test_no_unintended_rule_pins_a_height_the_base_scales() -> None:
-    css = (SRC / "style.css").read_text(encoding="utf-8")
+    css = localized_source((SRC / "style.css").read_text(encoding="utf-8"))
     # Device policy scopes have zero specificity, just like the media queries they
     # replace. Compare their declarations against the same unscoped base selectors.
     scopes = (
@@ -106,9 +107,7 @@ def test_no_unintended_rule_pins_a_height_the_base_scales() -> None:
         css = css.replace(f":where(:root{scope}) ", "")
         css = css.replace(f":where({scope})", "")
     # Blank comments, keeping newlines so the reported lines match the file.
-    css = re.sub(
-        r"/\*.*?\*/", lambda m: re.sub(r"[^\n]", " ", m.group(0)), css, flags=re.DOTALL
-    )
+    css = re.sub(r"/\*.*?\*/", lambda m: re.sub(r"[^\n]", " ", m.group(0)), css, flags=re.DOTALL)
     props = ("height", "grid-template-rows", "width", "min-width", "line-height")
     declaration = re.compile(r"(?<![-\w])(" + "|".join(props) + r")\s*:\s*([^;]+)")
 
@@ -127,7 +126,7 @@ def test_no_unintended_rule_pins_a_height_the_base_scales() -> None:
                 key = (" ".join(selector.split()), found.group(1))
                 if not key[0]:
                     continue
-                (scaled if "var(--ui-scale)" in value else pinned).add(key)
+                (scaled if source_contains(value, "var(--ui-scale)") else pinned).add(key)
 
     unexplained = (scaled & pinned) - set(INTENTIONAL_PINS)
     assert not unexplained, (
@@ -151,18 +150,16 @@ def test_portalled_overlays_are_normalized_like_the_rest_of_the_chrome() -> None
     the chrome beside it went 11px → 15.4px. That is the surface where the quota
     numbers are actually read, so it is the worst one to leave behind.
     """
-    css = (SRC / "style.css").read_text(encoding="utf-8")
-    accounts = (SRC / "ProviderAccounts.tsx").read_text(encoding="utf-8")
-    resources = (SRC / "ResourceUsage.tsx").read_text(encoding="utf-8")
+    css = localized_source((SRC / "style.css").read_text(encoding="utf-8"))
+    accounts = localized_source((SRC / "ProviderAccounts.tsx").read_text(encoding="utf-8"))
+    resources = localized_source((SRC / "ResourceUsage.tsx").read_text(encoding="utf-8"))
 
-    assert ".ui-portal,\n.ui-portal * {" in css
-    assert ".ui-portal *::before,.ui-portal *::after {" in css
+    assert source_contains(css, ".ui-portal,\n.ui-portal * {")
+    assert source_contains(css, ".ui-portal *::before,.ui-portal *::after {")
     # Every root handed to createPortal carries the class, or it silently opts out.
     for name, source in (("ProviderAccounts", accounts), ("ResourceUsage", resources)):
         for portal in re.finditer(r"createPortal\((\w+),\s*document\.body\)", source):
-            root = re.search(
-                rf"const {portal.group(1)}\s*=[^\n]*?class=\"([^\"]*)\"", source
-            )
+            root = re.search(rf"const {portal.group(1)}\s*=[^\n]*?class=\"([^\"]*)\"", source)
             assert root, f"{name}: cannot find the root element for {portal.group(1)}"
             assert "ui-portal" in root.group(1).split(), (
                 f"{name} portals {portal.group(1)} to the body without `ui-portal`, "
@@ -178,20 +175,20 @@ def test_the_terminal_font_follows_the_chrome_scale() -> None:
     happen outside the construction effect (listing it there would dispose the terminal
     and replay the whole buffer to change a font size).
     """
-    app = (SRC / "App.tsx").read_text(encoding="utf-8")
-    pane = (SRC / "TerminalPane.tsx").read_text(encoding="utf-8")
+    app = localized_source((SRC / "App.tsx").read_text(encoding="utf-8"))
+    pane = localized_source((SRC / "TerminalPane.tsx").read_text(encoding="utf-8"))
 
-    assert "uiScale={uiScale}" in app
-    assert "previewUiScaleConfig(config)" in app
-    assert "watchUiScaleProfile(scale=>" in app
-    assert "activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig}" in app
+    assert source_contains(app, "uiScale={uiScale}")
+    assert source_contains(app, "previewUiScaleConfig(config)")
+    assert source_contains(app, "watchUiScaleProfile(scale=>")
+    assert source_contains(app, "activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig}")
 
-    assert "const baseFont = scaledFontSize(BASE_FONT_SIZE, uiScale)" in pane
-    assert "useEffect(() => { applyBaseFontRef.current() }, [uiScale])" in pane
+    assert source_contains(pane, "const baseFont = scaledFontSize(BASE_FONT_SIZE, uiScale)")
+    assert source_contains(pane, "useEffect(() => { applyBaseFontRef.current() }, [uiScale])")
     # The memo lives in `terminalPaneMemo.ts` now, so its rules can be exercised as a
     # function; the "let the change through" half of this wiring is asserted there.
-    memo = (SRC / "terminalPaneMemo.ts").read_text(encoding="utf-8")
-    assert "a.uiScale === b.uiScale" in memo
+    memo = localized_source((SRC / "terminalPaneMemo.ts").read_text(encoding="utf-8"))
+    assert source_contains(memo, "a.uiScale === b.uiScale")
     # A scale change must not be in the terminal's construction deps.
     # `keybindings` left this list when the pane stopped resolving commands itself:
     # a multi-chord sequence depends on state no prop can carry, so it asks
@@ -209,9 +206,11 @@ def test_the_terminal_font_follows_the_chrome_scale() -> None:
 
 
 def test_scale_inputs_are_captured_before_browser_zoom_and_terminal_input() -> None:
-    app = (SRC / "App.tsx").read_text(encoding="utf-8")
+    app = localized_source((SRC / "App.tsx").read_text(encoding="utf-8"))
 
-    assert "window.addEventListener('keydown',onKey,true)" in app
-    assert "window.addEventListener('wheel',onWheel,{capture:true,passive:false})" in app
-    assert "event.stopImmediatePropagation()" in app
-    assert "showInteractionHud(`UI scale ${Math.round(next*100)}%${limit}`)" in app
+    assert source_contains(app, "window.addEventListener('keydown',onKey,true)")
+    assert source_contains(
+        app, "window.addEventListener('wheel',onWheel,{capture:true,passive:false})"
+    )
+    assert source_contains(app, "event.stopImmediatePropagation()")
+    assert source_contains(app, "showInteractionHud(`UI scale ${Math.round(next*100)}%${limit}`)")

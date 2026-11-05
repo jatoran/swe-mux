@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { api } from './api.ts'
 
 /**
@@ -120,11 +121,11 @@ async function unregisterWorkers(): Promise<void> {
 export async function clearClientStorage(): Promise<string[]> {
   const failures: string[] = []
   const steps: [string, () => void | Promise<void>][] = [
-    ['local storage', () => { localStorage.clear() }],
-    ['session storage', () => { sessionStorage.clear() }],
+    [t("factoryReset.acf7d77e00"), () => { localStorage.clear() }],
+    [t("factoryReset.7340a95f14"), () => { sessionStorage.clear() }],
     ['caches', clearCaches],
-    ['indexed databases', clearIndexedDb],
-    ['service worker', unregisterWorkers],
+    [t("factoryReset.383f9333f9"), clearIndexedDb],
+    [t("factoryReset.26549fd15d"), unregisterWorkers],
   ]
   for (const [name, step] of steps) {
     try { await step() } catch { failures.push(name) }

@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // Turning a Continuity selection into something an agent can be handed.
 //
 // Continuity reports selections as `{line, byteInLine}` pairs — UTF-8 byte offsets *inside a
@@ -156,7 +157,7 @@ export function selectionText(snapshot: EditorSnapshot | null | undefined): stri
 export function composeAgentMessage(body: string, source: MessageSource): string {
   const message = body.replace(/\s+$/, '')
   if (source.scope === 'selection') return message
-  return `From \`${source.label}\`:\n\n${message}`
+  return t("noteSelection.d3d19066d4", { label: source.label, message: message })
 }
 
 // New-session seeding travels as `seed_text` on the spawn request: the daemon inlines short

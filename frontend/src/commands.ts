@@ -1,3 +1,4 @@
+import { t, type MessageId } from './localization/index.ts'
 // Kept in step with `COMMAND_GROUPS` in `swe_mux/keybindings.py`, which decides
 // both the Settings grouping and the leader tree's group letters.
 export type CommandCategory = 'session' | 'pane' | 'project' | 'terminal' | 'view' | 'input' | 'clipboard' | 'git' | 'history' | 'voice' | 'notes'
@@ -120,12 +121,35 @@ export { displayChord }
  * `KEYBINDING_COMMANDS` has `notes`, `CommandCategory` has `git` and `history` — which
  * is why this takes a string and never asserts membership.
  */
+const categoryMessages:Record<string,MessageId> = {
+  "session": "commandCategory.session",
+  "pane": "commandCategory.pane",
+  "project": "commandCategory.project",
+  "terminal": "commandCategory.terminal",
+  "view": "commandCategory.view",
+  "input": "commandCategory.input",
+  "clipboard": "commandCategory.clipboard",
+  "git": "commandCategory.git",
+  "history": "commandCategory.history",
+  "voice": "commandCategory.voice",
+  "notes": "commandCategory.notes",
+  "queue": "commandCategory.queue",
+  "settings": "commandCategory.settings",
+  "help": "commandCategory.help",
+  "files": "commandCategory.files",
+  "automation": "commandCategory.automation",
+  "plugins": "commandCategory.plugins",
+  "usage": "commandCategory.usage",
+  "app": "commandCategory.app"
+}
+
 export function commandCategoryLabel(category: string): string {
+  if(categoryMessages[category])return t(categoryMessages[category])
   return category ? category[0].toUpperCase() + category.slice(1) : ''
 }
 
 /** What the Settings shortcut row shows when nothing is bound to its command. */
-export const UNBOUND_CHORD = 'not set'
+export const unboundChord = () => (t("commands.1aef939917"))
 
 /**
  * Whether one keyboard-shortcut row survives Settings' shortcut filter.
@@ -152,7 +176,7 @@ export function shortcutMatches(
   if (!terms.length) return true
   const haystack = [
     command.label, command.id, commandCategoryLabel(command.category),
-    chord || UNBOUND_CHORD, displayChord(chord, platform),
+    chord || unboundChord(), displayChord(chord, platform),
   ].join(' ').toLowerCase()
   return terms.every(term => haystack.includes(term))
 }

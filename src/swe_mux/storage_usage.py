@@ -33,6 +33,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from .ui_messages import error_text
+
 #: How long a computed report is reused before the next request re-walks. The
 #: modal that consumes this offers a manual refresh (``force=True``) for an
 #: immediate re-measure; this only bounds how stale a passive read can be.
@@ -179,11 +181,7 @@ class StorageUsage:
         """
         with self._lock:
             now = self._clock()
-            if (
-                not force
-                and self._cached is not None
-                and (now - self._cached_at) < self._ttl
-            ):
+            if not force and self._cached is not None and (now - self._cached_at) < self._ttl:
                 fresh = dict(self._cached)
                 fresh["cached"] = True
                 fresh["age_seconds"] = round(now - self._cached_at, 3)
@@ -217,7 +215,7 @@ class StorageUsage:
         except OSError as exc:
             return {
                 "present": False,
-                "error": str(exc),
+                "error": error_text(exc),
                 "total_bytes": 0,
                 "total_files": 0,
                 "buckets": [],

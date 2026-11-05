@@ -27,6 +27,7 @@ from __future__ import annotations
 from typing import Any
 
 from .harness import AGENT_BACKENDS
+from .ui_messages import ui_message
 
 # Check status: whether this check passed.
 #   ok          - healthy
@@ -184,11 +185,10 @@ def _hook_ingress_checks(silent: list[dict[str, Any]]) -> list[dict[str, Any]]:
             _check(
                 id="hook_ingress.ok",
                 category="hook_ingress",
-                title="Agent hook channel",
+                title=ui_message("doctor.635fae028b"),
                 status="ok",
                 severity="critical",
-                detail="Every instrumented agent session this daemon spawned has "
-                "reported at least one lifecycle hook.",
+                detail=ui_message("doctor.c630752e62"),
             )
         ]
     names = ", ".join(f"{row['name']} ({row['backend']})" for row in silent[:5])
@@ -196,15 +196,10 @@ def _hook_ingress_checks(silent: list[dict[str, Any]]) -> list[dict[str, Any]]:
         _check(
             id="hook_ingress.silent",
             category="hook_ingress",
-            title="Agent hook channel",
+            title=ui_message("doctor.635fae028b"),
             status="fail",
             severity="critical",
-            detail=(
-                f"{len(silent)} agent session(s) spawned by this daemon have never "
-                f"reported a lifecycle hook: {names}. Status detection, history, the "
-                "prompt queue and approvals are all fed by that channel, so these "
-                "sessions run unobserved even though they look healthy."
-            ),
+            detail=(ui_message("doctor.be7c6ecbba", value1=len(silent), value2=names)),
             remedy=(
                 "Check the agent CLI's own stderr for a failure running the hook "
                 "command. On Windows the usual cause is the interpreter path being "
@@ -220,13 +215,17 @@ def _daemon_checks(health: dict[str, Any], daemon: dict[str, Any]) -> list[dict[
         _check(
             id="daemon.reachable",
             category="daemon",
-            title="Daemon reachable",
+            title=ui_message("doctor.148d9a5fa1"),
             status="ok" if health.get("ok") else "warn",
             severity="critical",
             detail=(
-                f"swe-mux {health.get('version', '?')} on "
-                f"{daemon.get('host')}:{daemon.get('port')}, "
-                f"{health.get('live_sessions', 0)} live session(s)."
+                ui_message(
+                    "doctor.f173c5412b",
+                    value1=health.get("version", "?"),
+                    value2=daemon.get("host"),
+                    value3=daemon.get("port"),
+                    value4=health.get("live_sessions", 0),
+                )
             ),
         )
     ]
@@ -236,10 +235,10 @@ def _daemon_checks(health: dict[str, Any], daemon: dict[str, Any]) -> list[dict[
             _check(
                 id="daemon.supervisor",
                 category="daemon",
-                title="PTY supervisor",
+                title=ui_message("doctor.6b0f16ab88"),
                 status="ok",
                 severity="critical",
-                detail="Supervisor connected; sessions survive a daemon restart.",
+                detail=ui_message("doctor.6d256fed3c"),
             )
         )
     elif state == "lost":
@@ -247,11 +246,10 @@ def _daemon_checks(health: dict[str, Any], daemon: dict[str, Any]) -> list[dict[
             _check(
                 id="daemon.supervisor",
                 category="daemon",
-                title="PTY supervisor",
+                title=ui_message("doctor.6b0f16ab88"),
                 status="fail",
                 severity="critical",
-                detail="Supervisor is alive but unreachable from this daemon; "
-                "live sessions are running and cannot be controlled from here.",
+                detail=ui_message("doctor.e7489ec61b"),
                 remedy="The daemon re-attaches by itself; if it stays lost, restart "
                 "the daemon (swemux reload-daemon), and if that does not re-attach, "
                 "the supervisor process may need a manual restart.",
@@ -262,12 +260,10 @@ def _daemon_checks(health: dict[str, Any], daemon: dict[str, Any]) -> list[dict[
             _check(
                 id="daemon.supervisor",
                 category="daemon",
-                title="PTY supervisor",
+                title=ui_message("doctor.6b0f16ab88"),
                 status="warn",
                 severity="critical",
-                detail="No PTY supervisor attached; sessions will not survive a "
-                "daemon restart or app rebuild. The supervisor is on by "
-                "default, so this daemon most likely failed to start one.",
+                detail=ui_message("doctor.11744d9ef9"),
                 remedy="Read supervisor-console.log in the data directory for why "
                 "the spawn failed, then restart the daemon. If pty_supervisor_enabled "
                 "was deliberately turned off, turn it back on to keep sessions alive "
@@ -286,13 +282,12 @@ def _daemon_checks(health: dict[str, Any], daemon: dict[str, Any]) -> list[dict[
             _check(
                 id="daemon.supervisor_revision",
                 category="daemon",
-                title="PTY supervisor revision",
+                title=ui_message("doctor.6231de554c"),
                 status="warn",
                 severity="optional",
-                detail=f"The running PTY supervisor is revision {running_revision} and "
-                f"this build ships revision {shipped_revision}. It keeps working, "
-                "without what the newer one adds, until it is replaced - and "
-                "replacing it ends every live session.",
+                detail=ui_message(
+                    "doctor.962abe2661", value1=running_revision, value2=shipped_revision
+                ),
                 remedy="Replace it at a quiet moment: an installed copy offers it again "
                 "with every update until it is taken (tick the supervisor box, or "
                 "`swemux update --install <version> --with-supervisor-update`), and a "
@@ -308,11 +303,10 @@ def _daemon_checks(health: dict[str, Any], daemon: dict[str, Any]) -> list[dict[
             _check(
                 id="daemon.supervisor_unadopted",
                 category="daemon",
-                title="Unadopted supervised sessions",
+                title=ui_message("doctor.e34baa1b58"),
                 status="warn",
                 severity="critical",
-                detail=f"{unadopted} supervised session(s) are running with no UI "
-                "handle; they cannot be shown or killed from here.",
+                detail=ui_message("doctor.f84255a4d1", value1=unadopted),
                 remedy="Restart the daemon to re-adopt, or kill the orphaned "
                 "sessions from the supervisor.",
             )
@@ -322,7 +316,7 @@ def _daemon_checks(health: dict[str, Any], daemon: dict[str, Any]) -> list[dict[
         _check(
             id="daemon.frontend",
             category="daemon",
-            title="Frontend build",
+            title=ui_message("doctor.55c5f0ef1a"),
             status="ok" if build_id else "warn",
             severity="optional",
             detail=(
@@ -352,32 +346,30 @@ def _terminal_transport_check(transport: Any) -> dict[str, Any] | None:
         return _check(
             id="daemon.terminal_transport",
             category="daemon",
-            title="Terminal gateway",
+            title=ui_message("doctor.25e571822b"),
             status="ok",
             severity="optional",
-            detail=f"Terminals are carried by the terminal gateway on port "
-            f"{transport.get('port')}, so typing keeps working through a daemon stall "
-            "or restart.",
+            detail=ui_message("doctor.12a3edcb32", value1=transport.get("port")),
         )
     if state == "disabled":
         return _check(
             id="daemon.terminal_transport",
             category="daemon",
-            title="Terminal gateway",
+            title=ui_message("doctor.25e571822b"),
             status="ok",
             severity="info",
-            detail="Terminals are served by the daemon (terminal_gateway_enabled is off).",
+            detail=ui_message("doctor.c2d7b5ed3d"),
         )
     reason = str(transport.get("reason") or "")
     return _check(
         id="daemon.terminal_transport",
         category="daemon",
-        title="Terminal gateway",
+        title=ui_message("doctor.25e571822b"),
         status="warn",
         severity="optional",
-        detail=f"The terminal gateway is enabled but not carrying terminals (state "
-        f"{state or 'unknown'}{': ' + reason if reason else ''}), so they are served by "
-        "the daemon and pause whenever it does.",
+        detail=ui_message(
+            "doctor.c26e069749", value1=state or "unknown", value2=": " + reason if reason else ""
+        ),
         remedy="Read terminal-gateway.log and terminal-gateway-console.log in the data "
         "directory; the daemon retries by itself with backoff, and "
         "/api/diagnostics/background carries the `terminal_gateway` block.",
@@ -401,12 +393,15 @@ def _harness_checks(harnesses: dict[str, Any]) -> list[dict[str, Any]]:
                     _check(
                         id=f"harness.{name}",
                         category="harness",
-                        title=f"{label} CLI",
+                        title=ui_message("doctor.e1a3551b59", value1=label),
                         status="warn",
                         severity="info",
-                        detail=f"{label} {version} is newer than the version mux was "
-                        f"tested against ({entry.get('tested_cli_version')}); "
-                        "behaviour is best-effort.",
+                        detail=ui_message(
+                            "doctor.30ed499648",
+                            value1=label,
+                            value2=version,
+                            value3=entry.get("tested_cli_version"),
+                        ),
                         remedy="Confirm the harness still detects and drives "
                         "correctly, or pin a tested CLI version.",
                     )
@@ -416,7 +411,7 @@ def _harness_checks(harnesses: dict[str, Any]) -> list[dict[str, Any]]:
                     _check(
                         id=f"harness.{name}",
                         category="harness",
-                        title=f"{label} CLI",
+                        title=ui_message("doctor.e1a3551b59", value1=label),
                         status="ok",
                         severity="info",
                         detail=(
@@ -431,11 +426,10 @@ def _harness_checks(harnesses: dict[str, Any]) -> list[dict[str, Any]]:
                 _check(
                     id=f"harness.{name}",
                     category="harness",
-                    title=f"{label} CLI",
+                    title=ui_message("doctor.e1a3551b59", value1=label),
                     status="unavailable",
                     severity="optional",
-                    detail=f"{label} is not installed; sessions on this harness "
-                    "cannot be spawned.",
+                    detail=ui_message("doctor.a4b61f61b2", value1=label),
                     remedy=f"Install the {label} CLI to use this harness.",
                 )
             )
@@ -445,13 +439,11 @@ def _harness_checks(harnesses: dict[str, Any]) -> list[dict[str, Any]]:
             _check(
                 id="harness.none",
                 category="harness",
-                title="Agent harnesses",
+                title=ui_message("doctor.bff64c564d"),
                 status="warn",
                 severity="optional",
-                detail="No agent harness is installed; only shell sessions can be "
-                "spawned.",
-                remedy="Install at least one agent CLI (for example the Claude or "
-                "Codex CLI).",
+                detail=ui_message("doctor.aa90ade19d"),
+                remedy="Install at least one agent CLI (for example the Claude or Codex CLI).",
             )
         )
     return checks
@@ -464,11 +456,10 @@ def _remote_checks(remote: dict[str, Any]) -> list[dict[str, Any]]:
             _check(
                 id="remote.tailnet",
                 category="remote",
-                title="Tailnet listener",
+                title=ui_message("doctor.668c7def66"),
                 status="unavailable",
                 severity="optional",
-                detail="The tailnet listener is disabled; swe-mux is reachable over "
-                "loopback only.",
+                detail=ui_message("doctor.20b379e9fa"),
                 remedy="Enable the Tailscale listener in Settings to reach this "
                 "daemon from other tailnet devices.",
             )
@@ -481,7 +472,7 @@ def _remote_checks(remote: dict[str, Any]) -> list[dict[str, Any]]:
             _check(
                 id="remote.connection",
                 category="remote",
-                title="Tailscale connection",
+                title=ui_message("doctor.403f22f8e9"),
                 status="ok",
                 severity="optional",
                 detail=detail or f"Connected as {remote.get('device_name')}.",
@@ -492,11 +483,11 @@ def _remote_checks(remote: dict[str, Any]) -> list[dict[str, Any]]:
             _check(
                 id="remote.connection",
                 category="remote",
-                title="Tailscale connection",
+                title=ui_message("doctor.403f22f8e9"),
                 status="unavailable",
                 severity="optional",
-                detail=detail or "Tailscale is not installed; remote and mobile "
-                "access are unavailable.",
+                detail=detail
+                or "Tailscale is not installed; remote and mobile access are unavailable.",
                 remedy=str(remote.get("connection_command") or "Install Tailscale."),
             )
         )
@@ -505,7 +496,7 @@ def _remote_checks(remote: dict[str, Any]) -> list[dict[str, Any]]:
             _check(
                 id="remote.connection",
                 category="remote",
-                title="Tailscale connection",
+                title=ui_message("doctor.403f22f8e9"),
                 status="warn",
                 severity="optional",
                 detail=detail or f"Tailscale is not connected (state: {state}).",
@@ -519,7 +510,7 @@ def _remote_checks(remote: dict[str, Any]) -> list[dict[str, Any]]:
         _check(
             id="remote.serve",
             category="remote",
-            title="Tailscale Serve (mobile voice)",
+            title=ui_message("doctor.1938498449"),
             status="ok" if serve else "unavailable",
             severity="optional",
             detail=(
@@ -543,11 +534,10 @@ def _firewall_checks(firewall: dict[str, Any]) -> list[dict[str, Any]]:
             _check(
                 id="firewall.inbound",
                 category="firewall",
-                title="Windows Defender Firewall",
+                title=ui_message("doctor.335ef137f5"),
                 status="unavailable",
                 severity="info",
-                detail="Firewall inspection is not applicable on this platform; "
-                "inbound is governed by the host firewall.",
+                detail=ui_message("doctor.69374b4e53"),
             )
         ]
     if not firewall.get("inspection_available"):
@@ -555,12 +545,11 @@ def _firewall_checks(firewall: dict[str, Any]) -> list[dict[str, Any]]:
             _check(
                 id="firewall.inbound",
                 category="firewall",
-                title="Windows Defender Firewall",
+                title=ui_message("doctor.335ef137f5"),
                 status="warn",
                 severity="optional",
                 detail=str(firewall.get("detail") or "Firewall could not be inspected."),
-                remedy="Run the firewall repair from Settings -> Remote if a phone "
-                "cannot connect.",
+                remedy="Run the firewall repair from Settings -> Remote if a phone cannot connect.",
             )
         ]
     if firewall.get("needs_repair"):
@@ -568,7 +557,7 @@ def _firewall_checks(firewall: dict[str, Any]) -> list[dict[str, Any]]:
             _check(
                 id="firewall.inbound",
                 category="firewall",
-                title="Windows Defender Firewall",
+                title=ui_message("doctor.335ef137f5"),
                 status="fail",
                 severity="critical",
                 detail=str(firewall.get("detail"))
@@ -582,7 +571,7 @@ def _firewall_checks(firewall: dict[str, Any]) -> list[dict[str, Any]]:
         _check(
             id="firewall.inbound",
             category="firewall",
-            title="Windows Defender Firewall",
+            title=ui_message("doctor.335ef137f5"),
             status="ok",
             severity="optional",
             detail=str(firewall.get("detail") or "Inbound phone connections are admitted."),
@@ -621,12 +610,10 @@ def _status_checks(status_health: dict[str, Any]) -> list[dict[str, Any]]:
             _check(
                 id="status.identity_collisions",
                 category="status",
-                title="Session identity collisions",
+                title=ui_message("doctor.569523ec87"),
                 status="fail",
                 severity="critical",
-                detail=f"{len(collisions)} identity collision(s): two sessions share "
-                "one conversation, so one session's status and tokens render under "
-                "another's identity.",
+                detail=ui_message("doctor.ed22b64d05", value1=len(collisions)),
                 remedy="Inspect the colliding sessions and end the duplicate; see "
                 "STATUS_INCIDENT_RUNBOOK.md.",
             )
@@ -637,11 +624,10 @@ def _status_checks(status_health: dict[str, Any]) -> list[dict[str, Any]]:
             _check(
                 id="status.classifier_blind",
                 category="status",
-                title="Screen classifier blind",
+                title=ui_message("doctor.44569229d9"),
                 status="warn",
                 severity="critical",
-                detail=f"{len(blind)} session(s) the screen classifier cannot read; "
-                "status falls back to weaker evidence.",
+                detail=ui_message("doctor.93ce401878", value1=len(blind)),
                 remedy="Inspect the session's state-log; a persistent blind classifier "
                 "hides approvals and completions.",
             )
@@ -652,11 +638,10 @@ def _status_checks(status_health: dict[str, Any]) -> list[dict[str, Any]]:
             _check(
                 id="status.stuck",
                 category="status",
-                title="Stuck sessions",
+                title=ui_message("doctor.049878ec2e"),
                 status="warn",
                 severity="critical",
-                detail=f"{len(stuck)} session(s) sat in an active state past the stuck "
-                "bound with no fresh evidence.",
+                detail=ui_message("doctor.5ee2689069", value1=len(stuck)),
                 remedy="Inspect the session's state-log for the last layer reading.",
             )
         )
@@ -665,7 +650,7 @@ def _status_checks(status_health: dict[str, Any]) -> list[dict[str, Any]]:
             _check(
                 id="status.alarm",
                 category="status",
-                title="Fleet status-health alarm",
+                title=ui_message("doctor.70e3fe24e3"),
                 status="fail",
                 severity="critical",
                 detail="Status-health alarm raised: "
@@ -678,11 +663,10 @@ def _status_checks(status_health: dict[str, Any]) -> list[dict[str, Any]]:
             _check(
                 id="status.ok",
                 category="status",
-                title="Fleet status health",
+                title=ui_message("doctor.cdd078f783"),
                 status="ok",
                 severity="critical",
-                detail="No status-health alarm; sessions reach terminal status by "
-                "proven evidence.",
+                detail=ui_message("doctor.db46953fc8"),
             )
         )
     return checks
@@ -695,12 +679,10 @@ def _background_checks(background: dict[str, Any]) -> list[dict[str, Any]]:
             _check(
                 id="background.loops",
                 category="background",
-                title="Background loops",
+                title=ui_message("doctor.218ba0b7d8"),
                 status="fail",
                 severity="critical",
-                detail=f"Degraded loop(s): {', '.join(map(str, degraded))}. A dead "
-                "loop silently stops a feature (status, cleanup, delivery) for the "
-                "rest of the process life.",
+                detail=ui_message("doctor.0b9152bb69", value1=", ".join(map(str, degraded))),
                 remedy="Restart the daemon; if a loop stays degraded, inspect "
                 "daemon.log for its fault.",
             )
@@ -711,11 +693,10 @@ def _background_checks(background: dict[str, Any]) -> list[dict[str, Any]]:
             _check(
                 id="background.loops",
                 category="background",
-                title="Background loops",
+                title=ui_message("doctor.218ba0b7d8"),
                 status="warn",
                 severity="critical",
-                detail=f"All loops running, but {faults} recovered fault(s) recorded "
-                "this daemon boot.",
+                detail=ui_message("doctor.2255928e03", value1=faults),
                 remedy="Inspect daemon.log if faults recur.",
             )
         ]
@@ -723,10 +704,10 @@ def _background_checks(background: dict[str, Any]) -> list[dict[str, Any]]:
         _check(
             id="background.loops",
             category="background",
-            title="Background loops",
+            title=ui_message("doctor.218ba0b7d8"),
             status="ok",
             severity="critical",
-            detail="All supervised background loops are running with no faults.",
+            detail=ui_message("doctor.ce9affbc0d"),
         )
     ]
 
@@ -754,11 +735,15 @@ def _stall_profiler_checks(profiler: dict[str, Any] | None) -> list[dict[str, An
             _check(
                 id="background.stall_profiler",
                 category="background",
-                title="Loop-stall profiler",
+                title=ui_message("doctor.38c33f5e84"),
                 status="ok",
                 severity="info",
-                detail=f"{cpu_text} Stalls also get one py-spy dump at onset "
-                f"({external.get('executable')}, from {external.get('source')}).",
+                detail=ui_message(
+                    "doctor.c1394ea7cb",
+                    value1=cpu_text,
+                    value2=external.get("executable"),
+                    value3=external.get("source"),
+                ),
             )
         ]
     source = str(external.get("source") or "")
@@ -771,14 +756,11 @@ def _stall_profiler_checks(profiler: dict[str, Any] | None) -> list[dict[str, An
         _check(
             id="background.stall_profiler",
             category="background",
-            title="Loop-stall profiler",
+            title=ui_message("doctor.38c33f5e84"),
             status="unavailable",
             severity="info",
-            detail=f"{cpu_text} No external stack dump at stall onset: {reason}. "
-            "Stalls are still classified from CPU; only a GIL holder inside a native "
-            "call goes unnamed.",
-            remedy=f"`uv tool install py-spy` (or set {env} to its path), then restart "
-            "the daemon.",
+            detail=ui_message("doctor.57408264a7", value1=cpu_text, value2=reason),
+            remedy=f"`uv tool install py-spy` (or set {env} to its path), then restart the daemon.",
         )
     ]
 
@@ -789,11 +771,10 @@ def _freshness_checks(freshness: list[dict[str, Any]]) -> list[dict[str, Any]]:
             _check(
                 id="freshness.ok",
                 category="freshness",
-                title="Observation freshness",
+                title=ui_message("doctor.523e3730b0"),
                 status="ok",
                 severity="critical",
-                detail="Every agent session's observation is fresh; none is reporting "
-                "a stale, missing, or relocated conversation.",
+                detail=ui_message("doctor.484d9d40ed"),
             )
         ]
     blocking = [row for row in freshness if row.get("delivery_blocking")]
@@ -803,7 +784,7 @@ def _freshness_checks(freshness: list[dict[str, Any]]) -> list[dict[str, Any]]:
         _check(
             id="freshness.stale",
             category="freshness",
-            title="Observation freshness",
+            title=ui_message("doctor.523e3730b0"),
             status=status,
             severity="critical",
             detail=f"{len(freshness)} agent session(s) with an untrusted observation: "
@@ -844,7 +825,7 @@ def _wsl_bridge_checks(bridges: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 _check(
                     id=f"wsl_bridge:{distro}",
                     category="wsl",
-                    title=f"WSL bridge ({distro})",
+                    title=ui_message("doctor.eb9282a2f9", value1=distro),
                     status="ok",
                     severity="info",
                     detail="; ".join(reasons)
@@ -858,7 +839,7 @@ def _wsl_bridge_checks(bridges: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 _check(
                     id=f"wsl_bridge:{distro}",
                     category="wsl",
-                    title=f"WSL bridge ({distro})",
+                    title=ui_message("doctor.eb9282a2f9", value1=distro),
                     status="ok",
                     severity="optional",
                     detail=(
@@ -879,7 +860,7 @@ def _wsl_bridge_checks(bridges: list[dict[str, Any]]) -> list[dict[str, Any]]:
             _check(
                 id=f"wsl_bridge:{distro}",
                 category="wsl",
-                title=f"WSL bridge ({distro})",
+                title=ui_message("doctor.eb9282a2f9", value1=distro),
                 status="unavailable",
                 severity="optional",
                 detail="; ".join(reasons) or f"the bridge is not usable for {distro}",
@@ -921,7 +902,7 @@ def optional_asset_rows(
     rows: list[dict[str, Any]] = [
         {
             "id": "preview_capture",
-            "label": "Preview capture (Playwright + Chromium)",
+            "label": ui_message("doctor.4592a077ff"),
             "state": capture.get("state"),
             "detail": capture.get("detail"),
             "remedy": capture.get("remedy"),
@@ -938,11 +919,10 @@ def optional_asset_rows(
         rows.append(
             {
                 "id": "voice_runtime",
-                "label": "On-device speech libraries (Kokoro + Whisper engines)",
+                "label": ui_message("doctor.4c16c922bf"),
                 "state": "unsupported" if not runtime.get("supported") else runtime.get("status"),
                 "detail": (
-                    "the on-device speech libraries are present "
-                    f"({runtime.get('source')})"
+                    f"the on-device speech libraries are present ({runtime.get('source')})"
                     if runtime.get("status") == "ready"
                     else str(runtime.get("error") or "")
                     if not runtime.get("supported")
@@ -967,7 +947,7 @@ def optional_asset_rows(
         rows.append(
             {
                 "id": "voice_kokoro",
-                "label": "Kokoro speech model (read aloud)",
+                "label": ui_message("doctor.149d4323ea"),
                 "state": kokoro.get("status"),
                 "detail": _asset_detail(
                     str(kokoro.get("status") or ""),
@@ -994,7 +974,7 @@ def optional_asset_rows(
         rows.append(
             {
                 "id": "voice_g2p",
-                "label": "spaCy English model (Kokoro pronunciation)",
+                "label": ui_message("doctor.d9a50250a9"),
                 "state": g2p.get("status"),
                 "detail": (
                     f"the spaCy English model is present ({source})"
@@ -1019,13 +999,12 @@ def optional_asset_rows(
         rows.append(
             {
                 "id": f"voice_whisper:{name}",
-                "label": f"Whisper speech model '{name}' (dictation)",
+                "label": ui_message("doctor.f44c73cb76", value1=name),
                 "state": "extra_missing"
                 if not model.get("backend_installed")
                 else model.get("status"),
                 "detail": (
-                    "faster-whisper is not installed, so no local dictation model "
-                    "can be used"
+                    "faster-whisper is not installed, so no local dictation model can be used"
                     if not model.get("backend_installed")
                     else _asset_detail(
                         str(model.get("status") or ""),
@@ -1078,7 +1057,10 @@ def _optional_asset_checks(assets: list[dict[str, Any]]) -> list[dict[str, Any]]
     for asset in assets:
         state = str(asset.get("state") or "unknown")
         status = (
-            "ok" if state == "ready" else "warn" if state in {"downloading", "error"}
+            "ok"
+            if state == "ready"
+            else "warn"
+            if state in {"downloading", "error"}
             else "unavailable"
         )
         checks.append(
@@ -1107,7 +1089,7 @@ def _surface_checks(warnings: list[dict[str, Any]]) -> list[dict[str, Any]]:
         _check(
             id=f"agent_surfaces.{warning.get('backend')}",
             category="agent-surfaces",
-            title=f"Fleet access coherence ({warning.get('backend')})",
+            title=ui_message("doctor.0d2100c4ed", value1=warning.get("backend")),
             status="warn",
             severity="optional",
             detail=str(warning.get("message") or warning.get("code") or ""),

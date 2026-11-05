@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from './api.ts'
 
@@ -46,7 +47,7 @@ export function useProjectDiscovery(harnesses:string[]):ProjectDiscovery {
             setScans(current=>({...current,[name]:{state:'ready',result}}))
           }).catch(cause=>{
             if(controller.signal.aborted)return
-            setScans(current=>({...current,[name]:{state:'error',error:`${name}: ${(cause as Error).message}`}}))
+            setScans(current=>({...current,[name]:{state:'error',get error() { return t("setupDiscovery.7b050e2367", { name: name, message: (cause as Error).message }) }}}))
           }).finally(()=>{if(active.current.get(name)===controller)active.current.delete(name)})
       }
     },200)

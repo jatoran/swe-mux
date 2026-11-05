@@ -140,6 +140,24 @@
       "ecosystem": "npm"
     },
     {
+      "name": "@formatjs/fast-memoize",
+      "version": "3.1.7",
+      "license": "MIT",
+      "ecosystem": "npm"
+    },
+    {
+      "name": "@formatjs/icu-messageformat-parser",
+      "version": "3.5.22",
+      "license": "MIT",
+      "ecosystem": "npm"
+    },
+    {
+      "name": "@formatjs/icu-skeleton-parser",
+      "version": "2.1.12",
+      "license": "MIT",
+      "ecosystem": "npm"
+    },
+    {
       "name": "@lezer/common",
       "version": "1.5.2",
       "license": "MIT",
@@ -238,6 +256,18 @@
     {
       "name": "@marijn/find-cluster-break",
       "version": "1.0.3",
+      "license": "MIT",
+      "ecosystem": "npm"
+    },
+    {
+      "name": "@preact/signals",
+      "version": "2.11.4",
+      "license": "MIT",
+      "ecosystem": "npm"
+    },
+    {
+      "name": "@preact/signals-core",
+      "version": "1.14.5",
       "license": "MIT",
       "ecosystem": "npm"
     },
@@ -443,6 +473,12 @@
       "name": "guid-typescript",
       "version": "1.0.9",
       "license": "ISC",
+      "ecosystem": "npm"
+    },
+    {
+      "name": "intl-messageformat",
+      "version": "12.1.4",
+      "license": "BSD-3-Clause",
       "ecosystem": "npm"
     },
     {

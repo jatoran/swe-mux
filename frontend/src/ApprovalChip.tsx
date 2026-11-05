@@ -1,3 +1,4 @@
+import { rich, t } from './localization/index.ts'
 import { createPortal } from 'preact/compat'
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 import { api } from './api'
@@ -187,16 +188,13 @@ export function ApprovalChip({ session }: Props) {
         class={`pane-tool-label approval-chip${active ? ' approval-on' : ''}`}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={`Approvals for this conversation: ${approvalSummary(status, now)}. Click to change.`}
-        title={`Approvals: ${approvalSummary(status, now)}`}
+        aria-label={t("ApprovalChip.3abb6f6ab3", { value1: approvalSummary(status, now) })}
+        title={t("ApprovalChip.3851adefd1", { value1: approvalSummary(status, now) })}
         onClick={() => setOpen(value => !value)}
-      >
-        appr:{label}
-      </button>
+      >{rich("ApprovalChip.54e0b8867b", { label: label })}</button>
       {open && createPortal(
         <div ref={menu} class="approval-menu ui-portal" role="menu" style={menuStyle}>
-          {status ? (
-            <>
+          {status ? (<>
               {APPROVAL_MODES.map(mode => {
                 const blocked = modeUnavailableReason(status, mode)
                 const selected = status.policy.mode === mode
@@ -221,33 +219,15 @@ export function ApprovalChip({ session }: Props) {
                   half an answer — this is the other half. The Project ceiling case has no
                   link on purpose: it is `approval_ceiling` in that repository's
                   `.swe-mux/config.toml`, which has no control to scroll to. */}
-              {!status.enabled && (
-                <p class="approval-menu-note">
+              {!status.enabled && (<p class="approval-menu-note">
                   <GrantButton id="approvals.autoAnswer" onGranted={load}
-                    title="Lets swe-mux answer permission requests · writes to this machine’s configuration"
-                  >Allow swe-mux to answer approvals</GrantButton>
-                </p>
-              )}
-              {status.policy.mode === 'allowlisted' && (
-                <p class="approval-menu-note">
-                  {status.policy.rules.length} rule
-                  {status.policy.rules.length === 1 ? '' : 's'} from{' '}
-                  {status.rules_source === 'project' ? '.swe-mux/config.toml' : 'defaults'}, fixed
-                  when the mode was set.
-                </p>
-              )}
-              {policy?.last_request && (
-                <p class="approval-menu-note">Last: {policy.last_request}</p>
-              )}
-              {!!policy?.floor_deferred && (
-                <p class="approval-menu-note">
-                  Pushes, credential reads, and destructive commands are never auto-approved.
-                </p>
-              )}
-            </>
-          ) : (
-            <p class="approval-menu-note">{error || 'Reading approval settings…'}</p>
-          )}
+                    title={t("ApprovalChip.28b997adf3")}
+                  >{t("ApprovalChip.98473e42a5")}</GrantButton>
+                </p>)}
+              {status.policy.mode === 'allowlisted' && (<p class="approval-menu-note">{rich("ApprovalChip.e6cb66d916", { length: status.policy.rules.length, value2: (status.policy.rules.length === 1) ? 'yes' : 'no', value3: (status.rules_source === 'project') ? 'yes' : 'no' })}</p>)}
+              {policy?.last_request && (<p class="approval-menu-note">{rich("ApprovalChip.81b71742b1", { last_request: policy.last_request })}</p>)}
+              {!!policy?.floor_deferred && (<p class="approval-menu-note">{t("ApprovalChip.b754352247")}</p>)}
+            </>) : (<p class="approval-menu-note">{error || t("ApprovalChip.0e65f1dc24")}</p>)}
           {error && status && <p class="approval-menu-note approval-error">{error}</p>}
         </div>,
         document.body,

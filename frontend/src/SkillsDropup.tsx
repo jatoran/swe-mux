@@ -1,3 +1,4 @@
+import { rich, t } from './localization/index.ts'
 import { useEffect, useState } from 'preact/hooks'
 
 import { api } from './api'
@@ -78,18 +79,18 @@ export function SkillsDropup({ sessionId, harness, anchor, onClose, onInsert, on
   const rows = inventory ? flatten(inventory.skills) : []
   const disclosure = inventoryNote(inventory)
   return <RailDropup
-    label={`${harness} skills`}
+    label={t("SkillsDropup.4bd55a8f25", { harness: harness })}
     anchor={anchor}
     onClose={onClose}
     sticky={{
-      label: 'All skills…',
-      title: 'Open the Skills section of the Actions drawer, where skills can be filtered, read and pinned',
+      get label() { return t("SkillsDropup.f76a3155b8") },
+      get title() { return t("SkillsDropup.06c98d47bf") },
       run: onOpenSection,
     }}
   >
-    {!inventory && !error && <p class="rail-dropup-empty">Reading skill directories…</p>}
-    {error && <p class="rail-dropup-empty">Skills could not be read: {error}</p>}
-    {inventory && !rows.length && <p class="rail-dropup-empty">No skills on disk for this session.</p>}
+    {!inventory && !error && <p class="rail-dropup-empty">{t("SkillsDropup.4ef50b37ec")}</p>}
+    {error && <p class="rail-dropup-empty">{rich("SkillsDropup.6886ccea97", { error: error })}</p>}
+    {inventory && !rows.length && <p class="rail-dropup-empty">{t("SkillsDropup.07fcc3a9a8")}</p>}
     {rows.map(({ skill, scope }) => <button
       key={skill.path}
       type="button"
@@ -101,8 +102,8 @@ export function SkillsDropup({ sessionId, harness, anchor, onClose, onInsert, on
       <span>
         <code>{skill.invocation}</code>
         {skillLabel(skill) !== skill.name && <em>{skillLabel(skill)}</em>}
-        {skill.added_after_start && <b class="skill-flag warn">new</b>}
-        {!skill.implicit && <b class="skill-flag">explicit</b>}
+        {skill.added_after_start && <b class="skill-flag warn">{t("SkillsDropup.11507a0e2f")}</b>}
+        {!skill.implicit && <b class="skill-flag">{t("SkillsDropup.3b283e93de")}</b>}
       </span>
       <small>{scope} · {skill.short_description || skill.description || skill.origin}</small>
     </button>)}

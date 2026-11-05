@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // Data model for configurable Actions on the terminal command rail.
 //
 // Two halves, deliberately separate:
@@ -526,10 +527,10 @@ function agentComposerSequence(text: string): string {
 // Up/Down as one cluster, while Attach ends the default strip row so it never
 // interrupts the keys.
 export const BUILTIN_RAIL: RailItem[] = [
-  { id: 'relaunch', type: 'action', action: 'relaunch', label: 'Relaunch' },
-  { id: 'copyReply', type: 'action', action: 'copyReply', label: 'Copy reply' },
-  { id: 'copyResume', type: 'action', action: 'copyResume', label: 'Copy resume' },
-  { id: 'branch', type: 'action', action: 'branch', label: 'Branch', agentOnly: true },
+  { id: 'relaunch', type: 'action', action: 'relaunch', get label() { return t("commandRail.8bd85e54db") } },
+  { id: 'copyReply', type: 'action', action: 'copyReply', get label() { return t("commandRail.1b36732103") } },
+  { id: 'copyResume', type: 'action', action: 'copyResume', get label() { return t("commandRail.4116910201") } },
+  { id: 'branch', type: 'action', action: 'branch', get label() { return t("commandRail.52656e8104") }, agentOnly: true },
   // Answers the approval the pane is showing right now. Deliberately *not* a
   // voice alias: Talk keeps its own two-step challenge, which exists because a
   // spoken caller cannot see the dialog it is confirming, and a one-tap
@@ -538,17 +539,17 @@ export const BUILTIN_RAIL: RailItem[] = [
     id: 'approveOnce',
     type: 'action',
     action: 'approveOnce',
-    label: 'Approve',
+    get label() { return t("commandRail.6007acbe30") },
     agentOnly: true,
-    title: 'Approve the request this session is showing',
+    get title() { return t("commandRail.8819818f28") },
   },
-  { id: 'paste', type: 'action', action: 'paste', label: 'Paste', voicePhrases: ['paste', 'paste clipboard'] },
+  { id: 'paste', type: 'action', action: 'paste', get label() { return t("commandRail.f3380f7b44") }, voicePhrases: ['paste', 'paste clipboard'] },
   // Clipboard history picker. Paired with Paste because it is the paste path on
   // touch, where reading the system clipboard is unreliable or refused outright.
-  { id: 'clipboardHistory', type: 'action', action: 'clipboardHistory', label: 'Clip' },
+  { id: 'clipboardHistory', type: 'action', action: 'clipboardHistory', get label() { return t("commandRail.82337888d7") } },
   // The session's own skills, as a drop-up. Next to Clip because they are the same
   // gesture — a short list of the recent/relevant, with a link to the full section.
-  { id: 'skills', type: 'action', action: 'skills', label: 'Skills', agentOnly: true, title: 'Insert one of this session’s skills' },
+  { id: 'skills', type: 'action', action: 'skills', get label() { return t("commandRail.66d0f523a3") }, agentOnly: true, get title() { return t("commandRail.c44f8e85f2") } },
   // The prompt library, as a drop-up, beside Clip and Skills because it is the
   // third picker with the same shape. It is the *whole* library rather than the
   // handful of templates placed as dedicated buttons. A library reachable only
@@ -557,21 +558,21 @@ export const BUILTIN_RAIL: RailItem[] = [
   // Not `agentOnly`: a template is text, and text goes into a shell composer as
   // readily as into an agent's. Templates that mean something to only one harness
   // carry their own `backends` in the library and are filtered by it.
-  { id: 'prompts', type: 'action', action: 'prompts', label: 'Prompts', title: 'Insert one of your prompt templates' },
-  { id: 'actionsDrawer', type: 'action', action: 'openActions', label: 'Actions', title: 'Open Actions temporarily' },
+  { id: 'prompts', type: 'action', action: 'prompts', get label() { return t("commandRail.5f2e66e653") }, get title() { return t("commandRail.733b701f51") } },
+  { id: 'actionsDrawer', type: 'action', action: 'openActions', get label() { return t("commandRail.ff8059dc67") }, get title() { return t("commandRail.a9aa2069ca") } },
   { id: 'kbdToggle', type: 'action', action: 'toggleKeyboard', label: '⌨', className: 'term-key kbd-toggle' },
-  { id: 'esc', type: 'key', bytes: '\x1b', label: 'Esc', className: 'term-key', title: 'Escape', voicePhrases: ['escape', 'press escape', 'escape key'] },
-  { id: 'enter', type: 'key', bytes: '\r', label: '⏎', className: 'term-key', title: 'Enter', voicePhrases: ['enter', 'press enter', 'enter key'] },
-  { id: 'tab', type: 'key', bytes: '\t', label: 'Tab', className: 'term-key', title: 'Tab', voicePhrases: ['tab', 'press tab', 'tab key'] },
+  { id: 'esc', type: 'key', bytes: '\x1b', get label() { return t("commandRail.52f878edb3") }, className: 'term-key', get title() { return t("commandRail.037c968467") }, voicePhrases: ['escape', 'press escape', 'escape key'] },
+  { id: 'enter', type: 'key', bytes: '\r', label: '⏎', className: 'term-key', get title() { return t("commandRail.dc8659db6d") }, voicePhrases: ['enter', 'press enter', 'enter key'] },
+  { id: 'tab', type: 'key', bytes: '\t', get label() { return t("commandRail.90ddf1963a") }, className: 'term-key', get title() { return t("commandRail.90ddf1963a") }, voicePhrases: ['tab', 'press tab', 'tab key'] },
   // Back-tab (ESC[Z). Both agent TUIs read it as "cycle permission mode" — the
   // "(shift+tab to cycle)" footer — and shells treat it as reverse focus/completion,
   // so it pairs with Tab on the rail.
-  { id: 'shiftTab', type: 'key', bytes: '\x1b[Z', label: '⇧Tab', className: 'term-key', title: 'Shift+Tab (cycle mode / back-tab)', voicePhrases: ['shift tab', 'press shift tab', 'cycle mode'] },
-  { id: 'ctrlC', type: 'key', bytes: '\x03', label: '^C', className: 'term-key', title: 'Interrupt (Ctrl-C)', voicePhrases: ['control c', 'press control c'] },
-  { id: 'up', type: 'key', bytes: '\x1b[A', label: '↑', className: 'term-key', repeatable: true, title: 'Up / previous command', voicePhrases: ['up arrow', 'press up', 'previous terminal command'] },
-  { id: 'down', type: 'key', bytes: '\x1b[B', label: '↓', className: 'term-key', repeatable: true, title: 'Down / next command', voicePhrases: ['down arrow', 'press down', 'next terminal command'] },
-  { id: 'markdownDivider', type: 'key', bytes: agentComposerSequence('\n\n---\n\n'), label: '---', agentOnly: true, title: 'Insert a Markdown divider with blank lines around it', voicePhrases: ['insert markdown divider'] },
-  { id: 'markdownCodeFence', type: 'key', bytes: agentComposerSequence('\n\n```\n'), label: '```', agentOnly: true, title: 'Start a Markdown code fence after two newlines', voicePhrases: ['insert code fence', 'start code fence'] },
+  { id: 'shiftTab', type: 'key', bytes: '\x1b[Z', get label() { return t("commandRail.5f1fb50de2") }, className: 'term-key', get title() { return t("commandRail.29d087ea63") }, voicePhrases: ['shift tab', 'press shift tab', 'cycle mode'] },
+  { id: 'ctrlC', type: 'key', bytes: '\x03', get label() { return t("commandRail.8c14fdf5c6") }, className: 'term-key', get title() { return t("commandRail.8293d6b4d5") }, voicePhrases: ['control c', 'press control c'] },
+  { id: 'up', type: 'key', bytes: '\x1b[A', label: '↑', className: 'term-key', repeatable: true, get title() { return t("commandRail.4f64955fd3") }, voicePhrases: ['up arrow', 'press up', 'previous terminal command'] },
+  { id: 'down', type: 'key', bytes: '\x1b[B', label: '↓', className: 'term-key', repeatable: true, get title() { return t("commandRail.d402948cc3") }, voicePhrases: ['down arrow', 'press down', 'next terminal command'] },
+  { id: 'markdownDivider', type: 'key', bytes: agentComposerSequence('\n\n---\n\n'), label: '---', agentOnly: true, get title() { return t("commandRail.3c736b137b") }, voicePhrases: ['insert markdown divider'] },
+  { id: 'markdownCodeFence', type: 'key', bytes: agentComposerSequence('\n\n```\n'), label: '```', agentOnly: true, get title() { return t("commandRail.818fa9a95b") }, voicePhrases: ['insert code fence', 'start code fence'] },
   // Copy the composer. Reads the draft off the terminal grid, because no harness
   // publishes its composer and the daemon's write log deliberately keeps only a
   // count (`composerText.ts`, `composer_input.py`).
@@ -580,7 +581,7 @@ export const BUILTIN_RAIL: RailItem[] = [
   // adapter passes `action` items through only for Paste (`railVoice.ts`). Copy
   // would also be a poor spoken command — its whole result is on a clipboard the
   // speaker cannot see.
-  { id: 'copyInput', type: 'action', action: 'copyInput', label: 'Copy input', agentOnly: true, title: 'Copy the text sitting unsent in this composer' },
+  { id: 'copyInput', type: 'action', action: 'copyInput', get label() { return t("commandRail.f5b9c167e6") }, agentOnly: true, get title() { return t("commandRail.902e4f8250") } },
   // The raw kill-line key, restored in place of the Clear button that briefly
   // occupied this slot (`clearInput`, migrated below).
   //
@@ -599,26 +600,26 @@ export const BUILTIN_RAIL: RailItem[] = [
   // new one: composer-clearing is on Talk's excluded list (`design/features/voice.md`)
   // because a spoken caller cannot see the draft they would be destroying, and
   // `restoreInput` below is voiced precisely because it is the recovering half.
-  { id: 'ctrlU', type: 'key', bytes: '\x15', label: '^U', className: 'term-key', title: 'Kill to start of line (Ctrl+U) — clears a single-line draft' },
-  { id: 'restoreInput', type: 'key', bytes: '\x19', label: '^Y', className: 'term-key', title: 'Restore or yank input (Ctrl+Y)', voicePhrases: ['restore input', 'yank input'] },
-  { id: 'left', type: 'key', bytes: '\x1b[D', label: '←', className: 'term-key', repeatable: true, title: 'Left', voicePhrases: ['left arrow', 'press left'] },
-  { id: 'right', type: 'key', bytes: '\x1b[C', label: '→', className: 'term-key', repeatable: true, title: 'Right', voicePhrases: ['right arrow', 'press right'] },
+  { id: 'ctrlU', type: 'key', bytes: '\x15', get label() { return t("commandRail.444ed4015b") }, className: 'term-key', get title() { return t("commandRail.c47e95862e") } },
+  { id: 'restoreInput', type: 'key', bytes: '\x19', get label() { return t("commandRail.44215080cd") }, className: 'term-key', get title() { return t("commandRail.1ea525858b") }, voicePhrases: ['restore input', 'yank input'] },
+  { id: 'left', type: 'key', bytes: '\x1b[D', label: '←', className: 'term-key', repeatable: true, get title() { return t("commandRail.58eb9032e3") }, voicePhrases: ['left arrow', 'press left'] },
+  { id: 'right', type: 'key', bytes: '\x1b[C', label: '→', className: 'term-key', repeatable: true, get title() { return t("commandRail.883361d5d6") }, voicePhrases: ['right arrow', 'press right'] },
   // Navigation + editing extras remain in the catalog and follow the main rail row.
   // The permanent drawer popover makes the long tail reachable without a second surface.
-  { id: 'home', type: 'key', bytes: '\x1b[H', label: 'Home', className: 'term-key', title: 'Home / start of line', voicePhrases: ['home key', 'press home'] },
-  { id: 'end', type: 'key', bytes: '\x1b[F', label: 'End', className: 'term-key', title: 'End / end of line', voicePhrases: ['end key', 'press end'] },
-  { id: 'ctrlHome', type: 'key', bytes: '\x1b[1;5H', label: '^Home', className: 'term-key', title: 'Ctrl+Home / top', voicePhrases: ['control home', 'press control home'] },
-  { id: 'ctrlEnd', type: 'key', bytes: '\x1b[1;5F', label: '^End', className: 'term-key', title: 'Ctrl+End / bottom', voicePhrases: ['control end', 'press control end'] },
+  { id: 'home', type: 'key', bytes: '\x1b[H', get label() { return t("commandRail.3a78695388") }, className: 'term-key', get title() { return t("commandRail.c2916d0c39") }, voicePhrases: ['home key', 'press home'] },
+  { id: 'end', type: 'key', bytes: '\x1b[F', get label() { return t("commandRail.f4db1e4847") }, className: 'term-key', get title() { return t("commandRail.31035617a2") }, voicePhrases: ['end key', 'press end'] },
+  { id: 'ctrlHome', type: 'key', bytes: '\x1b[1;5H', get label() { return t("commandRail.3f1d188d70") }, className: 'term-key', get title() { return t("commandRail.b0869520aa") }, voicePhrases: ['control home', 'press control home'] },
+  { id: 'ctrlEnd', type: 'key', bytes: '\x1b[1;5F', get label() { return t("commandRail.7b966c9c00") }, className: 'term-key', get title() { return t("commandRail.2dd0cf609f") }, voicePhrases: ['control end', 'press control end'] },
   // ESC+CR is the one newline sequence both agent composers accept. Raw LF works
   // in Claude but Codex treats it as ordinary input instead of editor.newline.
-  { id: 'newline', type: 'key', bytes: AGENT_NEWLINE, label: '↵ nl', className: 'term-key', title: 'Insert newline without submitting', voicePhrases: ['new line', 'insert new line'] },
+  { id: 'newline', type: 'key', bytes: AGENT_NEWLINE, get label() { return t("commandRail.58afe0a48e") }, className: 'term-key', get title() { return t("commandRail.8aaf1a800f") }, voicePhrases: ['new line', 'insert new line'] },
   // Opens Claude's interactive /rewind picker (there is no one-shot,
   // conversation-only variant, so this just launches the picker).
-  { id: 'rewind', type: 'slash', text: 'rewind', label: 'Rewind…', submit: true, backends: ['claude'], title: 'Open Claude /rewind (interactive checkpoint picker)' },
+  { id: 'rewind', type: 'slash', get text() { return t("commandRail.c51185739f") }, get label() { return t("commandRail.f280f22f90") }, submit: true, backends: ['claude'], get title() { return t("commandRail.b3c8efc988") } },
   // Ends the session the rail belongs to. The two-click confirm remains the guard;
   // operators who do not want it visible can remove its rail placement.
-  { id: 'endSession', type: 'action', action: 'endSession', label: 'End session', className: 'rail-danger', title: 'End this session (click twice to confirm)' },
-  { id: 'attach', type: 'action', action: 'attach', label: 'Attach', agentOnly: true, title: 'Attach files to this chat without sending' },
+  { id: 'endSession', type: 'action', action: 'endSession', get label() { return t("commandRail.f00b921ff3") }, className: 'rail-danger', get title() { return t("commandRail.b2a891d12c") } },
+  { id: 'attach', type: 'action', action: 'attach', get label() { return t("commandRail.d406ade295") }, agentOnly: true, get title() { return t("commandRail.6f80c351f6") } },
   // The three sticky modifiers. Tap arms one key, tap again locks, tap a locked one
   // clears it: the phone-keyboard shift model, which is what makes one chip multiply
   // the whole rail instead of adding a row of Ctrl-prefixed duplicates. They are also
@@ -627,9 +628,9 @@ export const BUILTIN_RAIL: RailItem[] = [
   //
   // No voice phrases: a modifier is a *state* a spoken caller cannot see, and the
   // thing it would modify is a second command away.
-  { id: 'modCtrl', type: 'action', action: 'modifier', label: 'Ctrl', className: 'term-key rail-modifier', title: 'Ctrl for the next key. Tap again to lock.' },
-  { id: 'modAlt', type: 'action', action: 'modifier', label: 'Alt', className: 'term-key rail-modifier', title: 'Alt for the next key. Tap again to lock.' },
-  { id: 'modShift', type: 'action', action: 'modifier', label: 'Shift', className: 'term-key rail-modifier', title: 'Shift for the next key. Tap again to lock.' },
+  { id: 'modCtrl', type: 'action', action: 'modifier', get label() { return t("commandRail.e2ee2909fe") }, className: 'term-key rail-modifier', get title() { return t("commandRail.a4fcfd6977") } },
+  { id: 'modAlt', type: 'action', action: 'modifier', get label() { return t("commandRail.c91da2e020") }, className: 'term-key rail-modifier', get title() { return t("commandRail.faa3a3c769") } },
+  { id: 'modShift', type: 'action', action: 'modifier', get label() { return t("commandRail.2e544a292f") }, className: 'term-key rail-modifier', get title() { return t("commandRail.4c5e8ebdd6") } },
   // The four shipped pads. Each one is an ordinary catalog entry whose slots name
   // ordinary catalog entries, so nothing downstream needs a special case: the items
   // they hold stay in the catalog, keep their own backend gating, and can still be
@@ -650,9 +651,9 @@ export const BUILTIN_RAIL: RailItem[] = [
   {
     id: 'padArrows',
     type: 'pad',
-    label: 'Arrows',
+    get label() { return t("commandRail.423c677c12") },
     className: 'term-key',
-    title: 'All four arrows. Drag a wedge, or tap to open. Hold to repeat.',
+    get title() { return t("commandRail.f30bbde34a") },
     pad: normalizeRailPad({
       wedges: 4,
       rings: 1,
@@ -675,9 +676,9 @@ export const BUILTIN_RAIL: RailItem[] = [
   {
     id: 'padJump',
     type: 'pad',
-    label: 'Jump',
+    get label() { return t("commandRail.9ee0ca3e24") },
     className: 'term-key',
-    title: 'Line and document jumps. Drag a wedge, or tap to open.',
+    get title() { return t("commandRail.a6450cb749") },
     pad: normalizeRailPad({
       wedges: 4,
       rings: 1,
@@ -696,8 +697,8 @@ export const BUILTIN_RAIL: RailItem[] = [
   {
     id: 'padCopy',
     type: 'pad',
-    label: 'Copy',
-    title: 'Copy from this session. Drag a wedge, or tap to open.',
+    get label() { return t("commandRail.e21f935f11") },
+    get title() { return t("commandRail.a8af4cf252") },
     pad: normalizeRailPad({
       wedges: 3,
       rings: 1,
@@ -713,8 +714,8 @@ export const BUILTIN_RAIL: RailItem[] = [
   {
     id: 'padPickers',
     type: 'pad',
-    label: 'Pick',
-    title: 'Clipboard, skills, prompts, Actions. Drag a wedge, or tap to open.',
+    get label() { return t("commandRail.831a9d52a9") },
+    get title() { return t("commandRail.19d90f40bc") },
     pad: normalizeRailPad({
       wedges: 4,
       rings: 1,
@@ -1468,7 +1469,7 @@ export function resolveDeltaScope(global: RailConfig, delta: RailProjectDelta): 
           const first = legacyPanel[0]
           const row: RailRow = {
             id: first && !seen.has(first.id) ? first.id : `${device}-project-migrated`,
-            ...(first?.label ? { label: first.label } : { label: 'Project' }),
+            ...(first?.label ? { label: first.label } : { get label() { return t("commandRail.9859597853") } }),
             items: migrated,
           }
           projectRowIds.add(row.id)

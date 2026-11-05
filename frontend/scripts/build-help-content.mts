@@ -17,6 +17,7 @@
 // The test fails when the committed file no longer matches the docs.
 
 import { readFileSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 
 export const HELP_SOURCE_ROOT = ['.docs', 'design', 'features']
@@ -123,9 +124,8 @@ export function helpBlocks(markdown: string, heading: string): HelpBlock[] {
   return blocks
 }
 
-/** The whole generated module, as text. Pure, so the test can compare without writing. */
-export function renderHelpContent(root: string): string {
-  const sections = HELP_SECTIONS.map(entry => {
+function helpSections(root: string) {
+  return HELP_SECTIONS.map(entry => {
     const markdown = readFileSync(join(root, ...HELP_SOURCE_ROOT, entry.doc), 'utf8')
     return {
       topic: entry.topic,
@@ -133,14 +133,38 @@ export function renderHelpContent(root: string): string {
       sections: entry.headings.map(heading => ({ heading, blocks: helpBlocks(markdown, heading) })),
     }
   })
+}
+const escapeMessage = (text:string):string => text.replace(/'/g,"''").replace(/[{}]/g,char=>"'"+char+"'")
+const messageId = (text:string):string => 'help.'+createHash('sha256').update(escapeMessage(text)).digest('hex').slice(0,10)
+export function helpCatalog(root:string):Record<string,string> {
+  const messages:Record<string,string>={}
+  for(const topic of helpSections(root))for(const section of topic.sections){
+    messages[messageId(section.heading)]=escapeMessage(section.heading)
+    for(const block of section.blocks)for(const text of block.kind==='p'?[block.text]:block.items)messages[messageId(text)]=escapeMessage(text)
+  }
+  return messages
+}
+function renderLocalized(value:unknown):string {
+  if(Array.isArray(value))return '['+value.map(renderLocalized).join(',\n')+']'
+  if(value&&typeof value==='object')return '{'+Object.entries(value).map(([key,item])=>{
+    if((key==='heading'||key==='text')&&typeof item==='string')return 'get '+key+'(){return t('+JSON.stringify(messageId(item))+')}'
+    if(key==='items'&&Array.isArray(item))return 'get items(){return ['+item.map(text=>'t('+JSON.stringify(messageId(text))+')').join(',')+']}'
+    return JSON.stringify(key)+':'+renderLocalized(item)
+  }).join(',')+'}'
+  return JSON.stringify(value)
+}
+/** Generated source holds message references; English copy lives in the catalog. */
+export function renderHelpContent(root:string):string {
+  const sections=helpSections(root)
   return [
     '// GENERATED FILE - do not edit by hand.',
     '// Regenerate: node frontend/scripts/build-help-content.mts',
     `// Source of truth: ${HELP_SOURCE_ROOT.join('/')}/ (see HELP_SECTIONS in that script).`,
     '// frontend/test/helpTopics.test.ts fails when this file drifts from those docs.',
     "import type { HelpDocContent } from './helpTopics.ts'",
+    "import { t } from './localization/index.ts'",
     '',
-    `export const HELP_DOC_CONTENT: HelpDocContent[] = ${JSON.stringify(sections, null, 2)}`,
+    `export const HELP_DOC_CONTENT: HelpDocContent[] = ${renderLocalized(sections)}`,
     '',
   ].join('\n')
 }
@@ -150,6 +174,11 @@ export function renderHelpContent(root: string): string {
 const invoked = (process.argv[1] || '').replace(/\\/g, '/').split('/').pop() || ''
 if (invoked && import.meta.url.endsWith(invoked)) {
   const root = join(import.meta.dirname, '..', '..')
+  const catalogPath=join(root,'frontend','src','localization','catalogs','en.json')
+  const catalog=JSON.parse(readFileSync(catalogPath,'utf8'))
+  for(const key of Object.keys(catalog))if(key.startsWith('help.'))delete catalog[key]
+  Object.assign(catalog,helpCatalog(root))
+  writeFileSync(catalogPath,JSON.stringify(Object.fromEntries(Object.entries(catalog).sort()),null,2)+'\n','utf8')
   writeFileSync(join(root, 'frontend', 'src', 'helpContent.generated.ts'), renderHelpContent(root), 'utf8')
   process.stdout.write('wrote frontend/src/helpContent.generated.ts\n')
 }

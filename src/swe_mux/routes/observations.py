@@ -25,6 +25,7 @@ from ..project_files import (
     write_observations,
 )
 from ..prompt_queue import QueueError
+from ..ui_messages import error_text, ui_message
 from . import sessions, terminal
 from .support import _human_sender_kind, _observations_project, _registered_identity
 
@@ -48,7 +49,7 @@ async def post_observation(request: web.Request) -> web.Response:
     except ObservationsUnreadableError as exc:
         # Refusing beats "read as empty, then clobber": the file holds the user's
         # own notes and the next append would be the thing that destroys them.
-        return json_response({"error": str(exc), "code": "observations_unreadable"}, 409)
+        return json_response({"error": error_text(exc), "code": "observations_unreadable"}, 409)
     result.update({"project_id": project.id, "project_name": project.name})
     return json_response(result)
 
@@ -58,7 +59,7 @@ async def put_observations(request: web.Request) -> web.Response:
     body = await request.json()
     observations = body.get("observations")
     if not isinstance(observations, list):
-        raise ValueError("observations must be a list")
+        raise ValueError(ui_message("observations.ce0ab9c639"))
     try:
         result = await write_observations(
             project.root,
@@ -67,10 +68,10 @@ async def put_observations(request: web.Request) -> web.Response:
             project=_registered_identity(project),
         )
     except ObservationsUnreadableError as exc:
-        return json_response({"error": str(exc), "code": "observations_unreadable"}, 409)
+        return json_response({"error": error_text(exc), "code": "observations_unreadable"}, 409)
     except ValueError as exc:
         if "changed externally" in str(exc):
-            return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+            return json_response({"error": error_text(exc), "code": "revision_conflict"}, 409)
         raise
     result.update({"project_id": project.id, "project_name": project.name})
     return json_response(result)
@@ -101,7 +102,7 @@ async def _approve_control_request(
     elif terminal._session_owns_daemon(target) or not is_agent_harness(target.record.backend):
         return json_response(
             {
-                "error": "the target is not a valid control target",
+                "error": ui_message("observations.5134edbddb"),
                 "code": "forbidden_target",
             },
             409,
@@ -111,7 +112,7 @@ async def _approve_control_request(
         if str(evaluation.get("delivery_state") or "unknown") != "safe":
             return json_response(
                 {
-                    "error": "the target is not safe to interrupt right now",
+                    "error": ui_message("observations.67c505ee7d"),
                     "code": "readiness_not_safe",
                     "delivery_state": evaluation.get("delivery_state"),
                 },
@@ -124,7 +125,7 @@ async def _approve_control_request(
         outcome = "ended"
         extra = {"final_state": result.get("final_state"), "graceful": result.get("graceful")}
     else:
-        raise ValueError(f"unknown control action {action!r}")
+        raise ValueError(ui_message("observations.aaad015879", value1=repr(action)))
     updated = await update_observation_request(
         project.root,
         observation_id,
@@ -219,7 +220,7 @@ async def decide_observation_request(request: web.Request) -> web.Response:
     body = await request.json()
     decision = str(body.get("decision") or "").strip()
     if decision not in {"approve", "dismiss"}:
-        raise ValueError("decision must be approve or dismiss")
+        raise ValueError(ui_message("observations.c82a4a1604"))
     identity = _registered_identity(project)
     current = await read_observations(project.root, project=identity)
     if current.get("status") == "malformed":
@@ -236,13 +237,15 @@ async def decide_observation_request(request: web.Request) -> web.Response:
         None,
     )
     if item is None:
-        raise ValueError("no such request")
+        raise ValueError(ui_message("observations.c57dde6c9d"))
     kind = str(item.get("kind"))
     pending_request = dict(item.get("request") or {})
     if pending_request.get("status") not in {None, "", "pending"}:
         return json_response(
             {
-                "error": f"this request was already {pending_request.get('status')}",
+                "error": ui_message(
+                    "observations.2e350887f6", value1=pending_request.get("status")
+                ),
                 "code": "already_decided",
             },
             409,
@@ -283,7 +286,7 @@ async def decide_observation_request(request: web.Request) -> web.Response:
     spawn_request = pending_request
     prompt = str(body.get("prompt") or spawn_request.get("prompt") or "")
     if not prompt.strip():
-        raise ValueError("the request has no prompt to seed")
+        raise ValueError(ui_message("observations.e33bbd40d7"))
     # An observation spawn always seeds a prompt, so it needs an agent. It honours a
     # configured default when that default is one, and otherwise takes the first
     # registered harness rather than a name written in here. `default_backend` is
@@ -370,21 +373,20 @@ async def _arm_requested_watch(
         return None
     watch_service = request.app.get(keys.SESSION_WATCH)
     if watch_service is None:
-        return {"armed": False, "reason": "session watches are unavailable"}
+        return {"armed": False, "reason": ui_message("observations.036fcebb98")}
     requester_id = str(spawn_request.get("from_session") or "")
     requester = request.app[keys.SESSIONS].sessions.get(requester_id)
     if requester is None:
-        return {"armed": False, "reason": "the requesting session has ended"}
+        return {"armed": False, "reason": ui_message("observations.15b44c5dd9")}
     asked_run = str(spawn_request.get("from_run_id") or "")
     live_run = str(getattr(requester.record, "agent_run_id", "") or "")
     if asked_run and live_run and asked_run != live_run:
-        return {"armed": False, "reason": "the requesting conversation was replaced"}
+        return {"armed": False, "reason": ui_message("observations.f8ed8765c3")}
     try:
         view = await watch_service.watch(
             requester,
             target=str(session.record.id),
-            timeout_minutes=str(spawn_request.get("watch_timeout_minutes") or "")
-            or None,
+            timeout_minutes=str(spawn_request.get("watch_timeout_minutes") or "") or None,
             project="fleet",
         )
     except QueueError as exc:
@@ -395,7 +397,7 @@ async def _arm_requested_watch(
             requester_id,
             session.record.id,
         )
-        return {"armed": False, "reason": "the watch could not be armed"}
+        return {"armed": False, "reason": ui_message("observations.03f6aa5ee6")}
     return {"armed": True, "watch_id": str(view.get("watch_id") or "")}
 
 

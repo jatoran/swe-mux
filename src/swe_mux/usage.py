@@ -51,6 +51,7 @@ from .config import CCUSAGE_PACKAGE, Config
 from .event_bus import EventBus
 from .host_metrics import host_cpu_times, host_memory_percent
 from .http_support import log_task_failure
+from .ui_messages import ui_message
 
 USAGE_REFRESH_LOOP = "usage-refresh"
 MAX_USAGE_OUTPUT_BYTES = 10 * 1024 * 1024
@@ -251,9 +252,7 @@ def resolve_usage_launch(command: Sequence[str], *, windows: bool | None = None)
     args = list(command[1:])
     is_ccusage = Path(command[0]).stem.casefold() == "ccusage"
     if is_ccusage:
-        native = find_ccusage_native(
-            Path(resolved), platform_name="win32" if windows else None
-        )
+        native = find_ccusage_native(Path(resolved), platform_name="win32" if windows else None)
         if native is not None:
             return UsageLaunch([str(native)], args, "native", str(native), True)
     if windows and Path(resolved).suffix.casefold() in {".cmd", ".bat"}:
@@ -479,9 +478,7 @@ def _daily_model_items(item: dict[str, Any]) -> list[dict[str, Any]]:
         if (
             day_cost
             and day_tokens
-            and not _has_number(
-                metrics, "totalCost", "total_cost", "costUSD", "cost_usd", "cost"
-            )
+            and not _has_number(metrics, "totalCost", "total_cost", "costUSD", "cost_usd", "cost")
         ):
             row["costUSD"] = day_cost * model_tokens / day_tokens
             row["__cost_method"] = "proportional"
@@ -963,8 +960,10 @@ class UsageManager:
                 if windowed and command_bounds_dates(override):
                     # Its own window: it replaces the source rather than merging into it.
                     replaced[source] = normalize_usage(focused_payload, source, override_provenance)
-                elif windowed and _has_daily_list(focused_payload) and not _items(
-                    focused_payload, "daily", "days"
+                elif (
+                    windowed
+                    and _has_daily_list(focused_payload)
+                    and not _items(focused_payload, "daily", "days")
                 ):
                     fresh.pop(source, None)
                 else:
@@ -1108,7 +1107,7 @@ class UsageManager:
         try:
             outcome = await run_bounded(
                 [*launch.program, "--version"],
-                label="ccusage-version",
+                label=ui_message("usage.5fb13cc475"),
                 timeout_seconds=USAGE_VERSION_TIMEOUT_SECONDS,
                 output_limit=4096,
                 stderr_limit=4096,
@@ -1156,7 +1155,7 @@ class UsageManager:
         try:
             outcome = await run_bounded(
                 launch.argv,
-                label="ccusage",
+                label=ui_message("usage.d4b904a643"),
                 timeout_seconds=USAGE_CEILING_SECONDS,
                 output_limit=MAX_USAGE_OUTPUT_BYTES,
                 stderr_limit=MAX_USAGE_STDERR_BYTES,

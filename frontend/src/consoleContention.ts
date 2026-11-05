@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import type { ConsoleContention, Session } from './types'
 
 export type ConsoleContentionNotice = {
@@ -31,13 +32,13 @@ export function consoleContentionNotice(
   const orphaned = contention.reason === 'agent_orphaned'
     || contention.reason === 'shim_exited_first'
   return {
-    text: 'This pane’s shell is reading the terminal too — typing here is being split',
+    get text() { return t("consoleContention.6e22979949") },
     hint: orphaned
       // The agent is no longer inside this pane's process tree, so ending the
       // pane will not stop it. Saying so is the whole point: the alternative is
       // an operator who closes the tab and leaves a CLI running on their machine.
-      ? 'The agent outlived the process that launched it. Ending this session will not stop the agent; quit it from its own UI first.'
-      : 'Quit the agent (Ctrl+D, or /exit) and start it again from the Run menu, which spawns it directly into this terminal.',
+      ? t("consoleContention.1a6045dd32")
+      : t("consoleContention.d159d7a350"),
   }
 }
 

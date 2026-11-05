@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 /**
  * The "which model does each feature call" table in Settings → Accounts, and the
  * one place any of them is edited.
@@ -69,25 +70,19 @@ export function ModelRoutingSummary(
           <strong>{route.feature}</strong>
           <span class={`model-routing-kind model-routing-${route.kind}`}>{route.kind}</span>
         </div>
-        {!override&&<ModelPicker
+        {!override && <ModelPicker
           id={`${route.key}-picker`}
           value={draft[route.key] || ''}
           options={catalog}
-          emptyLabel={route.fallback
-            ? `Use the ${route.fallback === 'openrouter_cheap_model' ? 'cheap' : 'standard'} model…`
-            : 'Select exact model…'}
+          emptyLabel={route.fallback ? t("ModelRoutingSummary.bc1e8bb9e2", { value1: (route.fallback === 'openrouter_cheap_model') ? 'yes' : 'no' }) : t("ModelRoutingSummary.4396d21db6")}
           required={route.kind === 'pinned'}
           onChange={value => onChange(route.key, value)}
         />}
         <div class="model-routing-model">
-          {model
-            // The exact id, not a display label: this row answers "which model is
-            // that", and it is also the value the control above holds.
-            ? <code title={model}>{model}</code>
-            : <em>{route.kind === 'pinned' ? 'not set — this feature cannot run' : 'not set'}</em>}
-          {inherited && <span class="model-routing-inherited">{override ? 'endpoint' : 'inherited'}</span>}
+          {model ? <code title={model}>{model}</code> : <em>{route.kind === 'pinned' ? t("ModelRoutingSummary.e1c0d1c989") : t("ModelRoutingSummary.1aef939917")}</em>}
+          {inherited && <span class="model-routing-inherited">{override ? t("ModelRoutingSummary.b6bf7bc8d9") : t("ModelRoutingSummary.46b2e93c2f")}</span>}
           {price && <span class="model-routing-price">{price}</span>}
-          {missing && <span class="model-routing-missing" title="This endpoint's catalog does not list this model. The call may still work if the endpoint resolves the id upstream, but nothing here can price it or confirm it.">not in this catalog</span>}
+          {missing && <span class="model-routing-missing" title={t("ModelRoutingSummary.2fcbc79ad0")}>{t("ModelRoutingSummary.97620327b3")}</span>}
         </div>
         {route.note && <small>{route.note}</small>}
       </li>

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from .host_platform import IS_MACOS, IS_WINDOWS
+from .ui_messages import ui_message
 
 # Server-side headless screenshot of a session-owned loopback preview. Optional:
 # requires the `preview-capture` extra (Playwright + a Chromium download). When
@@ -213,7 +214,7 @@ def _extra_missing() -> CaptureCapability:
         )
     return CaptureCapability(
         state="extra_missing",
-        detail="the optional preview-capture extra (Playwright) is not installed",
+        detail=ui_message("preview_capture.40c39731ed"),
         remedy=INSTALL_HINT,
     )
 
@@ -222,10 +223,7 @@ def _browser_missing() -> CaptureCapability:
     roots = ", ".join(str(root) for root in _browser_roots()) or "no known browser cache"
     return CaptureCapability(
         state="browser_missing",
-        detail=(
-            "Playwright is installed but no Chromium browser binary was found "
-            f"(looked in: {roots})"
-        ),
+        detail=(ui_message("preview_capture.0a0a7cb05e", value1=roots)),
         remedy=BROWSER_INSTALL_COMMAND,
     )
 
@@ -247,7 +245,7 @@ def capture_capability() -> CaptureCapability:
         capability = (
             CaptureCapability(
                 state="ready",
-                detail="Playwright and a Chromium browser binary are installed",
+                detail=ui_message("preview_capture.f456059ba9"),
                 browser_path=str(executable),
             )
             if executable is not None
@@ -322,9 +320,7 @@ async def capture_loopback(
                 await page.screenshot(path=str(out_path), full_page=False)
         finally:
             await browser.close()
-    log.info(
-        "preview capture wrote %s", out_path, extra={"url": url, "region": bool(clip_rect)}
-    )
+    log.info("preview capture wrote %s", out_path, extra={"url": url, "region": bool(clip_rect)})
     return out_path
 
 

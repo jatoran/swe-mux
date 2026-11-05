@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // How one lineage edge reads to a human looking at one conversation.
 //
 // The section this feeds sits on a single History entry, so an edge is never a
@@ -48,11 +49,11 @@ export const lineageCounterpart = (
 }
 
 const RELATION_VERB: Record<string, { from: string; to: string }> = {
-  branch: { from: 'Branched from', to: 'Branched into' },
-  resume: { from: 'Resumed from', to: 'Resumed into' },
-  handoff: { from: 'Handed off from', to: 'Handed off to' },
-  continuation: { from: 'Continues', to: 'Continued by' },
-  review: { from: 'Reviews', to: 'Reviewed by' },
+  branch: { get from() { return t("lineageView.86932b3627") }, get to() { return t("lineageView.e39a00c098") } },
+  resume: { get from() { return t("lineageView.cff3af4f31") }, get to() { return t("lineageView.e21173b651") } },
+  handoff: { get from() { return t("lineageView.f770d49f64") }, get to() { return t("lineageView.131cec0feb") } },
+  continuation: { from: 'Continues', get to() { return t("lineageView.a37f3ca689") } },
+  review: { from: 'Reviews', get to() { return t("lineageView.031cc20288") } },
 }
 
 /** What this edge did, said in the direction the reader is standing. */
@@ -66,7 +67,7 @@ export function lineageVerb(relation: string, direction: LineageDirection): stri
 
 /** What the other end is called, or why it has no name. */
 export function lineageEndpointLabel(endpoint: LineageEndpoint, runId: string): string {
-  if (!endpoint.known) return 'conversation removed'
+  if (!endpoint.known) return t("lineageView.66b9fa080b")
   return endpoint.name || runId
 }
 
@@ -82,7 +83,7 @@ export function lineageCutLabel(metadata: Readonly<Record<string, unknown>> | un
   const role = typeof metadata.from_message_role === 'string' ? metadata.from_message_role : ''
   if (!mode) return ''
   const speaker =
-    role === 'user' ? 'your message' : role === 'assistant' ? 'the reply' : 'the message'
+    role === 'user' ? t("lineageView.21e45fd1c9") : role === 'assistant' ? t("lineageView.433f2f37a4") : t("lineageView.c9946a075f")
   const where = mode === 'before' ? `before ${speaker}` : `after ${speaker}`
   return text ? `${where} “${text}”` : where
 }

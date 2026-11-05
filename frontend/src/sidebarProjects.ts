@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // Pure helpers for sidebar project rows: which projects are collapsed
 // (persisted set) and whether a project can be hidden from the sidebar.
 // Kept free of runtime imports so the guard logic can be unit tested under the
@@ -114,7 +115,7 @@ export function canHideProject(work: ProjectOpenWork): boolean {
 export function describeOpenWork(work: ProjectOpenWork): string {
   const parts: string[] = []
   if (work.liveSessions.length)
-    parts.push(`${work.liveSessions.length} live session${work.liveSessions.length === 1 ? '' : 's'}`)
+    parts.push(t("sidebarProjects.c740adf8dd", { value1: work.liveSessions.length, value2: (work.liveSessions.length === 1) ? 'yes' : 'no' }))
   if (work.previewIds.length)
     parts.push(`${work.previewIds.length} preview${work.previewIds.length === 1 ? '' : 's'}`)
   return parts.join(' · ')

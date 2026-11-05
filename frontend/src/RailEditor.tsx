@@ -1,3 +1,4 @@
+import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
 import { api } from './api'
@@ -61,7 +62,7 @@ import type { Project } from './types'
 
 const SURFACE_LABEL: Record<RailSurface, string> = { strip: 'Rail' }
 const SURFACE_HINT: Record<RailSurface, string> = {
-  strip: 'the button strip under the terminal',
+  get strip() { return t("RailEditor.7027964b6e") },
 }
 const DEVICE_LABEL: Record<RailDevice, string> = { desktop: 'Desktop', mobile: 'Mobile' }
 const OTHER_DEVICE: Record<RailDevice, RailDevice> = { desktop: 'mobile', mobile: 'desktop' }
@@ -159,9 +160,9 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
 
   const shown = drag.config || resolved.config
   const kind = scope ? resolved.kind : 'global'
-  const projectName = scope ? (projects.find(project => project.id === scope)?.name || 'this project') : ''
+  const projectName = scope ? (projects.find(project => project.id === scope)?.name || t("RailEditor.11453073e0")) : ''
   const contextProjectName = contextProjectId
-    ? projects.find(project => project.id === contextProjectId)?.name || 'Current project'
+    ? projects.find(project => project.id === contextProjectId)?.name || t("RailEditor.046b2d1d25")
     : ''
   const contextProjectKind = contextProjectId ? railProjectScopeKind(currentRailBlob(), contextProjectId) : 'global'
   /** Projects that hold something of their own. Recomputed with the resolution so
@@ -171,8 +172,8 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
     return byProjectName(projects, project => project.name)
       .map(project => ({ name: project.name, kind: railProjectScopeKind(blob, project.id) }))
       .filter(entry => entry.kind !== 'global')
-  }, [projects, resolved])
-  const catalogById = useMemo(() => new Map(shown.items.map(item => [item.id, item])), [shown])
+  }, [projects, resolved, uiLocale.value, catalogRevision.value])
+  const catalogById = useMemo(() => new Map(shown.items.map(item => [item.id, item])), [shown, uiLocale.value, catalogRevision.value])
 
   const dismissIntro = () => {
     setShowIntro(false)
@@ -212,7 +213,7 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
       const placed = RAIL_SURFACES.filter(surface => counts[name][surface] > 0)
       if (placed.length) parts.push(`${DEVICE_LABEL[name]} ${placed.map(surface => SURFACE_LABEL[surface].toLowerCase()).join(' + ')}`)
     }
-    return parts.length ? parts.join(' · ') : 'not placed'
+    return parts.length ? parts.join(' · ') : t("RailEditor.24290801db")
   }
 
   const toggleBackend = (item: RailItem, backend: RailBackend) => {
@@ -280,16 +281,16 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
     const sharedRow = !resolved.projectRowIds.has(rowId)
     const mine = sharedRow && kind === 'delta' && isProjectRailPlacement(resolved, device, surface, rowId, itemId)
     const canHide = sharedRow && kind !== 'fork' && !!scope && !mine
-    const removeTitle = mine ? `Remove from ${projectName}’s copy of this row`
-      : sharedRow && !!scope ? 'Remove from the shared row — every project loses it'
-        : 'Remove from this row'
+    const removeTitle = mine ? t("RailEditor.995f9f988c", { value1: projectName })
+      : sharedRow && !!scope ? t("RailEditor.d109f9a4c5")
+        : t("RailEditor.4b97b824db")
     return <div
       key={key}
       class={`rail-chip${drag.key === key && drag.active ? ' dragging' : ''}${item ? '' : ' missing'}${filtered ? ' filtered' : ''}${mine ? ' project-owned' : ''}`}
       data-reorder-id={key}
       tabIndex={0}
       role="button"
-      title={`${label}${item ? ` — ${itemMeta(item)}` : ''}${mine ? `\nOnly ${projectName} has it here.` : ''}${filtered ? `\nHidden in ${previewBackend} sessions.` : ''}\nDrag to move. Arrows move it, Delete removes it.`}
+      title={t("RailEditor.f3c9b51a58", { label: label, value2: item ? ` — ${itemMeta(item)}` : '', value3: mine ? t("RailEditor.ed58f6e7e2", { value1: projectName }) : '', value4: filtered ? t("RailEditor.0f194aef29", { value1: previewBackend }) : '' })}
       onPointerDown={event => startDrag(event, { kind: 'chip', ref }, label)}
       onKeyDown={event => onChipKey(event, ref)}
     >
@@ -301,8 +302,8 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
         type="button"
         class="rail-chip-hide"
         tabIndex={-1}
-        aria-label={`Hide ${label} in ${projectName} only`}
-        title={`Hide it in ${projectName} only. The shared row keeps it for every other project.`}
+        aria-label={t("RailEditor.7073465482", { label: label, projectName: projectName })}
+        title={t("RailEditor.fbfdcc97b6", { projectName: projectName })}
         onPointerDown={event => event.stopPropagation()}
         onClick={() => commitBlob(hideScopedRailEntry(currentRailBlob(), scope, itemId, device, surface, rowId))}
       >⊘</button>}
@@ -310,7 +311,7 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
         type="button"
         class="rail-chip-remove"
         tabIndex={-1}
-        aria-label={`Remove ${label} from this row`}
+        aria-label={t("RailEditor.90ad42dd1d", { label: label })}
         title={removeTitle}
         onPointerDown={event => event.stopPropagation()}
         onClick={() => commitConfig(removeRailEntry(resolved.config, ref))}
@@ -327,14 +328,14 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
     return <div
       key={`ghost:${rowId}:${entry.index}:${entry.item}`}
       class="rail-chip ghost"
-      title={`${label} — hidden in ${projectName}. The shared row still has it for every other project.`}
+      title={t("RailEditor.adbd50364f", { label: label, projectName: projectName })}
     >
       <span class="rail-chip-label">{item ? renderItemPreview(item, label) : label}</span>
       <button
         type="button"
         class="rail-chip-hide"
-        aria-label={`Show ${label} in ${projectName} again`}
-        title="Show it here again"
+        aria-label={t("RailEditor.78aa2c5ef6", { label: label, projectName: projectName })}
+        title={t("RailEditor.1dbe546818")}
         onClick={() => commitBlob(unhideScopedRailEntry(currentRailBlob(), scope, entry.item, device, surface, rowId))}
       >+</button>
     </div>
@@ -345,21 +346,21 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
     const hidden = resolved.hiddenEntries.get(railRowKey(device, surface, row.id)) || []
     return <article class={`rail-row-editor${projectRow ? ' project-owned' : ''}`} key={row.id}>
       <div class="rail-row-head">
-        {scope && kind !== 'fork' && <span class={`rail-origin${projectRow ? ' project' : ''}`} title={projectRow ? `Only ${projectName} has this row` : 'Shared with every project — edits here change all of them'}>{projectRow ? 'this project' : 'shared'}</span>}
+        {scope && kind !== 'fork' && <span class={`rail-origin${projectRow ? ' project' : ''}`} title={projectRow ? t("RailEditor.994c7a6b7f", { projectName: projectName }) : t("RailEditor.dbe3c6072a")}>{projectRow ? t("RailEditor.11453073e0") : t("RailEditor.a4d2686801")}</span>}
         <input
           value={row.label || ''}
-          placeholder={`Row ${indexInGroup + 1}`}
-          aria-label={`Name for row ${indexInGroup + 1}`}
+          placeholder={t("RailEditor.b78831f446", { value1: indexInGroup + 1 })}
+          aria-label={t("RailEditor.f187ad1598", { value1: indexInGroup + 1 })}
           onChange={event => commitConfig(setRailRowLabel(resolved.config, device, surface, row.id, event.currentTarget.value))}
         />
-        <button type="button" disabled={indexInGroup === 0} title="Move this row up" onClick={() => commitConfig(moveRailRow(resolved.config, device, surface, row.id, -1))}>↑</button>
-        <button type="button" disabled={indexInGroup === group.length - 1} title="Move this row down" onClick={() => commitConfig(moveRailRow(resolved.config, device, surface, row.id, 1))}>↓</button>
-        <button type="button" class="rail-del" title={group.length === 1 && !projectRow ? 'Empty this row' : 'Delete this row and everything in it'} onClick={() => commitConfig(removeRailRow(resolved.config, device, surface, row.id))}>×</button>
+        <button type="button" disabled={indexInGroup === 0} title={t("RailEditor.b3f30f2ec1")} onClick={() => commitConfig(moveRailRow(resolved.config, device, surface, row.id, -1))}>↑</button>
+        <button type="button" disabled={indexInGroup === group.length - 1} title={t("RailEditor.8746126b2d")} onClick={() => commitConfig(moveRailRow(resolved.config, device, surface, row.id, 1))}>↓</button>
+        <button type="button" class="rail-del" title={group.length === 1 && !projectRow ? t("RailEditor.68480dc41e") : t("RailEditor.c263ee662c")} onClick={() => commitConfig(removeRailRow(resolved.config, device, surface, row.id))}>×</button>
       </div>
-      <div class="rail-chips" data-rail-row={rowKey(device, surface, row.id)} role="group" aria-label={`${DEVICE_LABEL[device]} ${SURFACE_LABEL[surface]} row ${indexInGroup + 1}`}>
+      <div class="rail-chips" data-rail-row={rowKey(device, surface, row.id)} role="group" aria-label={t("RailEditor.53daa4604e", { value1: DEVICE_LABEL[device], value2: SURFACE_LABEL[surface], value3: indexInGroup + 1 })}>
         {row.items.map((itemId, index) => renderChip(surface, row.id, itemId, index))}
         {hidden.map(entry => renderGhost(surface, row.id, entry))}
-        {!row.items.length && !hidden.length && <span class="rail-chips-empty">drag actions here</span>}
+        {!row.items.length && !hidden.length && <span class="rail-chips-empty">{t("RailEditor.373aca10c0")}</span>}
       </div>
     </article>
   }
@@ -374,15 +375,15 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
         <h5>{SURFACE_LABEL[surface]}<small>{SURFACE_HINT[surface]}</small></h5>
         {kind !== 'delta' && <button
           type="button"
-          title={`Replace this device’s ${SURFACE_LABEL[surface].toLowerCase()} with a copy of ${DEVICE_LABEL[other]}’s. A one-shot copy — the two stay independent afterwards.`}
-          onClick={() => { commitConfig(copyRailSurface(resolved.config, other, device, surface)); setNote(`Copied ${DEVICE_LABEL[other]} ${SURFACE_LABEL[surface].toLowerCase()} to ${DEVICE_LABEL[device]}.`) }}
-        >Copy from {DEVICE_LABEL[other]}</button>}
-        <button type="button" title={scope && kind !== 'fork' ? 'Add another shared row (all projects)' : 'Add another row to this surface'} onClick={() => commitConfig(addRailRow(resolved.config, device, surface))}>+ Row</button>
+          title={t("RailEditor.83726c6cbb", { value1: SURFACE_LABEL[surface].toLowerCase(), value2: DEVICE_LABEL[other] })}
+          onClick={() => { commitConfig(copyRailSurface(resolved.config, other, device, surface)); setNote(t("RailEditor.17c441f3e5", { value1: DEVICE_LABEL[other], value2: SURFACE_LABEL[surface].toLowerCase(), value3: DEVICE_LABEL[device] })) }}
+        >{rich("RailEditor.2d27bc8b4b", { value1: DEVICE_LABEL[other] })}</button>}
+        <button type="button" title={scope && kind !== 'fork' ? t("RailEditor.e5154bd035") : t("RailEditor.a4363a3c95")} onClick={() => commitConfig(addRailRow(resolved.config, device, surface))}>{t("RailEditor.bb37c37cdd")}</button>
         {scope && kind !== 'fork' && <button
           type="button"
-          title={`Add a row only ${projectName} has. Project-only actions can live there.`}
+          title={t("RailEditor.da27af7af0", { projectName: projectName })}
           onClick={() => commitBlob(addProjectRailRow(currentRailBlob(), scope, device, surface))}
-        >+ Project row</button>}
+        >{t("RailEditor.28f09d9dee")}</button>}
       </header>
       {sharedRows.map((row, index) => renderRow(surface, row, index, sharedRows))}
       {projectRows.map((row, index) => renderRow(surface, row, index, projectRows))}
@@ -408,13 +409,13 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
         role="button"
         tabIndex={0}
         aria-expanded={expanded}
-        title={`${chipLabel(item) || item.id} — ${meta}\nClick for placement and session options. Drag into a row above to place it exactly.`}
+        title={t("RailEditor.3f50ae96a4", { value1: chipLabel(item) || item.id, meta: meta })}
         onPointerDown={event => startDrag(event, { kind: 'catalog', itemId: item.id }, chipLabel(item) || item.id)}
         onClick={() => { if (!justDragged()) setExpandedItem(expanded ? null : item.id) }}
         onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setExpandedItem(expanded ? null : item.id) } }}
       >
         <div class="rail-id">
-          <span class="rail-name">{renderItemPreview(item, chipLabel(item) || item.id)}{projectItem && <i class="rail-origin project" title={`Only ${projectName} has this action`}>this project</i>}</span>
+          <span class="rail-name">{renderItemPreview(item, chipLabel(item) || item.id)}{projectItem && <i class="rail-origin project" title={t("RailEditor.4b564ae7de", { projectName: projectName })}>{t("RailEditor.11453073e0")}</i>}</span>
           <small class="rail-meta" title={meta}>{meta}</small>
         </div>
         <small class={`rail-placement-summary${placed ? '' : ' off'}`}>{placementSummary(item.id)}</small>
@@ -422,26 +423,26 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
       </div>
       {expanded && <div class="rail-catalog-detail">
         <fieldset class="rail-detail-group rail-detail-appearance">
-          <legend>Button appearance</legend>
-          {railItemHasIcon(item.id) && <label>Display<Dropdown
+          <legend>{t("RailEditor.d2052a72d6")}</legend>
+          {railItemHasIcon(item.id) && <label>{rich("RailEditor.f20b1c7f2e", { value1: <Dropdown
             value={item.display || 'auto'}
             onChange={value => commitConfig(updateRailItemPresentation(resolved.config, item.id, { display: value as RailItemDisplay, displayLabel: item.displayLabel }))}
             options={[
-              { value: 'auto', label: 'Automatic (icon)' },
-              { value: 'icon', label: 'Icon only' },
-              { value: 'label', label: 'Label only' },
-              { value: 'icon-label', label: 'Icon + label' },
+              { value: 'auto', get label() { return t("RailEditor.aef8a41e91") } },
+              { value: 'icon', get label() { return t("RailEditor.7a0470083b") } },
+              { value: 'label', get label() { return t("RailEditor.af0b1b3355") } },
+              { value: 'icon-label', get label() { return t("RailEditor.2fb6f3914a") } },
             ]}
-          /></label>}
-          <label>Visible label<input
+          /> })}</label>}
+          <label>{rich("RailEditor.c11d8f0f80", { value1: <input
             value={item.displayLabel || ''}
             placeholder={chipLabel(item)}
             onInput={event => commitConfig(updateRailItemPresentation(resolved.config, item.id, { display: item.display, displayLabel: event.currentTarget.value }))}
-          /></label>
-          <div class="rail-appearance-preview"><span>Preview</span>{renderItemPreview(item)}</div>
+          /> })}</label>
+          <div class="rail-appearance-preview"><span>{t("RailEditor.324b134f57")}</span>{renderItemPreview(item)}</div>
         </fieldset>
         <fieldset class="rail-detail-group">
-          <legend>Where it appears</legend>
+          <legend>{t("RailEditor.731a510c93")}</legend>
           {RAIL_DEVICES.map(name => RAIL_SURFACES.map(surface => {
             const count = counts[name][surface]
             return <label class="check" key={`${name}-${surface}`}>
@@ -450,7 +451,7 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
                 checked={count > 0}
                 onChange={() => commitBlob(toggleScopedPlacement(currentRailBlob(), scope || undefined, resolvedRef.current, item.id, name, surface))}
               />
-              <span>{DEVICE_LABEL[name]} {SURFACE_LABEL[surface].toLowerCase()}{count > 1 ? ` (${count} copies)` : ''}</span>
+              <span>{DEVICE_LABEL[name]} {SURFACE_LABEL[surface].toLowerCase()}{count > 1 ? t("RailEditor.0f0302cfeb", { count: count }) : ''}</span>
             </label>
           }))}
         </fieldset>
@@ -462,25 +463,25 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
           onSlot={(slot, binding) => commitConfig(updateRailPadSlot(resolved.config, item.id, slot, binding))}
         />}
         <fieldset class="rail-detail-group">
-          <legend>Shown in these sessions</legend>
+          <legend>{t("RailEditor.caaf7d9250")}</legend>
           {backends.map(backend => <label class="check" key={backend}>
             <input
               type="checkbox"
               checked={itemBackends.includes(backend)}
               onChange={() => toggleBackend(item, backend)}
             />
-            <span>{backend === 'shell' ? 'Shell' : harnessDisplayName(backend)}</span>
+            <span>{backend === 'shell' ? t("RailEditor.a733285486") : harnessDisplayName(backend)}</span>
           </label>)}
         </fieldset>
         {custom && <fieldset class="rail-detail-group rail-detail-edit">
-          <legend>Edit</legend>
+          <legend>{t("RailEditor.464c4ffd01")}</legend>
           {/* A prompt button may have no name of its own: clearing the field hands
               the name back to the template, and it then follows every rename.
               Every other type needs a label, so an empty one is refused there. */}
-          <label>Button label<input
+          <label>{rich("RailEditor.caa4a06313", { value1: <input
             value={item.type === 'prompt' && item.autoLabel ? '' : item.label}
             placeholder={item.type === 'prompt' ? promptTitleOf(item) : undefined}
-            title={item.type === 'prompt' ? 'Leave empty to use the template’s own title, which then follows it when the template is renamed' : undefined}
+            title={item.type === 'prompt' ? t("RailEditor.c71d7f5bcf") : undefined}
             onChange={event => {
               const typed = event.currentTarget.value.trim()
               if (item.type !== 'prompt') { editCustomItem(item.id, { label: typed || item.label }); return }
@@ -488,15 +489,15 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
                 ? { label: typed, autoLabel: false }
                 : { label: promptTitleOf(item), autoLabel: true })
             }}
-          /></label>
-          {item.type !== 'prompt' && <label>{item.type === 'text' ? 'Text to insert' : 'Name'}<input value={item.text || ''} onChange={event => editCustomItem(item.id, { text: event.currentTarget.value })} /></label>}
-          {item.type !== 'prompt' && <label class="check"><input type="checkbox" checked={!!item.submit} onChange={event => editCustomItem(item.id, { submit: event.currentTarget.checked })} /><span>Press Enter after inserting</span></label>}
+          /> })}</label>
+          {item.type !== 'prompt' && <label>{item.type === 'text' ? t("RailEditor.bc471a63ce") : t("RailEditor.dcd1d5223f")}<input value={item.text || ''} onChange={event => editCustomItem(item.id, { text: event.currentTarget.value })} /></label>}
+          {item.type !== 'prompt' && <label class="check"><input type="checkbox" checked={!!item.submit} onChange={event => editCustomItem(item.id, { submit: event.currentTarget.checked })} /><span>{t("RailEditor.1fe364c2ed")}</span></label>}
           <button
             type="button"
             class="rail-del"
-            title="Delete this action and every button pointing at it"
+            title={t("RailEditor.ba45db776f")}
             onClick={() => { setExpandedItem(null); commitBlob(removeScopedRailItem(currentRailBlob(), scope || undefined, item.id)) }}
-          >Delete action</button>
+          >{t("RailEditor.671fa3c0d3")}</button>
         </fieldset>}
       </div>}
     </article>
@@ -504,28 +505,28 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
 
   return <section class="commandrail-settings" ref={rootRef}>
     {showIntro && <div class="rail-intro-callout" role="note">
-      <strong>How this works</strong>
+      <strong>{t("RailEditor.bdbd7706de")}</strong>
       <ul>
-        <li><b>Rail</b> is the button strip under every terminal. Its drawer button opens the complete row when horizontal space is tight.</li>
-        <li>Desktop and mobile each keep their own arrangement. Pick a device, then drag buttons between rows, or remove them with ×.</li>
-        <li>Everything that can be placed lives under <b>All actions</b> below — open one to choose where it appears and which sessions show it.</li>
+        <li>{rich("RailEditor.b02e1db1e4", { value1: <b>{t("RailEditor.8b270e3335")}</b> })}</li>
+        <li>{t("RailEditor.4e9b0ec1a2")}</li>
+        <li>{rich("RailEditor.dddb041ef5", { value1: <b>{t("RailEditor.83140cf130")}</b> })}</li>
       </ul>
-      <button type="button" onClick={dismissIntro}>Got it</button>
+      <button type="button" onClick={dismissIntro}>{t("RailEditor.5ad3dbd124")}</button>
     </div>}
     <div class="rail-toolbar">
-      <label class="rail-scope">Editing<Dropdown value={scope} filter filterPlaceholder="Filter Projects…" onChange={value => { setScope(value); setExpandedItem(null); setNote(''); setReattach(null) }} options={[
-        { value: '', label: 'Global (all projects)' },
+      <label class="rail-scope">{rich("RailEditor.4c9d9f0f29", { value1: <Dropdown value={scope} filter filterPlaceholder={t("RailEditor.2e0060c45e")} onChange={value => { setScope(value); setExpandedItem(null); setNote(''); setReattach(null) }} options={[
+        { value: '', get label() { return t("RailEditor.46c53fb7ee") } },
         // Ordered by the Project's own name, not by the suffix the scope kind appends, so
         // "swe-mux (detached)" still files under S.
         ...byProjectName(projects, project => project.name).map(project => {
           const projectKind = railProjectScopeKind(currentRailBlob(), project.id)
           return {
             value: project.id,
-            label: `${project.name}${projectKind === 'fork' ? ' (detached)' : projectKind === 'delta' ? ' (has additions)' : ''}`,
+            get label() { return t("RailEditor.61a353b6d2", { name: project.name, value2: projectKind === 'fork' ? ' (detached)' : projectKind === 'delta' ? ' (has additions)' : '' }) },
           }
         }),
-      ]}/></label>
-      <div class="rail-device-switch" role="group" aria-label="Device layout to edit">
+      ]}/> })}</label>
+      <div class="rail-device-switch" role="group" aria-label={t("RailEditor.1ef89bfc74")}>
         {RAIL_DEVICES.map(name => <button
           type="button"
           class={device === name ? 'on' : ''}
@@ -533,66 +534,50 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
           onClick={() => setDevice(name)}
         >{DEVICE_LABEL[name]}</button>)}
       </div>
-      <label class="rail-preview-as">Preview as<Dropdown value={previewBackend} onChange={setPreviewBackend} title="Dim the actions a session of this type would not show" options={[
-        { value: '', label: 'all sessions' },
-        ...backends.map(backend => ({ value: backend, label: backend === 'shell' ? 'Shell' : harnessDisplayName(backend) })),
-      ]}/></label>
+      <label class="rail-preview-as">{rich("RailEditor.17463d44c4", { value1: <Dropdown value={previewBackend} onChange={setPreviewBackend} title={t("RailEditor.3983e667a2")} options={[
+        { value: '', get label() { return t("RailEditor.8711ba8489") } },
+        ...backends.map(backend => ({ value: backend, label: backend === 'shell' ? t("RailEditor.a733285486") : harnessDisplayName(backend) })),
+      ]}/> })}</label>
       <span class="rail-toolbar-gap" />
       {!scope && contextProjectId && contextProjectKind !== 'fork' && <button
         type="button"
-        title={`Create a detached copy for ${contextProjectName} and switch to it. Later global edits will not affect that copy.`}
+        title={t("RailEditor.f4fd7562b3", { contextProjectName: contextProjectName })}
         onClick={() => {
           commitBlob(detachProjectRail(currentRailBlob(), contextProjectId))
           setScope(contextProjectId)
           setExpandedItem(null)
-          setNote(`${contextProjectName} now has a detached copy of the layout.`)
+          setNote(t("RailEditor.3059a4bcde", { value1: contextProjectName }))
         }}
-      >Detach {contextProjectName} to edit directly</button>}
+      >{rich("RailEditor.bef44b8c20", { contextProjectName: contextProjectName })}</button>}
       {scope && kind === 'fork' && <button
         type="button"
-        title="Work out how much of this detached copy the shared layout can carry, and reattach it so global edits reach this project again."
+        title={t("RailEditor.57c2b787cd")}
         onClick={() => { setReattach(planForkReattach(currentRailBlob(), scope)); setNote('') }}
-      >Reattach to global…</button>}
+      >{t("RailEditor.4654f97086")}</button>}
       {scope && kind !== 'fork' && <button
         type="button"
-        title="Freeze this project’s current layout as its own copy. It stops following global edits; “Use global layout” undoes it (dropping project changes)."
-        onClick={() => { commitBlob(detachProjectRail(currentRailBlob(), scope)); setNote(`${projectName} now has a detached copy of the layout.`) }}
-      >Detach from global</button>}
+        title={t("RailEditor.69b8d93d3b")}
+        onClick={() => { commitBlob(detachProjectRail(currentRailBlob(), scope)); setNote(t("RailEditor.3059a4bcde", { value1: projectName })) }}
+      >{t("RailEditor.bad2c0bcf2")}</button>}
       <button
         type="button"
         onClick={resetScope}
         disabled={!!scope && kind === 'global'}
-        title={!scope ? 'Restore the built-in layout and drop custom actions'
-          : kind === 'fork' ? 'Drop this project’s detached copy and follow the global layout again'
-            : kind === 'delta' ? 'Remove this project’s added rows and actions; the shared layout stays'
-              : 'This project has nothing project-specific yet'}
-      >{!scope ? 'Restore defaults' : kind === 'fork' ? 'Use global layout' : 'Remove project additions'}</button>
+        title={!scope ? t("RailEditor.5b56ef53bb") : kind === 'fork' ? t("RailEditor.18ab22a2dd") : kind === 'delta' ? t("RailEditor.74192b6196") : t("RailEditor.89889d20f4")}
+      >{!scope ? t("RailEditor.602f8e6370") : kind === 'fork' ? t("RailEditor.b3fcc81eb4") : t("RailEditor.1d03d53afc")}</button>
     </div>
     {/* The default view is Global, where a project's own rows, actions, splices and
         hides are simply not drawn — so a reader can look straight at "all actions"
         and conclude the fleet has none of them. This names where the rest is. */}
-    {!scope && !!scopedProjects.length && <p class="rail-scope-note">
-      {scopedProjects.length} {scopedProjects.length === 1 ? 'Project has' : 'Projects have'} their own version of this
-      layout: {scopedProjects.map(entry => `${entry.name} (${entry.kind === 'fork' ? 'detached' : 'additions'})`).join(', ')}.
-      Pick one above to see and edit it.
-    </p>}
-    {scope && <p class="rail-scope-note">{kind === 'fork'
-      ? `${projectName} has a detached copy. Edits here change only this project.`
-      : `Showing the shared layout${kind === 'delta' ? ` plus ${projectName}’s additions` : ''}. Edits to shared rows change every project; rows and actions marked “this project” stay here.`}</p>}
+    {!scope && !!scopedProjects.length && <p class="rail-scope-note">{rich("RailEditor.fdb1abbe84", { length: scopedProjects.length, value2: (scopedProjects.length === 1) ? 'yes' : 'no', value3: scopedProjects.map(entry => `${entry.name} (${entry.kind === 'fork' ? 'detached' : 'additions'})`).join(', ') })}</p>}
+    {scope && <p class="rail-scope-note">{kind === 'fork' ? t("RailEditor.7dbc775f28", { projectName: projectName }) : t("RailEditor.1f5816f777", { value1: kind === 'delta' ? ` plus ${projectName}’s additions` : '' })}</p>}
 
-    {reattach && <section class="rail-reattach" role="group" aria-label="Reattach this project to the shared layout">
-      <h5>Reattach {projectName} to the shared layout</h5>
+    {reattach && <section class="rail-reattach" role="group" aria-label={t("RailEditor.db1cdcc4a7")}>
+      <h5>{rich("RailEditor.f47335e120", { projectName: projectName })}</h5>
       <p>
-        {reattach.exact
-          ? 'The shared layout can carry this arrangement exactly. Nothing about the rail changes; what changes is that later shared edits reach this project again.'
-          : 'The shared layout carries most of this arrangement. What it cannot carry is listed below — read it before deciding.'}
+        {reattach.exact ? t("RailEditor.d7cca9b78d") : t("RailEditor.3690e01d53")}
       </p>
-      <p class="rail-add-note">
-        Kept as this project’s own: {reattach.counts.items} action{reattach.counts.items === 1 ? '' : 's'},{' '}
-        {reattach.counts.rows} row{reattach.counts.rows === 1 ? '' : 's'},{' '}
-        {reattach.counts.splices} button{reattach.counts.splices === 1 ? '' : 's'} placed in shared rows,{' '}
-        {reattach.counts.hides} hidden from them.
-      </p>
+      <p class="rail-add-note">{rich("RailEditor.832877bf2a", { items: reattach.counts.items, value2: (reattach.counts.items === 1) ? 'yes' : 'no', rows: reattach.counts.rows, value4: (reattach.counts.rows === 1) ? 'yes' : 'no', splices: reattach.counts.splices, value6: (reattach.counts.splices === 1) ? 'yes' : 'no', hides: reattach.counts.hides })}</p>
       {!!reattach.issues.length && <ul class="rail-reattach-issues">
         {reattach.issues.map((issue, index) => <li key={`${issue.kind}-${index}`}><b>{issue.subject}</b> — {issue.detail}</li>)}
       </ul>}
@@ -603,10 +588,10 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
           onClick={() => {
             commitBlob(applyForkReattach(currentRailBlob(), scope, reattach))
             setReattach(null)
-            setNote(`${projectName} now follows the shared layout again, keeping its own additions.`)
+            setNote(t("RailEditor.a77cfa2b57", { value1: projectName }))
           }}
-        >Reattach</button>
-        <button type="button" onClick={() => setReattach(null)}>Keep it detached</button>
+        >{t("RailEditor.34b27e9861")}</button>
+        <button type="button" onClick={() => setReattach(null)}>{t("RailEditor.8b1f066b9d")}</button>
       </div>
     </section>}
 
@@ -621,24 +606,24 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
       scopeName={projectName}
       onAdd={(item, target) => {
         commitBlob(addScopedRailItem(currentRailBlob(), scope || undefined, item, target))
-        setNote(`Added “${item.label}” to the Rail on both devices.`)
+        setNote(t("RailEditor.e397a6db13", { value1: item.label }))
       }}
     />
 
     <details class="rail-catalog">
-      <summary>All actions ({shown.items.length})<small>everything that can be placed, and where it is</small></summary>
+      <summary>{rich("RailEditor.be8a195982", { length: shown.items.length, value2: <small>{t("RailEditor.38b9b97ead")}</small> })}</summary>
       <div class="rail-catalog-tools">
         <input
           type="search"
           value={catalogQuery}
-          placeholder="Filter actions…"
-          aria-label="Filter actions"
+          placeholder={t("RailEditor.a3cde03c1c")}
+          aria-label={t("RailEditor.37dd87f0cd")}
           onInput={event => setCatalogQuery(event.currentTarget.value)}
         />
       </div>
       <div class="rail-catalog-list">
         {catalogItems.map(renderCatalogRow)}
-        {!catalogItems.length && <p class="rail-add-note">No action matches “{catalogQuery}”.</p>}
+        {!catalogItems.length && <p class="rail-add-note">{rich("RailEditor.79e942f47f", { catalogQuery: catalogQuery })}</p>}
       </div>
     </details>
 
@@ -647,10 +632,10 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
 }
 
 const TRIGGER_LABEL: Record<RailPadTriggerMode, string> = {
-  'enter': 'On entering the wedge',
-  'enter-repeat': 'On entering, repeating while held anywhere',
-  'enter-repeat-far': 'On entering, repeating only when pushed out',
-  'release': 'Only on release, in this wedge',
+  get 'enter'() { return t("RailEditor.aabfda4ae2") },
+  get 'enter-repeat'() { return t("RailEditor.fbe960a332") },
+  get 'enter-repeat-far'() { return t("RailEditor.9b4b1a3a10") },
+  get 'release'() { return t("RailEditor.cdc6b6573f") },
 }
 
 /**
@@ -702,13 +687,13 @@ function RailPadSlotEditor({ item, items, promptTitleOf, onShape, onSlot }: {
       <Dropdown
         value={binding?.item || ''}
         onChange={value => onSlot(key, { item: value || null, mode: binding?.mode })}
-        options={[{ value: '', label: '— empty —' }, ...choices]}
+        options={[{ value: '', get label() { return t("RailEditor.168c1a669c") } }, ...choices]}
       />
       {binding && <Dropdown
         value={binding.mode || ''}
         onChange={value => onSlot(key, { item: binding.item, mode: (value || undefined) as RailPadTriggerMode | undefined })}
         options={[
-          { value: '', label: `Automatic (${TRIGGER_LABEL[auto].toLowerCase()})` },
+          { value: '', get label() { return t("RailEditor.2e423a150a", { value1: TRIGGER_LABEL[auto].toLowerCase() }) } },
           // Repeat-on-push-out has no meaning on a ringed pad: the outer band is already a
           // different slot there. Offered only where it can actually happen, rather than
           // listed and then silently resolved to something else.
@@ -717,8 +702,8 @@ function RailPadSlotEditor({ item, items, promptTitleOf, onShape, onSlot }: {
             .map(value => ({ value, label: TRIGGER_LABEL[value] })),
         ]}
       />}
-      {binding && mode === 'release' && <small class="rail-pad-cell-note">Fires on release, so dragging back out cancels it.</small>}
-      {binding && mode === 'enter-repeat-far' && <small class="rail-pad-cell-note">One send anywhere in the wedge; push past the outer band for a stream.</small>}
+      {binding && mode === 'release' && <small class="rail-pad-cell-note">{t("RailEditor.7867a44643")}</small>}
+      {binding && mode === 'enter-repeat-far' && <small class="rail-pad-cell-note">{t("RailEditor.2684d2b08b")}</small>}
     </div>
   }
 
@@ -733,37 +718,29 @@ function RailPadSlotEditor({ item, items, promptTitleOf, onShape, onSlot }: {
   }
 
   return <fieldset class="rail-detail-group rail-pad-editor">
-    <legend>Wedges</legend>
-    <label>Wedges<Dropdown
+    <legend>{t("RailEditor.f458616540")}</legend>
+    <label>{rich("RailEditor.eb6fd64d5d", { value1: <Dropdown
       value={String(wedges)}
       onChange={value => onShape({ wedges: Number(value) })}
-      title="How many ways the fan above the chip is divided"
+      title={t("RailEditor.e0b375df0e")}
       options={Array.from({ length: RAIL_PAD_MAX_WEDGES }, (_, index) => ({
         value: String(index + 1),
-        label: `${index + 1}`,
+        get label() { return t("RailEditor.eff53e36f5", { value1: index + 1 }) },
       }))}
-    /></label>
-    <label>Rings<Dropdown
+    /> })}</label>
+    <label>{rich("RailEditor.11f025f204", { value1: <Dropdown
       value={String(rings)}
       onChange={value => onShape({ rings: Number(value) })}
-      title="A second ring doubles the slots without using more angle, but everything on a ringed pad waits for the lift"
+      title={t("RailEditor.bfe62713a3")}
       options={[
-        { value: '1', label: '1 — fires as you cross in' },
-        { value: '2', label: '2 — fires on release' },
+        { value: '1', get label() { return t("RailEditor.0d6f8f2cb1") } },
+        { value: '2', get label() { return t("RailEditor.eaa48c5f1f") } },
       ]}
-    /></label>
+    /> })}</label>
     {rows.map((row, index) => <div class="rail-pad-grid" key={index} style={{ gridTemplateColumns: `repeat(${wedges}, minmax(0, 1fr))` }}>
       {row.map(slotCell)}
     </div>)}
-    <p class="rail-add-note">
-      Press the chip and drag a wedge; pull straight down to cancel. Tap it instead and the
-      dial stays up, so you can read the wedges and tap one — every slot is a wedge, and a tap
-      opens rather than running anything. An empty wedge is inert, which also makes it a safe
-      place to abort into, and a wedge whose action this session does not offer goes dim where
-      it is rather than letting the others move.
-      {rings > 1 && ' Reaching the far ring crosses the near one, which is why a ringed pad waits for the lift rather than firing on the way past.'}
-      {wedges >= 5 && ' Five wedges is ±22° each: easy enough to hit while looking at the dial, harder without.'}
-    </p>
+    <p class="rail-add-note">{rich("RailEditor.557183692f", { value1: rings > 1 && t("RailEditor.2148ba0fc7"), value2: wedges >= 5 && t("RailEditor.33fe30f9e2") })}</p>
   </fieldset>
 }
 
@@ -840,56 +817,38 @@ function RailAddForm({ items, prompts, projectName, scopeName, onAdd }: {
   }
 
   return <details class="rail-add">
-    <summary>Add custom action<small>a skill, slash command, text macro, prompt-template button, or pad</small></summary>
+    <summary>{rich("RailEditor.6fafe24ad6", { value1: <small>{t("RailEditor.598246f83f")}</small> })}</summary>
     <div class="rail-add-form">
-      <label>Type<Dropdown value={draft.type} onChange={value => setDraft({ ...draft, type: value as RailItemType })} options={[
-        { value: 'skill', label: 'Skill' },
-        { value: 'slash', label: 'Slash command' },
-        { value: 'text', label: 'Text macro' },
-        { value: 'prompt', label: 'Prompt template' },
-        { value: 'pad', label: 'Pad (four actions in one chip)' },
-      ]}/></label>
-      {draft.type === 'pad'
-        ? <label>Button label<input value={draft.name} placeholder="Jump" onInput={event => setDraft({ ...draft, name: event.currentTarget.value })} /></label>
-        : draft.type === 'prompt'
-        ? <label>Template<Dropdown value={draft.name} onChange={value => setDraft({ ...draft, name: value })} options={[
-          { value: '', label: 'Choose a template…' },
+      <label>{rich("RailEditor.1fcbc7e095", { value1: <Dropdown value={draft.type} onChange={value => setDraft({ ...draft, type: value as RailItemType })} options={[
+        { value: 'skill', get label() { return t("RailEditor.6df1bb18a5") } },
+        { value: 'slash', get label() { return t("RailEditor.85dec3aee0") } },
+        { value: 'text', get label() { return t("RailEditor.744fe34f1e") } },
+        { value: 'prompt', get label() { return t("RailEditor.abae9cbc1b") } },
+        { value: 'pad', get label() { return t("RailEditor.c98326fde5") } },
+      ]}/> })}</label>
+      {draft.type === 'pad' ? <label>{rich("RailEditor.caa4a06313", { value1: <input value={draft.name} placeholder={t("RailEditor.9ee0ca3e24")} onInput={event => setDraft({ ...draft, name: event.currentTarget.value })} /> })}</label> : draft.type === 'prompt' ? <label>{rich("RailEditor.79c8b33c8e", { value1: <Dropdown value={draft.name} onChange={value => setDraft({ ...draft, name: value })} options={[
+          { value: '', get label() { return t("RailEditor.8689580b81") } },
           // Every row says which library it is in, because a Project template
           // only resolves inside that Project and the title alone cannot say so.
           ...prompts.map(template => ({
             value: template.key,
-            label: `${template.favorite ? '★ ' : ''}${template.title} · ${template.scope === 'project' ? (template.project_name || 'project') : 'global'}${template.variables.length ? ` · ${template.variables.length} field${template.variables.length === 1 ? '' : 's'}` : ''}`,
+            get label() { return t("RailEditor.c5725bfc26", { value1: (template.favorite) ? 'yes' : 'no', title: template.title, value3: template.scope === 'project' ? (template.project_name || 'project') : 'global', value4: template.variables.length ? ` · ${template.variables.length} field${template.variables.length === 1 ? '' : 's'}` : '' }) },
           })),
-        ]}/></label>
-        : <label>{draft.type === 'text' ? 'Text to insert' : 'Name'}<input value={draft.name} placeholder={draft.type === 'skill' ? 'commit' : draft.type === 'slash' ? 'new' : 'literal text'} onInput={event => setDraft({ ...draft, name: event.currentTarget.value })} /></label>}
-      {draft.type !== 'pad' && <label>Button label<input value={draft.label} placeholder="(auto)" onInput={event => setDraft({ ...draft, label: event.currentTarget.value })} /></label>}
-      {projectName && <label>For<Dropdown value={draft.target} onChange={value => setDraft({ ...draft, target: value as RailAddTarget })} options={[
-        { value: 'project', label: `${projectName} only` },
-        { value: 'global', label: 'All projects' },
-      ]}/></label>}
-      {draft.type !== 'prompt' && draft.type !== 'pad' && <label class="check"><span>Submit with Enter</span><input type="checkbox" checked={draft.submit} onChange={event => setDraft({ ...draft, submit: event.currentTarget.checked })} /></label>}
-      <button class="primary" type="button" disabled={!draft.name.trim()} onClick={add}>Add action</button>
+        ]}/> })}</label> : <label>{draft.type === 'text' ? t("RailEditor.bc471a63ce") : t("RailEditor.dcd1d5223f")}<input value={draft.name} placeholder={draft.type === 'skill' ? t("RailEditor.9505cacb7c") : draft.type === 'slash' ? t("RailEditor.11507a0e2f") : t("RailEditor.2fff2f99e1")} onInput={event => setDraft({ ...draft, name: event.currentTarget.value })} /></label>}
+      {draft.type !== 'pad' && <label>{rich("RailEditor.caa4a06313", { value1: <input value={draft.label} placeholder={t("RailEditor.45961044b3")} onInput={event => setDraft({ ...draft, label: event.currentTarget.value })} /> })}</label>}
+      {projectName && <label>{rich("RailEditor.44945c9c85", { value1: <Dropdown value={draft.target} onChange={value => setDraft({ ...draft, target: value as RailAddTarget })} options={[
+        { value: 'project', get label() { return t("RailEditor.159b2bb5dd", { projectName: projectName }) } },
+        { value: 'global', get label() { return t("RailEditor.4b87271b6b") } },
+      ]}/> })}</label>}
+      {draft.type !== 'prompt' && draft.type !== 'pad' && <label class="check"><span>{t("RailEditor.713ac73bd5")}</span><input type="checkbox" checked={draft.submit} onChange={event => setDraft({ ...draft, submit: event.currentTarget.checked })} /></label>}
+      <button class="primary" type="button" disabled={!draft.name.trim()} onClick={add}>{t("RailEditor.6390ba9cbb")}</button>
     </div>
-    {draft.type === 'pad' && <p class="rail-add-note">
-      A pad is one chip holding up to four actions plus a centre, each reached by pressing it
-      and dragging that way. It arrives empty: open it under “All actions” below to bind its
-      directions, choose corners instead of up/down/left/right, and set which of them repeat
-      while held or wait for release.
-    </p>}
-    {draft.type === 'prompt' && <p class="rail-add-note">{prompts.length
-      ? 'A prompt button points at the template, so editing the template updates the button - including its name, unless you give the button one here. It inserts without sending; templates with {{fields}} open Prompt templates in Actions to be filled in first.'
-      : 'No prompt templates yet. Create one from Actions → Prompt templates → Manage, then it appears here.'}</p>}
+    {draft.type === 'pad' && <p class="rail-add-note">{t("RailEditor.1009ea1b3b")}</p>}
+    {draft.type === 'prompt' && <p class="rail-add-note">{prompts.length ? t("RailEditor.defdcca55f") : t("RailEditor.f298b9d2cc")}</p>}
     {/* Why a Project's templates are absent here, said in place. Structural rather
         than a warning, because the alternative is a button that inserts nothing in
         every other Project (`prompt-library.md`). */}
-    {draft.type === 'prompt' && !scopeName && <p class="rail-add-note">
-      Only global templates are listed while the shared layout is open. A Project’s own templates
-      belong on that Project’s layout — pick it in “Editing” above.
-    </p>}
-    <p class="rail-add-note">
-      Add skills and prompt templates here when they need dedicated rail buttons.
-      Skills inject <code>/name</code> in Claude and <code>$name</code> in Codex; slash commands
-      inject <code>/name</code> in both. Built-in actions can be placed and filtered, but not edited.
-    </p>
+    {draft.type === 'prompt' && !scopeName && <p class="rail-add-note">{t("RailEditor.d1b04b1b6d")}</p>}
+    <p class="rail-add-note">{rich("RailEditor.b68a4fadcd", { value1: <code>{t("RailEditor.76bb045a39")}</code>, value2: <code>{t("RailEditor.38a30440f2")}</code>, value3: <code>{t("RailEditor.76bb045a39")}</code> })}</p>
   </details>
 }

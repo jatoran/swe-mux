@@ -9,6 +9,8 @@ import time
 import urllib.error
 import urllib.request
 
+from .ui_messages import ui_message
+
 # Events whose loss leaves a session misrepresented until something else happens
 # to correct it; when the POST cannot be delivered they are spooled to disk for
 # the daemon to replay. Tool-use events are self-correcting and not persisted.
@@ -279,7 +281,7 @@ def _status_line(identity: dict[str, str], url: str | None, secret: str | None) 
         report = {
             "ok": False,
             "exit_code": None,
-            "error": "no status line command in identity",
+            "error": ui_message("hook_client.0da7e816bd"),
             "elapsed_ms": 0,
         }
     if not url or not secret:

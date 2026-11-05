@@ -61,6 +61,7 @@ from .sqlite_store import (
     write_schema_version,
 )
 from .terminal_core import WriteCondition, WriteRefused
+from .ui_messages import ui_message
 
 T = TypeVar("T")
 
@@ -588,9 +589,7 @@ class PromptQueueStore:
         )
         for name, declaration in additions:
             if name not in columns:
-                self._db.execute(
-                    f"ALTER TABLE queue_messages ADD COLUMN {name} {declaration}"
-                )
+                self._db.execute(f"ALTER TABLE queue_messages ADD COLUMN {name} {declaration}")
         delivery_columns = {
             str(row["name"])
             for row in self._db.execute("PRAGMA table_info(queue_deliveries)").fetchall()
@@ -723,9 +722,7 @@ class PromptQueueStore:
             ).fetchall()
             ordered_ids = [str(row["id"]) for row in rows]
         for index, message_id in enumerate(ordered_ids):
-            self._db.execute(
-                "UPDATE queue_messages SET position=? WHERE id=?", (index, message_id)
-            )
+            self._db.execute("UPDATE queue_messages SET position=? WHERE id=?", (index, message_id))
 
     # -- message lifecycle ----------------------------------------------------
 
@@ -1036,9 +1033,7 @@ class PromptQueueStore:
                     )
                 ordered.insert(ordered.index(after) + 1, message_id)
             self._renumber(target, ordered)
-            self._db.execute(
-                "UPDATE queue_messages SET updated_at=? WHERE id=?", (now, message_id)
-            )
+            self._db.execute("UPDATE queue_messages SET updated_at=? WHERE id=?", (now, message_id))
             self._db.commit()
             fresh = self._db.execute(
                 "SELECT * FROM queue_messages WHERE id=?", (message_id,)
@@ -1498,9 +1493,7 @@ class PromptQueueStore:
 
         return await self._run(op)
 
-    async def sender_message_count(
-        self, sender_kind: str, sender_id: str, since: float
-    ) -> int:
+    async def sender_message_count(self, sender_kind: str, sender_id: str, since: float) -> int:
         """How many messages one origin has staged since ``since`` (per-origin budget)."""
 
         def op() -> int:
@@ -1570,9 +1563,7 @@ class PromptQueueStore:
 
         return await self._run(op)
 
-    async def pending_from_sender_kind(
-        self, target_session_id: str, sender_kind: str
-    ) -> int:
+    async def pending_from_sender_kind(self, target_session_id: str, sender_kind: str) -> int:
         """Outstanding pending items of one sender kind aimed at a target."""
 
         def op() -> int:
@@ -1701,9 +1692,7 @@ class PromptQueueStore:
                     placeholders = ",".join("?" * len(ids))
                     query += f" AND session_id IN ({placeholders})"
                     params.extend(ids)
-                rows = self._db.execute(
-                    query + " ORDER BY updated_at DESC", params
-                ).fetchall()
+                rows = self._db.execute(query + " ORDER BY updated_at DESC", params).fetchall()
                 return self._remember(key, tuple(dict(row) for row in rows))
 
             cached = await self._run(op)
@@ -1838,8 +1827,7 @@ class PromptQueueStore:
                 )
             else:
                 self._db.execute(
-                    "UPDATE queue_auto_policy SET sends_used=0, updated_at=?"
-                    " WHERE session_id=?",
+                    "UPDATE queue_auto_policy SET sends_used=0, updated_at=? WHERE session_id=?",
                     (now, session_id),
                 )
             self._db.commit()
@@ -1880,9 +1868,7 @@ class PromptQueueStore:
         if cached is _MISS:
 
             def op() -> dict[str, float]:
-                rows = self._db.execute(
-                    "SELECT name, value FROM queue_auto_counters"
-                ).fetchall()
+                rows = self._db.execute("SELECT name, value FROM queue_auto_counters").fetchall()
                 return self._remember(
                     "counters", {str(row["name"]): float(row["value"]) for row in rows}
                 )
@@ -1922,9 +1908,7 @@ class PromptQueueStore:
 
         return await self._run(op)
 
-    async def strand_pending(
-        self, target_session_id: str, reason: str
-    ) -> list[dict[str, Any]]:
+    async def strand_pending(self, target_session_id: str, reason: str) -> list[dict[str, Any]]:
         """Strand every pending item for an ended/replaced target.
 
         A ``delivering`` item is different: its PTY write may or may not have
@@ -1998,9 +1982,7 @@ class PromptQueueStore:
             ids = [str(row["id"]) for row in rows]
             for message_id in ids:
                 self._db.execute("DELETE FROM queue_messages WHERE id=?", (message_id,))
-                self._db.execute(
-                    "DELETE FROM queue_deliveries WHERE message_id=?", (message_id,)
-                )
+                self._db.execute("DELETE FROM queue_deliveries WHERE message_id=?", (message_id,))
             self._db.execute("DELETE FROM queue_deliveries WHERE created_at<?", (cutoff,))
             self._db.commit()
 
@@ -2077,9 +2059,7 @@ class PromptQueueService:
                     # into the successor is exactly the silent retarget the
                     # bind-on-first-run rule forbids, and before the run boundary
                     # existed this was the one way to get it.
-                    await self._strand(
-                        event.session_id, "target agent conversation was replaced"
-                    )
+                    await self._strand(event.session_id, "target agent conversation was replaced")
 
     async def _reconcile_startup(self) -> None:
         """After adoption, strand pending items whose target did not survive.
@@ -2122,9 +2102,7 @@ class PromptQueueService:
         for item in changed:
             await self._emit_updated(item["id"], target_session_id, str(item["state"]))
 
-    async def _emit_updated(
-        self, message_id: str, target_session_id: str, state: str
-    ) -> None:
+    async def _emit_updated(self, message_id: str, target_session_id: str, state: str) -> None:
         summary = await self.store.messages_for_target(target_session_id)
         self.events.emit_background(
             "queue_updated",
@@ -2215,7 +2193,7 @@ class PromptQueueService:
         while time.monotonic() < deadline:
             await asyncio.sleep(SUBMIT_CONFIRM_POLL_SECONDS)
             if str(getattr(session.record, "state", "")) in {"exited", "crashed"}:
-                raise RuntimeError("the target session ended during delivery")
+                raise RuntimeError(ui_message("prompt_queue.174e21c282"))
             if self._turn_began(session, baseline):
                 return True
         return False
@@ -2255,7 +2233,7 @@ class PromptQueueService:
             if self._turn_began(session, baseline):
                 return True
             if str(getattr(session.record, "state", "")) in {"exited", "crashed"}:
-                raise RuntimeError("the target session ended during delivery")
+                raise RuntimeError(ui_message("prompt_queue.174e21c282"))
             await self._write(session, SUBMIT_SEQUENCE)
             if await self._await_turn(session, baseline):
                 return True
@@ -2350,18 +2328,14 @@ class PromptQueueService:
             insert_after=insert_after,
         )
         if not message.get("deduplicated"):
-            await self._emit_updated(
-                message["id"], target_session_id, str(message["state"])
-            )
+            await self._emit_updated(message["id"], target_session_id, str(message["state"]))
         return message
 
     async def set_constraints(
         self, message_id: str, constraints: dict[str, Any] | None
     ) -> dict[str, Any]:
         """Schedule/expire a pending item (Phase 5 time-based delivery)."""
-        message = await self.store.set_constraints(
-            message_id, normalize_constraints(constraints)
-        )
+        message = await self.store.set_constraints(message_id, normalize_constraints(constraints))
         await self._emit_updated(
             message_id, str(message["target_session_id"]), str(message["state"])
         )
@@ -2422,9 +2396,7 @@ class PromptQueueService:
     async def delete(self, message_id: str) -> dict[str, Any]:
         result = await self.store.delete_message(message_id)
         if not result["already_deleted"]:
-            await self._emit_updated(
-                message_id, str(result["target_session_id"]), "deleted"
-            )
+            await self._emit_updated(message_id, str(result["target_session_id"]), "deleted")
         return result
 
     async def retarget(self, message_id: str, *, target_session_id: str) -> dict[str, Any]:
@@ -2684,7 +2656,7 @@ class PromptQueueService:
         try:
             await asyncio.sleep(self._paste_settle(byte_count, session.record.backend))
             if session.record.state in {"exited", "crashed"}:
-                raise RuntimeError("the target session ended during delivery")
+                raise RuntimeError(ui_message("prompt_queue.174e21c282"))
             submitted = await self._submit(session, message_id, byte_count)
             # Who asked, recorded at the only moment it is knowable. The CLI is
             # about to fire a submit hook indistinguishable from one a person
@@ -2778,10 +2750,7 @@ class PromptQueueService:
         session = self.sessions.sessions.get(target_session_id)
         view["target"] = {
             "session_id": target_session_id,
-            "live": bool(
-                session is not None
-                and session.record.state not in {"exited", "crashed"}
-            ),
+            "live": bool(session is not None and session.record.state not in {"exited", "crashed"}),
             "agent_run_id": session.record.agent_run_id if session else None,
             "label": session.record.name if session else None,
             "state": session.record.state if session else None,
@@ -2862,9 +2831,7 @@ def normalize_constraints(constraints: Any) -> dict[str, Any] | None:
         if value is None:
             continue
         if not isinstance(value, int | float):
-            raise QueueError(
-                "invalid_constraints", f"{key} must be epoch seconds", status=400
-            )
+            raise QueueError("invalid_constraints", f"{key} must be epoch seconds", status=400)
         moment = float(value)
         if moment > now + MAX_SCHEDULE_HORIZON_SECONDS:
             raise QueueError(
@@ -2879,9 +2846,7 @@ def normalize_constraints(constraints: Any) -> dict[str, Any] | None:
         and "expires_at" in result
         and result["expires_at"] <= result["not_before"]
     ):
-        raise QueueError(
-            "invalid_constraints", "expires_at must be after not_before", status=400
-        )
+        raise QueueError("invalid_constraints", "expires_at must be after not_before", status=400)
     delivery = constraints.get("delivery")
     if delivery is not None:
         if delivery not in DELIVERY_MODES:

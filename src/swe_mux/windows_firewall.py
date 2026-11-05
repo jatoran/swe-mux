@@ -32,6 +32,7 @@ from pathlib import PureWindowsPath
 from typing import Any
 
 from .bounded_subprocess import run_bounded
+from .ui_messages import ui_message
 
 #: The inspection script prints one JSON document describing a handful of rules.
 _POWERSHELL_OUTPUT_LIMIT = 1024 * 1024
@@ -44,9 +45,7 @@ TAILNET_IPV4 = ipaddress.ip_network("100.64.0.0/10")
 
 FIREWALL_RULE_NAME = "swe-mux Mobile"
 FIREWALL_RULE_DISPLAY_NAME = "swe-mux Mobile Access"
-FIREWALL_RULE_DESCRIPTION = (
-    "Allows a phone on this tailnet to reach swe-mux on private networks."
-)
+FIREWALL_RULE_DESCRIPTION = "Allows a phone on this tailnet to reach swe-mux on private networks."
 
 # The WSL bridge needs its own rule, and for the same reason the tailnet one
 # exists: swe-mux binds a real host socket on the WSL virtual adapter, and
@@ -139,15 +138,15 @@ def scope_covers_tailnet(scope: Any) -> bool:
     if parsed is None:
         return False
     start, end = parsed
-    return start <= int(TAILNET_IPV4.network_address) and end >= int(
-        TAILNET_IPV4.broadcast_address
-    )
+    return start <= int(TAILNET_IPV4.network_address) and end >= int(TAILNET_IPV4.broadcast_address)
 
 
 def _has_sufficient_scope(matching_rule_scopes: Any) -> bool:
     # Coverage is checked per rule, never unioned across rules: this advisory
     # check fails safe, so accepting fragmented rules would only add risk.
-    rules = matching_rule_scopes if isinstance(matching_rule_scopes, list) else [matching_rule_scopes]
+    rules = (
+        matching_rule_scopes if isinstance(matching_rule_scopes, list) else [matching_rule_scopes]
+    )
     for rule in rules:
         if not isinstance(rule, dict):
             continue
@@ -305,11 +304,7 @@ def _unavailable_status(
         "needs_repair": False,
         "private_firewall_enabled": True,
         "network_category": "unknown",
-        "detail": (
-            "swe-mux could not inspect Windows Defender Firewall on this machine. "
-            "You can still run the repair to add an inbound Allow rule for the direct "
-            "100.x fallback."
-        ),
+        "detail": (ui_message("windows_firewall.01a70d8d65")),
     }
 
 
@@ -452,7 +447,7 @@ async def _run_powershell(script: str, timeout: float) -> str:  # noqa: ASYNC109
     encoded = _encode_powershell(script)
     outcome = await run_bounded(
         [powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
-        label="powershell-firewall",
+        label=ui_message("windows_firewall.b319277b10"),
         timeout_seconds=timeout,
         output_limit=_POWERSHELL_OUTPUT_LIMIT,
         stderr_limit=_POWERSHELL_STDERR_LIMIT,

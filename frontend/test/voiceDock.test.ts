@@ -1,3 +1,4 @@
+import { withCatalogText } from './support/localizedSource.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -14,7 +15,7 @@ const dir = join(import.meta.dirname, '..', 'src')
 // working copy checked out through autocrlf (any fresh merge checkout on
 // Windows) reads back CRLF, which silently breaks an indexOf bound into -1 and
 // turns a scoped slice into "the rest of the file".
-const read = (name: string) => readFileSync(join(dir, name), 'utf8').replace(/\r\n/g, '\n')
+const read = (name: string) => withCatalogText(readFileSync(join(dir, name), 'utf8')).replace(/\r\n/g, '\n')
 const control = read('ConversationControl.tsx')
 const readTab = read('VoiceReadTab.tsx')
 const panel = read('AssistantPanel.tsx')
@@ -126,7 +127,7 @@ test('only the dictation draft is ever the addressee', () => {
   assert.equal(voiceAddressee('dictation', false), 'assistant')
   assert.equal(voiceAddressee('chat', true), 'assistant')
   assert.equal(voiceAddressee('read', true), 'assistant')
-  assert.match(control, /talkActive&&!dictating&&<span class="dictation-mic-note"/)
+  assert.match(control, /talkActive\s*&&\s*!dictating\s*&&\s*<span class="dictation-mic-note"/)
 })
 
 test('collapsing the dock hides it in CSS rather than unmounting the conversation', () => {
@@ -136,7 +137,7 @@ test('collapsing the dock hides it in CSS rather than unmounting the conversatio
   // change must therefore be a rendering change, never a mount change.
   assert.match(css, /\n\s*\.voice-dock\.chip\{display:none\}/)
   assert.match(control, /<div class="voice-dock-body voice-dock-chat" hidden=\{chat\?undefined:true\}>\{assistantView\}<\/div>/)
-  assert.doesNotMatch(control, /\{chat&&assistantView\}/)
+  assert.doesNotMatch(control, /\{chat\s*&&\s*assistantView\}/)
   // `hidden` is a render in the panel too - the early return still returns an element.
   assert.match(panel, /if \(variant === 'hidden'\) return <div class="assistant-panel hidden-variant" hidden \/>/)
   // Exactly one mount site in the whole app.

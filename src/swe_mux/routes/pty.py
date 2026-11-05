@@ -37,6 +37,7 @@ from ..session import (
 from ..terminal_core import TerminalCore, serve_connection
 from ..terminal_core.protocol import CLOSE_USE_GATEWAY
 from ..ui_build import ui_build_id_cached
+from ..ui_messages import localize_payload, resolve_ui_locale
 from . import terminal
 
 log = logging.getLogger(__name__)
@@ -147,6 +148,16 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
     return ws
 
 
+def browser_event(request: web.Request, payload: dict[str, Any]) -> dict[str, Any]:
+    """Live UI messages follow language changes without reconnecting the event socket."""
+    config = request.app.get(keys.CONFIG)
+    language = resolve_ui_locale(
+        getattr(config, "ui_language", ""), request.headers.get("Accept-Language", "")
+    )
+    result: dict[str, Any] = localize_payload(payload, language)
+    return result
+
+
 async def events_ws(request: web.Request) -> web.WebSocketResponse:
     ws = metered_websocket(request, "events", heartbeat=20)
     await ws.prepare(request)
@@ -231,7 +242,7 @@ async def events_ws(request: web.Request) -> web.WebSocketResponse:
             # (voice autoplay, notification sounds) that would otherwise re-fire every
             # reconnect or reopen.
             event["replay"] = True
-            await ws.send_json(event)
+            await ws.send_json(browser_event(request, event))
             last_visible_sequence = event_sequence
         if catch_up and last_visible_sequence < last_sequence:
             await ws.send_json({"type": "events_cursor", "sequence": last_sequence})
@@ -283,12 +294,12 @@ async def events_ws(request: web.Request) -> web.WebSocketResponse:
                     # durable events, and comparing against it would drop every
                     # transient frame (they all carry seq 0). A reconnecting client
                     # re-reads these facts from REST instead of resuming them.
-                    await ws.send_json(live_event.snapshot())
+                    await ws.send_json(browser_event(request, live_event.snapshot()))
                     continue
                 if live_event.seq <= last_sequence:
                     continue
                 last_sequence = live_event.seq
-                await ws.send_json(live_event.snapshot())
+                await ws.send_json(browser_event(request, live_event.snapshot()))
         finally:
             reader.cancel()
             await asyncio.gather(reader, return_exceptions=True)

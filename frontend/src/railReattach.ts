@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // Turning a detached Action fork back into a delta.
 //
 // A fork is a full copy of the layout that stopped tracking global edits, and
@@ -197,8 +198,8 @@ function unreproducedRows(global: RailConfig, fork: RailConfig, delta: RailProje
   return bad
 }
 
-const DEVICE_WORD: Record<RailDevice, string> = { desktop: 'Desktop', mobile: 'Mobile' }
-const SURFACE_WORD: Record<RailSurface, string> = { strip: 'rail' }
+const DEVICE_WORD: Record<RailDevice, string> = { get desktop() { return t("railReattach.9bd88f2485") }, get mobile() { return t("railReattach.cbaad3cf4a") } }
+const SURFACE_WORD: Record<RailSurface, string> = { get strip() { return t("railReattach.fdf0d7533a") } }
 
 /** Read a project's fork and produce the delta that reproduces it, with whatever
  *  it cannot express named. Returns null when the project is not forked. */
@@ -219,7 +220,7 @@ export function planForkReattach(blob: RailBlob | undefined, projectId: string):
       issues.push({
         kind: 'action-differs',
         subject: item.label || item.id,
-        detail: `This project's copy differs from the shared action. The shared definition (“${shared.label || shared.id}”) is what it will use.`,
+        get detail() { return t("railReattach.cc4881ed78", { value1: shared.label || shared.id }) },
       })
     }
   }
@@ -236,8 +237,8 @@ export function planForkReattach(blob: RailBlob | undefined, projectId: string):
         if (shared && (shared.label || '') !== (row.label || '')) {
           issues.push({
             kind: 'row-label',
-            subject: `${where}: ${row.label || 'unnamed row'}`,
-            detail: `A shared row's name belongs to every project, so it stays “${shared.label || 'unnamed'}”.`,
+            subject: `${where}: ${row.label || t("railReattach.f2f7927377")}`,
+            get detail() { return t("railReattach.176c81c3e3", { value1: shared.label || 'unnamed' }) },
           })
         }
       }
@@ -250,7 +251,7 @@ export function planForkReattach(blob: RailBlob | undefined, projectId: string):
         issues.push({
           kind: 'row-order',
           subject: where,
-          detail: 'This project ordered the shared rows differently. They will follow the shared order.',
+          get detail() { return t("railReattach.d8dc5583bb") },
         })
       }
       const lastShared = forkRows.reduce((at, row, index) => globalIds.has(row.id) ? index : at, -1)
@@ -258,7 +259,7 @@ export function planForkReattach(blob: RailBlob | undefined, projectId: string):
         issues.push({
           kind: 'row-order',
           subject: where,
-          detail: 'A project row sits between shared rows here. Project rows are drawn after the shared ones.',
+          get detail() { return t("railReattach.312c5e6b5e") },
         })
       }
     }
@@ -277,7 +278,7 @@ export function planForkReattach(blob: RailBlob | undefined, projectId: string):
       issues.push({
         kind: 'row-unreproduced',
         subject: `${DEVICE_WORD[device as RailDevice]} ${SURFACE_WORD[surface as RailSurface]}: row ${rest.join('|')}`,
-        detail: 'This row could not be reproduced from the shared layout. Check it after reattaching.',
+        get detail() { return t("railReattach.200ad190ac") },
       })
     }
     bad = stillBad

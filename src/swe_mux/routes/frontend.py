@@ -38,6 +38,7 @@ from .. import (
 )
 from ..frontend_overlay import OverlayRefused, OverlayStore
 from ..http_support import is_loopback_peer, json_response
+from ..ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -91,9 +92,7 @@ async def post_overlay_install(request: web.Request) -> web.Response:
     if not is_loopback_peer(request.remote or ""):
         raise web.HTTPForbidden(text="installing a frontend overlay is loopback-only")
     if request.headers.get("X-Mux-User-Gesture") != "frontend-overlay-install":
-        return json_response(
-            {"error": "installing a frontend overlay requires an explicit user action"}, 400
-        )
+        return json_response({"error": ui_message("frontend.5dc381cdc4")}, 400)
     try:
         body = await request.json()
     except (ValueError, UnicodeDecodeError):
@@ -110,10 +109,7 @@ async def post_overlay_install(request: web.Request) -> web.Response:
         return json_response(
             {
                 "error": "source_required",
-                "message": (
-                    "name exactly one of archive, directory or url; "
-                    f"{len(named)} were given"
-                ),
+                "message": (ui_message("frontend.fe49e082a5", value1=len(named))),
             },
             400,
         )
@@ -131,9 +127,7 @@ async def post_overlay_install(request: web.Request) -> web.Response:
             "frontend overlay install refused",
             extra={"overlay_reason": refusal.reason, "overlay_source": named[0]},
         )
-        return _no_store(
-            json_response({"error": refusal.reason, "message": refusal.message}, 409)
-        )
+        return _no_store(json_response({"error": refusal.reason, "message": refusal.message}, 409))
     payload = result.as_dict()
     payload["message"] = (
         "The overlay is verified and installed. It serves from the next daemon "
@@ -149,15 +143,11 @@ async def post_overlay_revert(request: web.Request) -> web.Response:
     if store is None:
         return _unavailable()
     if request.headers.get("X-Mux-User-Gesture") != "frontend-overlay-revert":
-        return json_response(
-            {"error": "reverting the frontend overlay requires an explicit user action"}, 400
-        )
+        return json_response({"error": ui_message("frontend.0aa25d6f1e")}, 400)
     try:
         payload = await asyncio.to_thread(store.revert)
     except OverlayRefused as refusal:
-        return _no_store(
-            json_response({"error": refusal.reason, "message": refusal.message}, 409)
-        )
+        return _no_store(json_response({"error": refusal.reason, "message": refusal.message}, 409))
     payload["restart_required"] = bool(payload.get("changed"))
     return _no_store(json_response(payload))
 
@@ -168,15 +158,11 @@ async def post_overlay_restore(request: web.Request) -> web.Response:
     if store is None:
         return _unavailable()
     if request.headers.get("X-Mux-User-Gesture") != "frontend-overlay-restore":
-        return json_response(
-            {"error": "restoring the frontend overlay requires an explicit user action"}, 400
-        )
+        return json_response({"error": ui_message("frontend.e43e7b8276")}, 400)
     try:
         payload = await asyncio.to_thread(store.restore)
     except OverlayRefused as refusal:
-        return _no_store(
-            json_response({"error": refusal.reason, "message": refusal.message}, 409)
-        )
+        return _no_store(json_response({"error": refusal.reason, "message": refusal.message}, 409))
     payload["restart_required"] = bool(payload.get("changed"))
     return _no_store(json_response(payload))
 

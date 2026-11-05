@@ -1,3 +1,5 @@
+import { codeLabel } from './localization/codeLabels.ts'
+import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { requestSetting } from './settingTargets'
@@ -162,9 +164,7 @@ export function useConversation(
 ):Conversation{
   const wake=primaryWake(status?.wake_words)
   const matcher=useMemo(
-    ()=>buildVoiceMatcher(status?.wake_words?.length?status.wake_words:DEFAULT_WAKE_WORDS,status?.commands?.length?status.commands:DEFAULT_COMMANDS),
-    [status?.wake_words,status?.commands],
-  )
+    ()=>buildVoiceMatcher(status?.wake_words?.length?status.wake_words:DEFAULT_WAKE_WORDS,status?.commands?.length?status.commands:DEFAULT_COMMANDS), [status?.wake_words, status?.commands, uiLocale.value, catalogRevision.value])
   const [phase,setPhase]=useState<Phase>('off')
   const [detail,setDetail]=useState('')
   const [draft,setDraftState]=useState<Draft>(EMPTY_DRAFT)
@@ -269,15 +269,15 @@ export function useConversation(
   const onAssistantRef=useRef(onAssistantUtterance);onAssistantRef.current=onAssistantUtterance
   const assistantChatRef=useRef(assistantChatActive);assistantChatRef.current=assistantChatActive
 
-  const listeningDetail=()=>`Listening. Say “${wakeRef.current}, send” to submit.`
+  const listeningDetail=()=>t("ConversationControl.311cfe8f1d", { value1: wakeRef.current })
   // Matched exactly when the detector resolves, so the readiness line is replaced only
   // if it is still the thing on screen. Comparing the text avoids tracking the phase
   // in a ref that a mid-utterance callback could read one render stale.
-  const WARMING_DETAIL='Starting the speech detector — utterances need a longer pause until it loads.'
+  const WARMING_DETAIL=t("ConversationControl.2a47624c09")
   // The stall lines are compared exactly on recovery, like WARMING_DETAIL above:
   // the recovered message replaces them only while they are still on screen.
-  const STALL_DETAIL='Microphone stalled — no audio is arriving. Trying to revive it…'
-  const STALL_ENDED_DETAIL='The browser released the microphone. Turn Talk off and on to reconnect.'
+  const STALL_DETAIL=t("ConversationControl.ed0da45139")
+  const STALL_ENDED_DETAIL=t("ConversationControl.47f060d09b")
 
   const setDraft=(next:Draft)=>{draftRef.current=next;setDraftState(next)}
   const enterStandby=(value:boolean)=>{standbyRef.current=value;setStandby(value)}
@@ -327,7 +327,7 @@ export function useConversation(
 
   const stop=(record=true)=>{
     bargeInPlayback()
-    if(record&&enabledRef.current)recordHistory('mux','Talk stopped.')
+    if(record&&enabledRef.current)recordHistory('mux',t("ConversationControl.48da885d10"))
     enabledRef.current=false;enterStandby(false);enterHold(false);setHoldBuffer('')
     // A held fragment dies with the microphone. Submitting it after the operator
     // stopped Talk would answer a question they withdrew. `speakingRef` goes with
@@ -367,7 +367,7 @@ export function useConversation(
       if(engaged.current||!enabledRef.current||!captureRef.current)return
       engaged.current=true
       captureRef.current.beginPushToTalk()
-      setPhase('hearing');setDetail('Push to talk — release to send the phrase.')
+      setPhase('hearing');setDetail(t("ConversationControl.7ad4d0ee07"))
     }
     const end=()=>{
       if(!engaged.current)return
@@ -402,15 +402,15 @@ export function useConversation(
 
   const commitToTarget=async(text:string,submit:boolean)=>{
     const body=text.trim()
-    if(!body){setPhase('listening');respond(`Nothing buffered yet. Keep talking, then say “${wakeRef.current}, ${submit?'send':'append'}”.`);return}
+    if(!body){setPhase('listening');respond(t("ConversationControl.e9fe25b0b3", { value1: wakeRef.current, value2: (submit) ? 'yes' : 'no' }));return}
     const target=targetRef.current
     if(!target||!conversationTargetAvailable(target)){
-      setPhase('listening');respond('Draft kept. Focus an agent, note, Scratchpad, or Queue composer first.');return
+      setPhase('listening');respond(t("ConversationControl.4af30df75a"));return
     }
-    setPhase('sending');setDetail(submit?'Submitting voice message…':'Appending voice message…')
+    setPhase('sending');setDetail(submit?t("ConversationControl.2ee8f1aa59"):t("ConversationControl.f755c2c622"))
     if(target.kind==='text'){
       target.editor.insertText(body)
-      setDraft(clearDraft());setPhase('listening');respond(`Appended to ${target.label}. Still listening.`)
+      setDraft(clearDraft());setPhase('listening');respond(t("ConversationControl.dc381ba50b", { value1: target.label }))
       return
     }
     const runKey=`${target.id}:${target.agentRunId()||'current'}`
@@ -422,7 +422,7 @@ export function useConversation(
     if(includeProtocol)commsProtocolRuns.current.add(runKey)
     if(submit)reportPromptSubmitted(target.id)
     setDraft(clearDraft());setPhase('listening')
-    respond(submit?'Sent through the agent composer. Still listening for your next message.':'Appended to the agent composer without sending. Still listening.')
+    respond(submit?t("ConversationControl.2b2b83c1d2"):t("ConversationControl.5e798a6365"))
   }
   const submit=(text:string)=>commitToTarget(text,true)
   const append=(text:string)=>commitToTarget(text,false)
@@ -435,9 +435,9 @@ export function useConversation(
   const toggleComms=async(force?:boolean)=>{
     const activeId=commsTargetRef.current
     const enable=force??!activeId
-    if(enable&&activeId){setPhase('listening');respond('Voice comms is already on.');return}
+    if(enable&&activeId){setPhase('listening');respond(t("ConversationControl.f700d74350"));return}
     if(!enable){
-      if(!activeId){setPhase('listening');respond('Voice comms is already off.');return}
+      if(!activeId){setPhase('listening');respond(t("ConversationControl.d53968b37e"));return}
       const previous=commsPrevious.current.get(activeId)
       commsTargetRef.current=null;setCommsTargetId(null)
       let restoreFailure:unknown=null
@@ -453,11 +453,11 @@ export function useConversation(
       setPinnedPlaybackSession(activeId,false)
       setPinnedTarget(commsPreviousPin.current);commsPreviousPin.current=null
       if(restoreFailure){reportFailure(restoreFailure);return}
-      setPhase('listening');respond('Voice comms off. Normal agent replies restored.');return
+      setPhase('listening');respond(t("ConversationControl.abcd7cefe1"));return
     }
     const target=sessionTarget()
-    if(!target){setPhase('listening');respond('Voice comms needs a focused agent session.');return}
-    if(!statusRef.current?.enabled){setPhase('listening');respond('Voice comms needs Read aloud enabled in Settings, Voice.');return}
+    if(!target){setPhase('listening');respond(t("ConversationControl.9f3f37819a"));return}
+    if(!statusRef.current?.enabled){setPhase('listening');respond(t("ConversationControl.bd8c23cb2d"));return}
     commsPrevious.current.set(target.id,{voice_mode:target.voiceMode(),voice_content:target.voiceContent()})
     try{
       const updated=await api<Session>('PATCH',`/api/sessions/${target.id}`,{voice_mode:'auto',voice_content:'verbatim'})
@@ -472,11 +472,11 @@ export function useConversation(
     setPinnedPlaybackSession(target.id,true)
     commsPreviousPin.current=pinnedTargetRef.current
     commsTargetRef.current=target.id;setCommsTargetId(target.id);setPinnedTarget(target)
-    setPhase('listening');respond(`Voice comms on for ${target.label}. Replies will be short and read aloud.`)
+    setPhase('listening');respond(t("ConversationControl.2f8447be37", { value1: target.label }))
   }
 
   const speakSystem=async(text:string)=>{
-    if(!statusRef.current?.enabled)throw new Error('Read aloud is off. Enable it in Settings, Voice.')
+    if(!statusRef.current?.enabled)throw new Error(t("ConversationControl.8e06a39267"))
     const streamId=newVoiceStreamId()
     unlockPlayback();beginRequestedStream(streamId,'system','system')
     try{
@@ -494,7 +494,7 @@ export function useConversation(
     if(outcome.speech){
       try{await speakSystem(outcome.speech)}
       catch(cause){
-        const failure=`${outcome.detail} Read aloud failed: ${cause instanceof Error?cause.message:String(cause)}`
+        const failure=t("ConversationControl.588a657618", { value1: outcome.detail, value2: cause instanceof Error?cause.message:String(cause) })
         setDetail(failure);recordHistory('mux',failure)
       }
     }
@@ -528,11 +528,11 @@ export function useConversation(
   const askAssistant=async(body:string):Promise<boolean>=>{
     const handler=onAssistantRef.current
     if(!handler)return false
-    setPhase('sending');setDetail('Asking the assistant…')
+    setPhase('sending');setDetail(t("ConversationControl.0a663397d4"))
     lastAskedRef.current=body
     const outcome=await handler(body)
     if(outcome===false){setPhase('listening');return false}
-    setPhase('listening');respond(outcome||'Asked the assistant.')
+    setPhase('listening');respond(outcome||t("ConversationControl.a0cb09b593"))
     return true
   }
   /**
@@ -569,7 +569,7 @@ export function useConversation(
     deferralTimerRef.current=setTimeout(()=>releaseDeferral(deferred,holdMs),holdMs)
     setDeferredTrigger(deferred.trigger);setDeferredSource('heuristic')
     setPhase('listening')
-    setDetail(`That sounded unfinished after “${deferred.trigger}” - keep going, or pause and it goes as-is.`)
+    setDetail(t("ConversationControl.d63c69a686", { value1: deferred.trigger }))
   }
   /**
    * The assistant reported that the turn it was just given had nothing in it to
@@ -587,7 +587,7 @@ export function useConversation(
     if(!parked)return
     setDeferredTrigger(parked.trigger);setDeferredSource('assistant')
     setPhase('listening')
-    setDetail('Still listening - that read as half a thought, so it is waiting for the rest.')
+    setDetail(t("ConversationControl.a055cbf342"))
     parkTimerRef.current=setTimeout(()=>{
       const expired=penRef.current.expireStalePark()
       if(expired)reportDeferral(expired,'discarded')
@@ -601,7 +601,7 @@ export function useConversation(
     const pending=resolveDeferral('held')
     if(pending)setHoldBuffer([holdBufferRef.current,pending.text].map(part=>part.trim()).filter(Boolean).join(' '))
     enterHold(true);setPhase('listening')
-    respond('Holding — thinking out loud is buffered, not answered. Say “go ahead” when you want the assistant to respond.')
+    respond(t("ConversationControl.90e9128e50"))
   }
   // The assistant's own completeness verdict, arriving on the event socket.
   //
@@ -628,26 +628,26 @@ export function useConversation(
 
   const releaseHold=async(extra='')=>{
     const combined=[holdBufferRef.current,extra].map(part=>part.trim()).filter(Boolean).join(' ')
-    if(!combined){enterHold(false);setHoldBuffer('');setPhase('listening');respond('Nothing was buffered. Chat replies normally again.');return}
-    if(!onAssistantRef.current){enterHold(false);setHoldBuffer('');setPhase('listening');respond('The assistant is unavailable; the brainstorm stays in the Talk history.');return}
+    if(!combined){enterHold(false);setHoldBuffer('');setPhase('listening');respond(t("ConversationControl.04b0fc60a0"));return}
+    if(!onAssistantRef.current){enterHold(false);setHoldBuffer('');setPhase('listening');respond(t("ConversationControl.9b0212d446"));return}
     // Kept until the turn is accepted: a failure below must never cost the
     // buffer — the whole point of holding was that this text took minutes.
     setHoldBuffer(combined)
-    setPhase('sending');setDetail('Sending your brainstorm to the assistant…')
+    setPhase('sending');setDetail(t("ConversationControl.658eae26ac"))
     try{
       const outcome=await onAssistantRef.current(combined)
       if(outcome===false){
         setPhase('listening')
-        respond('Chat mode is off, so the brainstorm is kept. Reopen chat and say “go ahead”.')
+        respond(t("ConversationControl.2b3d65e06e"))
         return
       }
       enterHold(false);setHoldBuffer('')
-      setPhase('listening');respond(outcome||'Sent the brainstorm to the assistant.')
+      setPhase('listening');respond(outcome||t("ConversationControl.855989c0b1"))
     }catch(cause){reportFailure(cause)}
   }
   const discardHold=()=>{
     enterHold(false);setHoldBuffer('')
-    setPhase('listening');respond('Brainstorm discarded. Chat replies normally again.')
+    setPhase('listening');respond(t("ConversationControl.b35dda4525"))
   }
 
   const handleTranscript=async(parsed:ParsedMuxVoice,rawText='')=>{
@@ -657,10 +657,10 @@ export function useConversation(
       // Standby keeps the mic and transcription running but ignores everything
       // except the resume/stop commands, so speech does nothing until woken.
       if(parsed.command==='resume'){
-        enterStandby(false);setPhase('listening');respond('Resumed. Listening for your message.');return
+        enterStandby(false);setPhase('listening');respond(t("ConversationControl.2406602024"));return
       }
       if(parsed.command==='stop'){stop();return}
-      setPhase('standby');setDetail(`Standby — say “${wakeWord}, resume” to continue.`);return
+      setPhase('standby');setDetail(t("ConversationControl.888c052aa9", { value1: wakeWord }));return
     }
     if(parsed.command==='standby'){
       // Standby and cancel are both "stop paying attention to what I just said",
@@ -669,7 +669,7 @@ export function useConversation(
       resolveDeferral('discarded')
       setProvisional('')
       enterStandby(true);setPhase('standby')
-      respond(`Standby. Still listening; say “${wakeWord}, resume” to continue.`);return
+      respond(t("ConversationControl.0620b69d27", { value1: wakeWord }));return
     }
     // Brainstorm hold: transcription continues, plain speech buffers, and the
     // assistant answers only on a proceed cue. Wake-worded commands keep their
@@ -677,8 +677,8 @@ export function useConversation(
     // "Mux, stop" still works mid-brainstorm.
     if(holdRef.current){
       if(parsed.command==='proceed'){await releaseHold(parsed.text);return}
-      if(parsed.command==='hold'){setPhase('listening');respond('Already holding. Keep thinking; say “go ahead” when done.');return}
-      if(parsed.command==='cancel'){setHoldBuffer('');setPhase('listening');respond('Brainstorm cleared. Still holding.');return}
+      if(parsed.command==='hold'){setPhase('listening');respond(t("ConversationControl.167ae3a518"));return}
+      if(parsed.command==='cancel'){setHoldBuffer('');setPhase('listening');respond(t("ConversationControl.a1c29b8d2f"));return}
       if(parsed.command===null){
         const wakeIntent=extractWakeIntent(rawText,statusRef.current?.wake_words?.length?statusRef.current.wake_words:DEFAULT_WAKE_WORDS)
         if(wakeIntent===null){
@@ -686,7 +686,7 @@ export function useConversation(
           const combined=[holdBufferRef.current,rawText.trim()].filter(Boolean).join(' ')
           setHoldBuffer(combined)
           setPhase('listening')
-          setDetail(`Holding — ${combined?combined.split(/\s+/).length:0} words buffered. Say “go ahead” when done.`)
+          setDetail(t("ConversationControl.523f9a0996", { value1: combined?combined.split(/\s+/).length:0 }))
           return
         }
         // A wake-worded free intent ("mux, open project x") keeps working while
@@ -696,13 +696,13 @@ export function useConversation(
     if(parsed.command==='hold'){
       if(!chatAddressee()){
         setPhase('listening')
-        respond('Hold is for chat mode — switch the voice panel to chat first. In talk mode the draft already waits for “send”.')
+        respond(t("ConversationControl.71c316c143"))
         return
       }
       beginHold();return
     }
     if(parsed.command==='proceed'){
-      setPhase('listening');respond('Nothing is on hold. Chat replies normally.');return
+      setPhase('listening');respond(t("ConversationControl.d0bfe501f6"));return
     }
     // A single addressee removes the wake word: while the panel is in chat
     // mode, every plain utterance is a conversation turn — the dictation draft
@@ -741,11 +741,11 @@ export function useConversation(
       const dropped=resolveDeferral('discarded')
       setProvisional('')
       setDraft(clearDraft());setPhase('listening')
-      respond(dropped?'Voice message cleared, and the unfinished sentence was dropped. Still listening.':'Voice message cleared. Still listening.');return
+      respond(dropped?t("ConversationControl.33be045e90"):t("ConversationControl.adc8467dd2"));return
     }
     if(parsed.command==='undo'){
       const next=undoUtterance(draftRef.current);setDraft(next);setPhase('listening')
-      respond(next.text?'Removed the last phrase.':'Removed the last phrase. Draft is empty.');return
+      respond(next.text?t("ConversationControl.fa3f239eaa"):t("ConversationControl.1a5ccac242"));return
     }
     const pending=appendUtterance(draftRef.current,parsed.text)
     if(pending!==draftRef.current){setDraft(pending);setLandedAt(current=>current+1)}
@@ -758,37 +758,37 @@ export function useConversation(
       return
     }
     if(parsed.command==='mute'){
-      bargeInPlayback();setPhase('listening');respond('Playback stopped. Still listening.');return
+      bargeInPlayback();setPhase('listening');respond(t("ConversationControl.914b3b5d26"));return
     }
     if(parsed.command==='read'){
-      try{if(await runRegistryIntent('read last reply'))return}catch(cause){reportFailure(cause);return}
+      try{if(await runRegistryIntent(t("ConversationControl.91529962f2")))return}catch(cause){reportFailure(cause);return}
       const session=sessionTarget()
-      if(!session){setPhase('listening');respond('Read reply needs an agent target. Draft kept.');return}
-      if(!statusRef.current?.enabled){setPhase('listening');respond('Read aloud is off. Enable it in Settings, Voice. Still listening.');return}
-      setPhase('sending');setDetail('Preparing the latest reply…')
+      if(!session){setPhase('listening');respond(t("ConversationControl.5b78f32ad3"));return}
+      if(!statusRef.current?.enabled){setPhase('listening');respond(t("ConversationControl.063537cd47"));return}
+      setPhase('sending');setDetail(t("ConversationControl.def6e3f36e"))
       const streamId=newVoiceStreamId()
       try{
         unlockPlayback();beginRequestedStream(streamId,session.id,'agent')
         const clip=await api<VoiceClip>('POST',`/api/sessions/${session.id}/voice/generate`,{stream_id:streamId})
         // The whole reply: a clip answered from the store arrives with every
         // segment it already had, and a fresh one continues on its claimed stream.
-        await playClipGroup(clip,session.id,'agent');setPhase('listening');respond('Reply playback started. Still listening.')
+        await playClipGroup(clip,session.id,'agent');setPhase('listening');respond(t("ConversationControl.50e40fa87e"))
       }catch(cause){cancelRequestedStream(streamId);reportFailure(cause)}
       return
     }
     if(parsed.command==='summary'||parsed.command==='verbatim'){
       const session=sessionTarget()
-      if(!session){setPhase('listening');respond('Reply mode needs an agent target. Draft kept.');return}
+      if(!session){setPhase('listening');respond(t("ConversationControl.bbc8ad45d8"));return}
       const mode=parsed.command
       try{
         const updated=await api<Session>('PATCH',`/api/sessions/${session.id}`,{voice_content:mode})
-        onSessionRef.current(updated);setPhase('listening');respond(`${mode==='summary'?'Summary':'Verbatim'} replies enabled. Still listening.`)
+        onSessionRef.current(updated);setPhase('listening');respond(t("ConversationControl.1ceb4f00ca", { value1: (mode==='summary') ? 'yes' : 'no' }))
       }catch(cause){reportFailure(cause)}
       return
     }
     if(parsed.command==='help'){
-      try{if(await runRegistryIntent('list voice commands'))return}catch(cause){reportFailure(cause);return}
-      setPhase('listening');respond(`${wakeWord} commands: send, cancel, undo, mute, read reply, summary, verbatim, interrupt, standby, resume, and stop.`);return
+      try{if(await runRegistryIntent(t("ConversationControl.4b99ef90a1")))return}catch(cause){reportFailure(cause);return}
+      setPhase('listening');respond(t("ConversationControl.b010f712ff", { value1: wakeWord }));return
     }
     if(parsed.command==='comms_on'||parsed.command==='comms_off'){
       await toggleComms(parsed.command==='comms_on')
@@ -796,15 +796,15 @@ export function useConversation(
     }
     if(parsed.command==='interrupt'){
       const session=sessionTarget()
-      if(!session){setPhase('listening');respond('Interrupt needs an agent target. Draft kept.');return}
-      bargeInPlayback();setPhase('listening');respond('Playback stopped. Interrupt sent to the agent.')
+      if(!session){setPhase('listening');respond(t("ConversationControl.65e6077d74"));return}
+      bargeInPlayback();setPhase('listening');respond(t("ConversationControl.2bf6dcdcc9"))
       try{await api('POST',`/api/sessions/${session.id}/voice/interrupt`)}catch(cause){reportFailure(cause)}
       return
     }
     if(parsed.command==='stop'){
       stop();return
     }
-    setPhase('listening');setDetail(`Listening. Say “${wakeWord}, send” to submit.`)
+    setPhase('listening');setDetail(t("ConversationControl.311cfe8f1d", { value1: wakeWord }))
   }
 
   // Latency reporting runs after the action has already happened, so it can never
@@ -829,7 +829,7 @@ export function useConversation(
     })
     const payload=await response.json() as {text?:string;error?:string;timings?:ServerTimings}
     const responseAt=performance.now()
-    if(!response.ok)throw new Error(payload.error||`transcription failed (${response.status})`)
+    if(!response.ok)throw new Error(payload.error||t("ConversationControl.0739703f31", { value1: response.status }))
     const text=String(payload.text||'')
     return {parsed:matcherRef.current.parse(text),text,postAt,responseAt,server:payload.timings||{}}
   }
@@ -844,12 +844,12 @@ export function useConversation(
   }
 
   const transcribeInner=async(audio:Blob,marks:CaptureMarks)=>{
-    if(!standbyRef.current){setPhase('transcribing');setDetail('Transcribing locally on muxd…')}
+    if(!standbyRef.current){setPhase('transcribing');setDetail(t("ConversationControl.c97eeb1b6b"))}
     // Whisper models are cached for the life of the *daemon*, not the tab, so the
     // first utterance after a restart or a redeploy waits seconds on a model load.
     // Naming it is the whole fix: an unexplained pause here reads as a hang.
     const slow=setTimeout(()=>{
-      if(enabledRef.current&&!standbyRef.current)setDetail('Loading the transcription model — the first utterance after a daemon restart is slow.')
+      if(enabledRef.current&&!standbyRef.current)setDetail(t("ConversationControl.0d26dc66b1"))
     },1_200)
     let decoded:Decoded
     try{decoded=await decode(audio,marks,'dictation')}
@@ -884,10 +884,10 @@ export function useConversation(
       }else{
         setPhase('listening')
         respond(verdict.reason==='agent-echo'
-          ?`Playback echo ignored. Say “${wakeRef.current}, mute” before another command.`
+          ?t("ConversationControl.21f47d80db", { value1: wakeRef.current })
           :verdict.reason==='system-unaddressed'
-            ?`Playback command ignored. Say “${wakeRef.current}” before a read-only lookup or navigation command.`
-            :'Playback command ignored. During application speech, only read-only lookup and navigation commands are allowed.')
+            ?t("ConversationControl.8c410949c7", { value1: wakeRef.current })
+            :t("ConversationControl.28684a69fb"))
       }
     }
     finally{
@@ -961,11 +961,11 @@ export function useConversation(
     if(enabledRef.current||startingRef.current)stop()
     const capability=conversationCapability()
     if(!capability.secureContext){
-      setPhase('starting');setDetail('Creating a private HTTPS address for mobile voice…')
+      setPhase('starting');setDetail(t("ConversationControl.c76b6508d4"))
       try{
         const setup=await enableMobileVoice()
-        if(!setup.url){setDetail('Complete the one-time Tailscale approval, then tap Talk again.');return}
-        setDetail(setup.status==='ready'?'Secure mobile voice verified. Opening it…':'Secure address created. Opening it…')
+        if(!setup.url){setDetail(t("ConversationControl.7c03d3f4c4"));return}
+        setDetail(setup.status==='ready'?t("ConversationControl.cef5227e34"):t("ConversationControl.dc85d833a7"))
         location.assign(mobileVoiceDestination(setup.url))
       }catch(cause){reportFailure(cause)}
       return
@@ -985,16 +985,16 @@ export function useConversation(
     // restarts, while a browser tab gets reloaded and quietly repairs itself.
     let voice=statusRef.current
     if(!voice&&refreshStatusRef.current){
-      setPhase('starting');setDetail('Reading the voice status from the daemon…')
+      setPhase('starting');setDetail(t("ConversationControl.447a667b1f"))
       voice=await refreshStatusRef.current()
     }
     if(!voice){
-      reportFailure('swe-mux has not been able to read the voice status from the daemon. '
-        +'Check that the daemon is running, then press Talk again.')
+      reportFailure(t("ConversationControl.f8969e3389")
+        +t("ConversationControl.f5d4eedac7"))
       return
     }
-    if(!voice.stt_available){reportFailure(voice.stt_diagnostic||'Daemon transcription is unavailable.');return}
-    setPhase('starting');setDetail('Requesting microphone…')
+    if(!voice.stt_available){reportFailure(voice.stt_diagnostic||t("ConversationControl.c3629f50b0"));return}
+    setPhase('starting');setDetail(t("ConversationControl.619398e5a3"))
     // Unlock only: this is the gesture mobile browsers require before any later
     // programmatic play(), so the `read reply` command works. It turns nothing on.
     unlockPlayback()
@@ -1012,21 +1012,21 @@ export function useConversation(
         if(!enabledRef.current)return
         setPhase('stalled')
         setDetail(diagnostic.trackState==='ended'?STALL_ENDED_DETAIL:STALL_DETAIL)
-        recordHistory('mux','Microphone stalled: the device stopped delivering audio.')
+        recordHistory('mux',t("ConversationControl.0449f1928d"))
       },
       onCaptureRecovered:diagnostic=>{
         void api('POST','/api/voice/capture-diagnostic',diagnostic,{timeoutMs:4000}).catch(()=>{})
         if(!enabledRef.current)return
         setPhase(current=>current==='stalled'?(standbyRef.current?'standby':'listening'):current)
-        setDetail(current=>current===STALL_DETAIL||current===STALL_ENDED_DETAIL?'Microphone recovered. Listening…':current)
-        recordHistory('mux','Microphone recovered.')
+        setDetail(current=>current===STALL_DETAIL||current===STALL_ENDED_DETAIL?t("ConversationControl.2ded12853f"):current)
+        recordHistory('mux',t("ConversationControl.1d22df29d7"))
       },
-      onSpeechStart:()=>{speakingRef.current=true;if(!enabledRef.current)return;if(standbyRef.current){setPhase('standby');return}setPhase('hearing');setDetail(getPlayback().playing?'Listening through playback…':'Listening…')},
-      onBargeIn:()=>{bargeInPlayback();if(enabledRef.current&&!standbyRef.current){setPhase('hearing');setDetail('Playback stopped. Listening…')}},
+      onSpeechStart:()=>{speakingRef.current=true;if(!enabledRef.current)return;if(standbyRef.current){setPhase('standby');return}setPhase('hearing');setDetail(getPlayback().playing?t("ConversationControl.082fa553ce"):'Listening…')},
+      onBargeIn:()=>{bargeInPlayback();if(enabledRef.current&&!standbyRef.current){setPhase('hearing');setDetail(t("ConversationControl.4423316380"))}},
       // Fired at the endpoint, before any text exists. It is the whole point of the
       // phase: the answer has to arrive when the user stops talking, not when the
       // decode does, or the pause reads as a failure.
-      onSpeechEnd:()=>{speakingRef.current=false;if(!enabledRef.current||standbyRef.current)return;playEarcon('heard');setPhase('heard');setDetail('Heard you.')},
+      onSpeechEnd:()=>{speakingRef.current=false;if(!enabledRef.current||standbyRef.current)return;playEarcon('heard');setPhase('heard');setDetail(t("ConversationControl.799ad5fa32"))},
       onSpeculative:(audio,marks)=>{void speculate(audio,marks)},
       onSpeculativeAbort:utteranceId=>{
         const pending=speculationRef.current
@@ -1127,15 +1127,15 @@ export function useConversation(
     append:()=>{void (async()=>{try{await append(draftRef.current.text)}catch(cause){reportFailure(cause)}})()},
     undo:()=>{
       const next=undoUtterance(draftRef.current);setDraft(next)
-      setDetail(next.text?'Removed the last phrase.':'Removed the last phrase. Draft is empty.')
+      setDetail(next.text?t("ConversationControl.fa3f239eaa"):t("ConversationControl.1a5ccac242"))
     },
-    clear:()=>{setDraft(clearDraft());setDetail('Draft cleared. Still listening.')},
+    clear:()=>{setDraft(clearDraft());setDetail(t("ConversationControl.233a9eb8ae"))},
     clearHistory:()=>{setHistory([]);saveVoiceConversationHistory([])},
     toggleStandby:()=>{
       const next=!standbyRef.current
       enterStandby(next)
       if(enabledRef.current)setPhase(next?'standby':'listening')
-      setDetail(next?`Standby. Still listening; say “${wakeRef.current}, resume” to continue.`:'Resumed. Listening for your message.')
+      setDetail(next?t("ConversationControl.0620b69d27", { value1: wakeRef.current }):t("ConversationControl.2406602024"))
     },
     toggleComms:()=>{void toggleComms()},
     releaseHold:()=>{void releaseHold()},
@@ -1151,7 +1151,7 @@ function MicIcon({slashed}:{slashed:boolean}){
   return <svg viewBox="0 0 24 24" aria-hidden="true">
     <rect x="8" y="3" width="8" height="12" rx="4"/>
     <path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/>
-    {slashed&&<path d="M4 3.5l16 17"/>}
+    {slashed && <path d="M4 3.5l16 17"/>}
   </svg>
 }
 
@@ -1228,22 +1228,21 @@ export function VoiceControl({
     if(Math.abs(event.clientX-hold.x)>CAPTURE_HOLD_SLOP_PX||Math.abs(event.clientY-hold.y)>CAPTURE_HOLD_SLOP_PX)clearHold()
   }
   const captureLabel=!configured
-    ? 'Set up hands-free conversation'
-    : active?'Stop listening':'Start listening'
+    ? t("ConversationControl.9d042d91df")
+    : active?t("ConversationControl.94fa9b2363"):t("ConversationControl.4c15103c80")
   const detail=pendingActions
-    ?`${pendingActions} confirmation${pendingActions===1?'':'s'} waiting`
+    ?t("ConversationControl.dfc429d769", { value1: pendingActions, value2: (pendingActions===1) ? 'yes' : 'no' })
     :unseen
-      ?'a reply you have not read'
-      :active?'the microphone is live':'nothing waiting'
+      ?t("ConversationControl.407bd0ea4c")
+      :active?t("ConversationControl.c8b161f452"):t("ConversationControl.53fc431ccd")
   return <button
     class={`conversation-talk-toggle ${active?'active':'off'}${configured?'':' setup'}${collapsed?'':' dock-open'}${pendingActions?' pending':''}`}
-    aria-label={collapsed?'Open the voice panel':'Collapse the voice panel to the top bar'}
+    aria-label={collapsed ? t("ConversationControl.9650d3bbbc") : t("ConversationControl.7797fef43b")}
     aria-expanded={!collapsed}
     // Pressed is capture, matching the colour. The panel's state is `aria-expanded`,
     // so the two are never confused by a screen reader either.
     aria-pressed={configured?active:undefined}
-    title={`${collapsed?'Open':'Collapse'} the voice panel - ${detail}.\nCtrl+click (or hold) to ${captureLabel.toLowerCase()}.${
-      conversation.target?`\nTarget: ${conversation.target.label}`:''}`}
+    title={t("ConversationControl.9ac4af7e89", { value1: (collapsed) ? 'yes' : 'no', detail: detail, value3: captureLabel.toLowerCase(), value4: conversation.target?`\nTarget: ${conversation.target.label}`:'' })}
     onPointerDown={beginHold}
     onPointerMove={moveHold}
     onPointerUp={clearHold}
@@ -1255,9 +1254,7 @@ export function VoiceControl({
     }}
   >
     <MicIcon slashed={!active}/>
-    {pendingActions>0
-      ?<i class="voice-dock-badge">{pendingActions>9?'9+':pendingActions}</i>
-      :unseen?<i class="voice-dock-dot" aria-hidden="true"/>:null}
+    {pendingActions>0 ? <i class="voice-dock-badge">{pendingActions>9 ? '9+' : pendingActions}</i> : unseen ? <i class="voice-dock-dot" aria-hidden="true"/> : null}
   </button>
 }
 
@@ -1369,15 +1366,15 @@ export function VoiceDock({
   const send=()=>conversation.send()
   const draftPreview=conversation.draft.trim().replace(/\s+/g,' ')
   const phaseHint=!dictating
-    ? `${conversation.detail?conversation.detail+' · ':''}The dictation draft is not on screen, so the microphone addresses the assistant: plain speech becomes a conversation turn and never lands in the draft. Wake-word commands keep their normal meaning.`
+    ? t("ConversationControl.9df7fcc731", { value1: conversation.detail?conversation.detail+' · ':'' })
     : `${conversation.detail}${conversation.detail?' · ':''}${conversation.detector===null
-      ? 'The speech detector is still loading. Capture is already listening, but on the fallback detector, so an utterance needs a longer pause to end. Hold Alt+Shift+Space to talk with no pause detection at all.'
+      ? t("ConversationControl.dab870b3a2")
       : conversation.detector==='silero'
-        ? 'Silero voice activity detection: an utterance ends after a short pause. Hold Alt+Shift+Space to talk with no pause detection at all.'
-        : 'Energy-based detection: an utterance needs a longer pause to end. Hold Alt+Shift+Space to talk with no pause detection at all.'}`
+        ? t("ConversationControl.e91e1ab9d8")
+        : t("ConversationControl.b8b177a868")}`
   return <section
     class={`voice-dock ${dock} ${read?'read-mode':chat?'chat-mode':'talk-mode'} ${conversation.phase}${landed?' landed':''}`}
-    aria-label="Voice panel"
+    aria-label={t("ConversationControl.a5ad6d6259")}
     aria-hidden={dock==='chip'?'true':undefined}
   >
     {/* The header carries a class of its own because it is a gesture region
@@ -1388,18 +1385,18 @@ export function VoiceDock({
       {/* Two steps rather than one cycling button, so neither direction is a guess and
           each can be disabled at its end. The chip in the top bar is the third stop and
           the way back from it. */}
-      <div class="voice-dock-size" role="group" aria-label="Voice panel size">
+      <div class="voice-dock-size" role="group" aria-label={t("ConversationControl.53e1fe4b0e")}>
         <button
           class="voice-dock-step"
-          aria-label="Collapse the voice panel one step"
-          title={dock==='peek'?'Collapse to the top bar — the conversation and the microphone keep running':'Collapse to a single row'}
+          aria-label={t("ConversationControl.fd62e5ac73")}
+          title={dock==='peek' ? t("ConversationControl.06ec98796e") : t("ConversationControl.f6646a5415")}
           disabled={!canCollapseVoiceDock(dock)}
           onClick={()=>onDock('collapse')}
         >▴</button>
         <button
           class="voice-dock-step"
-          aria-label="Expand the voice panel one step"
-          title={dock==='peek'?'Expand to the full conversation':'Expand'}
+          aria-label={t("ConversationControl.d5a15b69e2")}
+          title={dock==='peek' ? t("ConversationControl.cc7cb7ba34") : t("ConversationControl.07548c2c65")}
           disabled={!canExpandVoiceDock(dock)}
           onClick={()=>onDock('expand')}
         >▾</button>
@@ -1410,49 +1407,46 @@ export function VoiceDock({
           and it is the only thing in this header that touches capture. */}
       <button
         class={`voice-dock-mic ${talkActive?'active':'off'}${captureConfigured?'':' setup'}`}
-        aria-label={captureConfigured?(talkActive?'Stop listening':'Start listening'):'Set up hands-free conversation'}
+        aria-label={captureConfigured ? (talkActive ? t("ConversationControl.94fa9b2363") : t("ConversationControl.4c15103c80")) : t("ConversationControl.9d042d91df")}
         aria-pressed={captureConfigured?talkActive:undefined}
-        title={captureConfigured
-          ?(talkActive?'Stop listening and release the microphone':'Start listening')
-          :'Microphone conversation is disabled - open its switch'}
+        title={captureConfigured ? (talkActive ? t("ConversationControl.af77c7a343") : t("ConversationControl.4c15103c80")) : t("ConversationControl.17bf58fa76")}
         onClick={captureConfigured?()=>conversation.toggle():()=>requestSetting('voice.stt')}
       ><MicIcon slashed={!talkActive}/></button>
-      <div class="voice-mode-toggle" role="tablist" aria-label="Voice panel mode">
-        <button role="tab" aria-selected={effectiveMode==='dictation'} class={effectiveMode==='dictation'?'active':''} disabled={!talkActive} title={talkActive?'Dictation draft and Talk history':'Start listening to dictate'} onClick={()=>onMode('dictation')}>talk</button>
-        <button role="tab" aria-selected={chat} class={chat?'active':''} title="Converse with the Mux assistant" onClick={()=>onMode('chat')}>chat</button>
-        <button role="tab" aria-selected={read} class={read?'active':''} title="Read aloud: what speaks, for which session, and every clip waiting" onClick={()=>onMode('read')}>tts</button>
+      <div class="voice-mode-toggle" role="tablist" aria-label={t("ConversationControl.e691c6e100")}>
+        <button role="tab" aria-selected={effectiveMode==='dictation'} class={effectiveMode==='dictation'?'active':''} disabled={!talkActive} title={talkActive ? t("ConversationControl.aa577272fc") : t("ConversationControl.c390f2ccb2")} onClick={()=>onMode('dictation')}>{t("ConversationControl.ce7611e748")}</button>
+        <button role="tab" aria-selected={chat} class={chat?'active':''} title={t("ConversationControl.1106781580")} onClick={()=>onMode('chat')}>{t("ConversationControl.31e06f7d89")}</button>
+        <button role="tab" aria-selected={read} class={read?'active':''} title={t("ConversationControl.c3c27a8f39")} onClick={()=>onMode('read')}>{t("ConversationControl.317e938a48")}</button>
       </div>
-      {talkActive&&<span class={`dictation-phase ${conversation.phase}`} title={phaseHint}>talk:{conversation.phase==='transcribing'?'typing':conversation.phase}</span>}
+      {talkActive && <span class={`dictation-phase ${conversation.phase}`} title={phaseHint}>{rich("ConversationControl.77ba9ddfff", { value1: conversation.phase==='transcribing' ? t("ConversationControl.f8fd8e84e5") : conversation.phase })}</span>}
       {/* Stated, never silent: any body but the draft leaves the assistant as the
           addressee, so the header says where speech is going. */}
-      {talkActive&&!dictating&&<span class="dictation-mic-note" title="The dictation draft is not on screen, so plain speech goes to the assistant">mic→assistant</span>}
-      {talkActive&&conversation.hold&&<span class="dictation-phase standby" title="Brainstorm hold: speech keeps transcribing into a buffer and the assistant answers only when you say “go ahead”. “Mux, cancel” clears the buffer.">holding{conversation.holdBuffer?` · ${conversation.holdBuffer.trim().split(/\s+/).length}w`:''}</span>}
+      {talkActive&&!dictating && <span class="dictation-mic-note" title={t("ConversationControl.1dbe8b23e6")}>{t("ConversationControl.8a30fb4b48")}</span>}
+      {talkActive&&conversation.hold && <span class="dictation-phase standby" title={t("ConversationControl.b6608fcf8a")}>{rich("ConversationControl.c6d7d1301e", { value1: conversation.holdBuffer ? t("ConversationControl.b4389c0096", { length: conversation.holdBuffer.trim().split(/\s+/).length }) : '' })}</span>}
       {/* Two different holds, and the difference matters to the operator: the
           heuristic's expires into an ordinary turn, so waiting is enough; the
           assistant's never sends on its own, so only more speech resolves it. */}
-      {talkActive&&!conversation.hold&&!!conversation.deferredTrigger&&conversation.deferredSource==='assistant'&&<span class="dictation-phase standby" title="The assistant read that as half a thought with nothing to answer yet, so it stayed silent and kept your words. Finish the sentence and both halves go as one turn; “Mux, cancel” drops it.">unfinished · waiting for the rest</span>}
-      {talkActive&&!conversation.hold&&!!conversation.deferredTrigger&&conversation.deferredSource!=='assistant'&&<span class="dictation-phase standby" title={`That sentence ended on “${conversation.deferredTrigger}”, so the turn is held for one extra pause instead of being answered mid-clause. Keep talking and the two halves go together; stay quiet and it sends as-is.`}>unfinished · “{conversation.deferredTrigger}”</span>}
+      {talkActive&&!conversation.hold&&!!conversation.deferredTrigger&&conversation.deferredSource==='assistant' && <span class="dictation-phase standby" title={t("ConversationControl.cf3a9f1463")}>{t("ConversationControl.92a82d5430")}</span>}
+      {talkActive&&!conversation.hold&&!!conversation.deferredTrigger&&conversation.deferredSource!=='assistant' && <span class="dictation-phase standby" title={t("ConversationControl.4cfe6b7aef", { deferredTrigger: conversation.deferredTrigger })}>{rich("ConversationControl.a1e0b8ad71", { deferredTrigger: conversation.deferredTrigger })}</span>}
       {/* The failure itself, on screen. `talk:error` names a phase and says
           nothing about what went wrong; the sentence that does was reachable
           only from the chip's tooltip and this live region, so an operator who
           did not think to hover got three words and no lead. It truncates
           rather than wrapping - the header is one row - and carries the whole
           text in its title. */}
-      {conversation.phase==='error'&&!!conversation.detail&&
-        <span class="dictation-failure" role="alert" title={conversation.detail}>{conversation.detail}</span>}
+      {conversation.phase==='error'&&!!conversation.detail && <span class="dictation-failure" role="alert" title={conversation.detail}>{conversation.detail}</span>}
       <span class="sr-only" role="status" aria-live="polite">{conversation.detail}</span>
-      {dictating&&conversation.latency&&<span class="dictation-latency" title={`End of speech to action — ${formatLatency(conversation.latency)}`}>{Math.round(conversation.latency.total_ms)} ms</span>}
+      {dictating&&conversation.latency && <span class="dictation-latency" title={t("ConversationControl.877a2d47a0", { value1: formatLatency(conversation.latency) })}>{rich("ConversationControl.819244a72d", { value1: Math.round(conversation.latency.total_ms) })}</span>}
       <div class="dictation-actions">
-        {dictating&&<button class="dictation-send" title="Commit the draft to the named target (Ctrl+Enter)" disabled={!conversation.draft.trim()||!conversation.targetAvailable} onClick={send}>send</button>}
-        {dictating&&<button title="Append the draft to the target without submitting" disabled={!conversation.draft.trim()||!conversation.targetAvailable} onClick={()=>conversation.append()}>append</button>}
-        {dictating&&<button title="Remove the last phrase that was heard" disabled={!conversation.draft} onClick={()=>conversation.undo()}>undo</button>}
-        {dictating&&<button title="Clear the draft" disabled={!conversation.draft} onClick={()=>conversation.clear()}>clear</button>}
-        {dictating&&talkActive&&<button class={conversation.standby?'active':''} title={conversation.standby?'Resume listening':'Keep the mic open but ignore speech until resumed'} onClick={()=>conversation.toggleStandby()}>{conversation.standby?'resume':'standby'}</button>}
-        {dictating&&<button class={conversation.comms?'active':''} aria-pressed={conversation.comms} title={conversation.comms?'Exit short spoken agent replies and restore prior read-aloud settings':'Pin this agent and request short spoken replies'} onClick={()=>conversation.toggleComms()}>comms:{conversation.comms?'on':'off'}</button>}
-        {chat&&talkActive&&conversation.hold&&<button class="dictation-stop" title="Send the buffered brainstorm to the assistant now" onClick={()=>conversation.releaseHold()}>go ahead</button>}
-        {chat&&talkActive&&conversation.hold&&<button class="dictation-stop" title="Discard the buffered brainstorm and leave hold" onClick={()=>conversation.discardHold()}>discard</button>}
+        {dictating && <button class="dictation-send" title={t("ConversationControl.07db13fd7d")} disabled={!conversation.draft.trim()||!conversation.targetAvailable} onClick={send}>{t("ConversationControl.27ce1d1bf4")}</button>}
+        {dictating && <button title={t("ConversationControl.db9db9251e")} disabled={!conversation.draft.trim()||!conversation.targetAvailable} onClick={()=>conversation.append()}>{t("ConversationControl.ae524b54d9")}</button>}
+        {dictating && <button title={t("ConversationControl.80e6671a6a")} disabled={!conversation.draft} onClick={()=>conversation.undo()}>{t("ConversationControl.f015346ae3")}</button>}
+        {dictating && <button title={t("ConversationControl.2bc937fa9f")} disabled={!conversation.draft} onClick={()=>conversation.clear()}>{t("ConversationControl.913a4cb91b")}</button>}
+        {dictating&&talkActive && <button class={conversation.standby?'active':''} title={conversation.standby ? t("ConversationControl.649271a6f3") : t("ConversationControl.321582ded6")} onClick={()=>conversation.toggleStandby()}>{conversation.standby ? t("ConversationControl.a83a31320d") : t("ConversationControl.f8f8922da5")}</button>}
+        {dictating && <button class={conversation.comms?'active':''} aria-pressed={conversation.comms} title={conversation.comms ? t("ConversationControl.813319f208") : t("ConversationControl.17879dfc75")} onClick={()=>conversation.toggleComms()}>{t("ConversationControl.107dab266e", { value1: (conversation.comms) ? 'yes' : 'no' })}</button>}
+        {chat&&talkActive&&conversation.hold && <button class="dictation-stop" title={t("ConversationControl.e182c3a0a3")} onClick={()=>conversation.releaseHold()}>{t("ConversationControl.d44fcf731c")}</button>}
+        {chat&&talkActive&&conversation.hold && <button class="dictation-stop" title={t("ConversationControl.ec1011b079")} onClick={()=>conversation.discardHold()}>{t("ConversationControl.109fa9f54c")}</button>}
         <VoiceCommandsButton commands={commands} configuredCommands={configuredCommands}/>
-        <button class="dictation-settings" aria-label="Open Voice settings" title="Open Voice settings (engine, wake words, commands)" onClick={onOpenSettings}>⚙</button>
+        <button class="dictation-settings" aria-label={t("ConversationControl.255080abea")} title={t("ConversationControl.cdec2b3533")} onClick={onOpenSettings}>⚙</button>
       </div>
     </header>
     {/* Both bodies are always in the tree; `hidden` decides which one is drawn. */}
@@ -1461,48 +1455,44 @@ export function VoiceDock({
         the app-level controller and outlives it. Keeping a hidden textarea mounted would
         also leave the composer in the accessibility tree at the peek. */}
     <div class="voice-dock-body voice-dock-talk" hidden={talkVariant==='hidden'}>
-      {talkVariant==='hidden'
-        ?null
-        :talkVariant==='peek'
-        ?<p class="voice-dock-line" title={draftPreview||'The dictation draft is empty.'}>
-          <b>to</b>
-          <em class={conversation.targetAvailable?'':'unavailable'}>{conversation.target?.label||'no target'}</em>
-          <span>{draftPreview||'draft empty'}</span>
-        </p>
-        :<>
+      {talkVariant==='hidden' ? null : talkVariant==='peek' ? <p class="voice-dock-line" title={draftPreview || t("ConversationControl.6ea6ed44f6")}>
+          <b>{t("ConversationControl.663ea1bfff")}</b>
+          <em class={conversation.targetAvailable?'':'unavailable'}>{conversation.target?.label || t("ConversationControl.8581bd7397")}</em>
+          <span>{draftPreview || t("ConversationControl.415830aff1")}</span>
+        </p> : <>
           <div class={`dictation-target${conversation.targetAvailable?'':' unavailable'}`}>
-            <span>to:</span>
-            <strong title={conversation.target?.label||'No target'}>{conversation.target?.label||'No target focused'}</strong>
+            <span>{t("ConversationControl.55708cb7df")}</span>
+            <strong title={conversation.target?.label || t("ConversationControl.4b33d955f9")}>{conversation.target?.label || t("ConversationControl.a26c2c1e17")}</strong>
             <button
               class={conversation.pinned?'active':''}
               aria-pressed={conversation.pinned}
               disabled={!conversation.target}
-              title={conversation.pinned?'Follow workspace focus again':'Stay on this target while focus moves'}
+              title={conversation.pinned ? t("ConversationControl.b3e9d7b861") : t("ConversationControl.097fd6bc2a")}
               onClick={()=>conversation.togglePin()}
-            >{conversation.pinned?'unpin':'pin'}</button>
+            >{conversation.pinned ? t("ConversationControl.eddc4738cc") : t("ConversationControl.64f46a7526")}</button>
           </div>
-          <section class={`conversation-history-shell${historyOpen?'':' collapsed'}`} aria-label="Talk transcript history">
+          <section class={`conversation-history-shell${historyOpen?'':' collapsed'}`} aria-label={t("ConversationControl.e38d9eb155")}>
             <header>
               <button class="conversation-history-toggle" aria-expanded={historyOpen} aria-controls="talk-transcript-history" onClick={toggleHistory}>
-                <span class="conversation-history-caret" aria-hidden="true">{historyOpen?'▾':'▸'}</span>
-                <strong>Talk history</strong>
-                <span>{conversation.history.length} message{conversation.history.length===1?'':'s'}</span>
+                <span class="conversation-history-caret" aria-hidden="true">{historyOpen ? '▾' : '▸'}</span>
+                <strong>{t("ConversationControl.d34c8b44ad")}</strong>
+                <span>{rich("ConversationControl.0d81964da1", { length: conversation.history.length, value2: (conversation.history.length===1) ? 'yes' : 'no' })}</span>
               </button>
-              <button class="conversation-history-clear" disabled={!conversation.history.length} onClick={()=>conversation.clearHistory()}>clear</button>
+              <button class="conversation-history-clear" disabled={!conversation.history.length} onClick={()=>conversation.clearHistory()}>{t("ConversationControl.913a4cb91b")}</button>
             </header>
-            {historyOpen&&<div id="talk-transcript-history" ref={historyRef} class="conversation-history" role="log" aria-live="polite">
-              {conversation.history.length?conversation.history.map(entry=><article key={entry.id} class={entry.role}>
-                <header><strong>{entry.role}</strong><time dateTime={new Date(entry.at).toISOString()}>{new Date(entry.at).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}</time></header>
+            {historyOpen && <div id="talk-transcript-history" ref={historyRef} class="conversation-history" role="log" aria-live="polite">
+              {conversation.history.length ? conversation.history.map(entry=><article key={entry.id} class={entry.role}>
+                <header><strong>{codeLabel(entry.role)}</strong><time dateTime={new Date(entry.at).toISOString()}>{new Date(entry.at).toLocaleTimeString(uiLocale.value,{hour:'numeric',minute:'2-digit'})}</time></header>
                 <p>{entry.text}</p>
-              </article>):<p class="conversation-history-empty">Your transcripts and Mux responses will appear here.</p>}
+              </article>) : <p class="conversation-history-empty">{t("ConversationControl.d1d5fc7abf")}</p>}
             </div>}
           </section>
           <textarea
             ref={draftRef}
             class="dictation-draft"
             spellcheck={false}
-            aria-label="Voice dictation draft — editable"
-            placeholder={`Speak, then say “${conversation.wake}, send” — or type here to fix a word.`}
+            aria-label={t("ConversationControl.68d88bcda0")}
+            placeholder={t("ConversationControl.c32e93309d", { wake: conversation.wake })}
             onInput={event=>conversation.edit(event.currentTarget.value)}
             onKeyDown={event=>{
               if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();send();return}

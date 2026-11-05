@@ -47,6 +47,7 @@ from typing import TYPE_CHECKING, Any
 
 from .host_platform import IS_WINDOWS, platform_label
 from .lifecycle import ledger
+from .ui_messages import ui_message
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .config import Config
@@ -468,7 +469,7 @@ def parse_script_output(text: str, specs: Sequence[ShortcutSpec]) -> tuple[Short
                     slot=spec.slot,
                     path=spec.path,
                     action="failed",
-                    detail="PowerShell reported nothing for this shortcut.",
+                    detail=ui_message("shortcuts.203e10649f"),
                 )
             )
             continue
@@ -535,11 +536,7 @@ def _unsupported(action: str) -> ShortcutReport:
     return ShortcutReport(
         action=action,
         supported=False,
-        reason=(
-            f"Shell shortcuts are a Windows feature and this host is {platform_label()}. "
-            "Nothing was written. Start swe-mux with `swe-mux` (desktop shell) or "
-            "`muxd` (daemon), or run `python -m swe_mux --where` to see where both are."
-        ),
+        reason=(ui_message("shortcuts.2ac33bd892", value1=platform_label())),
     )
 
 

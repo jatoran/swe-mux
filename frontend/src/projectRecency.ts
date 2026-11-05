@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 export const PROJECT_RECENCY_EVENT = 'mux:project-recency'
 
 export type ProjectUseReason = 'prompt_submitted' | 'session_started'

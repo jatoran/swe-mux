@@ -3,66 +3,74 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from tests.support.frontend_source import localized_source, source_contains
+
 ROOT = Path(__file__).parents[1]
 
 
 def source(name: str) -> str:
-    return (ROOT / "frontend" / "src" / name).read_text(encoding="utf-8")
+    return localized_source((ROOT / "frontend" / "src" / name).read_text(encoding="utf-8"))
 
 
 def frontend_source() -> str:
     root = ROOT / "frontend" / "src"
-    return "\n".join(path.read_text(encoding="utf-8") for path in root.glob("*.ts*"))
+    return "\n".join(
+        localized_source(path.read_text(encoding="utf-8")) for path in root.glob("*.ts*")
+    )
 
 
 def test_mobile_workspace_and_recovery_contracts_remain_available() -> None:
     combined = frontend_source()
     css = source("style.css")
-    index = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    index = localized_source((ROOT / "frontend" / "index.html").read_text(encoding="utf-8"))
 
-    assert "mobile-project-name" in combined
-    assert "mobile-session-switcher" not in combined
-    assert "mobile-new-session" not in combined
-    assert ".pane-stack>.stack-tabs-rail>.stack-tabs{display:flex;flex-wrap:nowrap" in css
-    assert "mobileWorkspaceProjection" in combined
-    assert "mobile-unified-tabs" in combined
-    assert (
+    assert source_contains(combined, "mobile-project-name")
+    assert not source_contains(combined, "mobile-session-switcher")
+    assert not source_contains(combined, "mobile-new-session")
+    assert source_contains(
+        css, ".pane-stack>.stack-tabs-rail>.stack-tabs{display:flex;flex-wrap:nowrap"
+    )
+    assert source_contains(combined, "mobileWorkspaceProjection")
+    assert source_contains(combined, "mobile-unified-tabs")
+    assert source_contains(
+        css,
         ".pane-stack:not(.focused-pane):not(.empty-workspace-pane)"
-        ":not(.mobile-unified-workspace):not(.plugin-popup-stack){display:none}"
-        in css
+        ":not(.mobile-unified-workspace):not(.plugin-popup-stack){display:none}",
     )
     # Mobile menus carry no geometry or ordering controls at all now — the touch
     # `Move tab` row went the way of the desktop ones.
     # test_no_context_menu_reorders_or_reshapes_anything owns that invariant.
-    assert "contextMenu.source!=='mobile'" not in combined
-    assert "mobileMoveRow" not in combined
+    assert not source_contains(combined, "contextMenu.source!=='mobile'")
+    assert not source_contains(combined, "mobileMoveRow")
     # `New terminal as tab` was the mobile tab menu's other source-aware row and is
     # gone with it: no context menu spawns a session on any platform, because that is
     # the Run button's job and the Run button is on the mobile rail (`ui.md`).
     # What remains source-aware is the close path — mobile has no per-tab close
     # button, so `Close tab` routes through closeMobileTab to keep neighbour focus.
-    assert ">New terminal as tab</button>" not in combined
-    assert "if(target.source==='mobile'){closeMobileTab(target.leaf);return}" in combined
+    assert not source_contains(combined, ">New terminal as tab</button>")
+    assert source_contains(
+        combined, "if(target.source==='mobile'){closeMobileTab(target.leaf);return}"
+    )
     # The device-local rail permutation went with the row that was its only writer.
     # Orphaning it would have been worse than removing it: a phone that had already
     # saved an order would have stayed pinned to it, with no surface able to change
     # or clear it. Rail order is the layout projection, full stop.
-    assert "MOBILE_TAB_ORDER_KEY" not in combined
-    assert "mux.mobileTabOrder.v1" not in combined
+    assert not source_contains(combined, "MOBILE_TAB_ORDER_KEY")
+    assert not source_contains(combined, "mux.mobileTabOrder.v1")
     assert not (ROOT / "frontend" / "src" / "mobileTabOrder.ts").exists()
-    assert "orderMobileTabs" not in combined
-    assert "savedOrder" not in combined
-    assert "beginWorkspaceTabDrag" in combined
-    assert "beginProjectPointerDrag" in combined
-    assert "beginSessionPointerDrag" in combined
-    assert "showPointerDropIndicator" in combined
-    assert 'data-pointer-drop-indicator="split-bottom"' in css
-    assert 'data-pointer-drop-indicator="tab-bar"' in css
-    assert 'data-pointer-drop-indicator="group-session"' in css
+    assert not source_contains(combined, "orderMobileTabs")
+    assert not source_contains(combined, "savedOrder")
+    assert source_contains(combined, "beginWorkspaceTabDrag")
+    assert source_contains(combined, "beginProjectPointerDrag")
+    assert source_contains(combined, "beginSessionPointerDrag")
+    assert source_contains(combined, "showPointerDropIndicator")
+    assert source_contains(css, 'data-pointer-drop-indicator="split-bottom"')
+    assert source_contains(css, 'data-pointer-drop-indicator="tab-bar"')
+    assert source_contains(css, 'data-pointer-drop-indicator="group-session"')
     assert "draggable=" not in source("App.tsx")
     assert "onDragStart=" not in source("App.tsx")
-    assert "clipboardImage(Array.from(event.clipboardData.items))" in combined
-    assert "host.current.addEventListener('drop', drop)" in combined
+    assert source_contains(combined, "clipboardImage(Array.from(event.clipboardData.items))")
+    assert source_contains(combined, "host.current.addEventListener('drop', drop)")
     # The soft keyboard overlays the mobile layout and never resizes it. Under the old
     # `resizes-content` the keyboard shrank the layout viewport, which refitted every
     # terminal and resized the real PTY, and shrinking an alternate-screen PTY discards
@@ -75,11 +83,11 @@ def test_mobile_workspace_and_recovery_contracts_remain_available() -> None:
     assert viewport is not None
     assert "interactive-widget=resizes-visual" in viewport.group(1)
     assert "resizes-content" not in viewport.group(1)
-    assert "height:var(--app-height,100dvh)" in css
-    assert "@media(max-width:760px)" in css
-    assert "mux.focus.v1" in combined
-    assert "window.addEventListener('pageshow'" in combined
-    assert "scheduleFullRedraw()" in combined
+    assert source_contains(css, "height:var(--app-height,100dvh)")
+    assert source_contains(css, "@media(max-width:760px)")
+    assert source_contains(combined, "mux.focus.v1")
+    assert source_contains(combined, "window.addEventListener('pageshow'")
+    assert source_contains(combined, "scheduleFullRedraw()")
 
 
 def test_projects_are_explicit_session_owners() -> None:
@@ -87,27 +95,27 @@ def test_projects_are_explicit_session_owners() -> None:
     manager = source("ProjectsManager.tsx")
     types = source("types.ts")
 
-    assert "No Projects shown" in app
-    assert "Add project" in manager
-    assert "sidebar_visible" in manager
-    assert "project_id: targetProject" in app
-    assert "Project root<input" in app and "readOnly" in app
-    assert "session.project_id" in app
-    assert "space_id" not in app
-    assert "interface Project" in types
-    assert "root:string" in types
+    assert source_contains(app, "No Projects shown")
+    assert source_contains(manager, "Add project")
+    assert source_contains(manager, "sidebar_visible")
+    assert source_contains(app, "project_id: targetProject")
+    assert source_contains(app, "Project root<input") and source_contains(app, "readOnly")
+    assert source_contains(app, "session.project_id")
+    assert not source_contains(app, "space_id")
+    assert source_contains(types, "interface Project")
+    assert source_contains(types, "root:string")
 
 
 def test_project_groups_are_sidebar_only_organization() -> None:
     app = source("App.tsx")
     groups = source("projectGroups.ts")
 
-    assert "/api/project-groups" in app
-    assert "Create group" in app
-    assert "Ungrouped" in app
-    assert "group_id" in app
-    assert "buildProjectGroups" in groups
-    assert "layout" not in groups
+    assert source_contains(app, "/api/project-groups")
+    assert source_contains(app, "Create group")
+    assert source_contains(app, "Ungrouped")
+    assert source_contains(app, "group_id")
+    assert source_contains(groups, "buildProjectGroups")
+    assert not source_contains(groups, "layout")
 
 
 def test_project_resources_share_unified_mixed_view_panes() -> None:
@@ -116,42 +124,44 @@ def test_project_resources_share_unified_mixed_view_panes() -> None:
     resource = source("ProjectResource.tsx")
     css = source("style.css")
 
-    assert "openNotesBrowser" in app
-    assert "openBrowsedNote" in app
-    assert "openProjectFiles" in app
-    assert "openProjectFile" in app
-    assert "ProjectResource" in app
-    assert "openTab" in app
-    assert "splitNoteResource" in app
-    assert "moveLeafToSplit" in app
-    assert "version: 7" in layout
-    assert "showNoteWorkspace" not in app
+    assert source_contains(app, "openNotesBrowser")
+    assert source_contains(app, "openBrowsedNote")
+    assert source_contains(app, "openProjectFiles")
+    assert source_contains(app, "openProjectFile")
+    assert source_contains(app, "ProjectResource")
+    assert source_contains(app, "openTab")
+    assert source_contains(app, "splitNoteResource")
+    assert source_contains(app, "moveLeafToSplit")
+    assert source_contains(layout, "version: 7")
+    assert not source_contains(app, "showNoteWorkspace")
     assert not (ROOT / "frontend" / "src" / "NotesWorkspace.tsx").exists()
-    assert "/api/projects/${project.id}/notes/${encodeURIComponent(resource.id)}" in resource
-    assert "/api/projects/${project.id}/files" in resource
-    assert "/api/projects/${project.id}/file" in resource
-    assert "onOpenFile" in resource
-    assert "/api/projects/${project.id}/reveal" in resource
-    assert "/api/projects/${project.id}/ignore" in resource
-    assert "Open in default explorer" in resource
-    assert "Add pattern to global ignores" in resource
-    assert "Add pattern to project ignores" in resource
-    assert ".project-resource" in css
-    assert ".pane-stack.tab-drop-active" in css
-    assert ".notes-workspace-shell.popout" not in css
+    assert source_contains(
+        resource, "/api/projects/${project.id}/notes/${encodeURIComponent(resource.id)}"
+    )
+    assert source_contains(resource, "/api/projects/${project.id}/files")
+    assert source_contains(resource, "/api/projects/${project.id}/file")
+    assert source_contains(resource, "onOpenFile")
+    assert source_contains(resource, "/api/projects/${project.id}/reveal")
+    assert source_contains(resource, "/api/projects/${project.id}/ignore")
+    assert source_contains(resource, "Open in default explorer")
+    assert source_contains(resource, "Add pattern to global ignores")
+    assert source_contains(resource, "Add pattern to project ignores")
+    assert source_contains(css, ".project-resource")
+    assert source_contains(css, ".pane-stack.tab-drop-active")
+    assert not source_contains(css, ".notes-workspace-shell.popout")
 
 
 def test_continuity_find_is_available_from_the_shared_resource_header() -> None:
     resource = source("ProjectResource.tsx")
     drawer = source("UtilityDrawer.tsx")
 
-    assert 'aria-label="Find in this note"' in resource
-    assert "onClick={openFind}>⌕</button>" in resource
-    assert "autosaved||onSendToAgent" in resource
+    assert source_contains(resource, 'aria-label="Find in this note"')
+    assert source_contains(resource, "onClick={openFind}>⌕</button>")
+    assert source_contains(resource, "autosaved||onSendToAgent")
     # Drawer notes mount the same resource component as workspace tabs, so the
     # header trigger cannot drift between the two surfaces.
-    assert "drawer-note:" in drawer
-    assert "<ProjectResource" in drawer
+    assert source_contains(drawer, "drawer-note:")
+    assert source_contains(drawer, "<ProjectResource")
 
 
 def test_autosave_resource_header_keeps_identity_and_save_state_on_one_row() -> None:
@@ -169,24 +179,24 @@ def test_autosave_resource_header_keeps_identity_and_save_state_on_one_row() -> 
     resource = source("ProjectResource.tsx")
     css = source("style.css")
 
-    assert "class={autosaved?'autosave-resource-heading':undefined}" in resource
+    assert source_contains(resource, "class={autosaved?'autosave-resource-heading':undefined}")
     # A bare coloured dot has no accessible name, so the tone always ships with one.
-    assert 'aria-label={`Save status: ${saveIndicator.label}`}' in resource
-    assert 'class={`resource-save-indicator ${saveIndicator.tone}`}' in resource
+    assert source_contains(resource, "aria-label={`Save status: ${saveIndicator.label}`}")
+    assert source_contains(resource, "class={`resource-save-indicator ${saveIndicator.tone}`}")
     # Non-autosaving resources still say their state in words.
-    assert ":<span>{stateLabel}</span>" in resource
+    assert source_contains(resource, ":<span>{stateLabel}</span>")
     # One row, and the light keeps its size when the title is long enough to
     # ellipsize. Matched against the rule's selector list rather than an exact
     # string, so grouping the selector with its neighbours stays free.
-    assert ".project-resource>header>.autosave-resource-heading{display:flex" in css
-    assert ".autosave-resource-heading>strong{min-width:0}" in css
+    assert source_contains(css, ".project-resource>header>.autosave-resource-heading{display:flex")
+    assert source_contains(css, ".autosave-resource-heading>strong{min-width:0}")
     unshrinkable = [
         selectors
         for selectors, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css)
-        if "flex:none" in body
+        if source_contains(body, "flex:none")
     ]
     assert any(
-        ".autosave-resource-heading>.resource-save-indicator" in group
+        source_contains(group, ".autosave-resource-heading>.resource-save-indicator")
         for group in unshrinkable
     ), "the save light is allowed to shrink, so a long title can squeeze it away"
 
@@ -205,7 +215,7 @@ def test_every_save_indicator_tone_has_a_colour() -> None:
     declared = set(re.findall(r"tone: '([a-z]+)'", indicator))
     assert declared, "no tones declared; this guard would assert nothing"
     assert "pending" in declared, "the neutral base tone is expected to exist"
-    assert ".resource-save-indicator{" in css
+    assert source_contains(css, ".resource-save-indicator{")
     for tone in sorted(declared - {"pending"}):
         assert f".resource-save-indicator.{tone}{{background:" in css, (
             f"tone {tone!r} has no colour rule, so it renders as the neutral default"
@@ -216,29 +226,29 @@ def test_note_selection_can_be_consumed_only_after_an_accepted_agent_handoff() -
     resource = source("ProjectResource.tsx")
     picker = source("SendToAgentPicker.tsx")
 
-    assert "isNote&&selected&&snapshot&&!slice.truncated" in resource
-    assert "removeSelectionAfterSend" in resource
-    assert "const [removeSelection, setRemoveSelection]" in picker
-    assert "checked={removeSelection}" in picker
+    assert source_contains(resource, "isNote&&selected&&snapshot&&!slice.truncated")
+    assert source_contains(resource, "removeSelectionAfterSend")
+    assert source_contains(picker, "const [removeSelection, setRemoveSelection]")
+    assert source_contains(picker, "checked={removeSelection}")
     assert picker.count("finishAccepted()") == 2
-    assert "if (result.status === 'done')" in picker
+    assert source_contains(picker, "if (result.status === 'done')")
 
 
 def test_notes_are_decoupled_from_terminals_and_open_in_the_anchor_pane() -> None:
     app = source("App.tsx")
     layout = source("layout.ts")
-    assert "note-chip" not in app
-    assert "noteChipState" not in app
-    assert "openSessionNotes" not in app
-    assert "session.note" not in app
+    assert not source_contains(app, "note-chip")
+    assert not source_contains(app, "noteChipState")
+    assert not source_contains(app, "openSessionNotes")
+    assert not source_contains(app, "session.note")
 
     # Opening a resource is not a layout command. Every kind lands as a tab in the anchor's
     # pane; nothing splits the workspace on the user's behalf.
-    assert "openTab(current,focused,resourceLeaf('note',resourceId))" in app
+    assert source_contains(app, "openTab(current,focused,resourceLeaf('note',resourceId))")
     # (`layout.ts` still names the retired helper in a comment saying why it is gone.)
-    assert "export function placeCompanionLeaf" not in layout
-    assert "placeCompanionLeaf(" not in app
-    assert "target.kind==='session-note'&&!targetViewId" not in app
+    assert not source_contains(layout, "export function placeCompanionLeaf")
+    assert not source_contains(app, "placeCompanionLeaf(")
+    assert not source_contains(app, "target.kind==='session-note'&&!targetViewId")
 
 
 def test_notes_tab_manages_the_project_owned_collection() -> None:
@@ -247,54 +257,55 @@ def test_notes_tab_manages_the_project_owned_collection() -> None:
     drawer = source("UtilityDrawer.tsx")
     css = source("style.css")
 
-    assert "/api/notes" in notes
-    assert "/api/projects/${project.id}/notes" in notes
-    assert "project_id=${encodeURIComponent(scopeId)}" in notes
-    assert "Filter notes by project" in notes
-    assert "Search notes" in notes
-    assert "All projects" in notes
-    assert ".project-note-row" in css and ".notes-subtabs" in css
-    assert 'class="notes-new"' in notes
-    assert "mode:'rename'" in notes
-    assert "onOpenNote" in drawer
-    assert 'role="tab"' in notes
-    assert "SCRATCHPAD_TAB_ID" in notes
-    assert "stableProjectNoteTabs" in notes
-    assert 'class="notes-browser"' in notes
-    assert "onOpenScratchpad" in drawer
-    assert "kind:'global-note',resourceId:'scratchpad'" in app
-    assert "id: 'notes.scratchpad'" in app
+    assert source_contains(notes, "/api/notes")
+    assert source_contains(notes, "/api/projects/${project.id}/notes")
+    assert source_contains(notes, "project_id=${encodeURIComponent(scopeId)}")
+    assert source_contains(notes, "Filter notes by project")
+    assert source_contains(notes, "Search notes")
+    assert source_contains(notes, "All projects")
+    assert source_contains(css, ".project-note-row") and source_contains(css, ".notes-subtabs")
+    assert source_contains(notes, 'class="notes-new"')
+    assert source_contains(notes, "mode:'rename'")
+    assert source_contains(drawer, "onOpenNote")
+    assert source_contains(notes, 'role="tab"')
+    assert source_contains(notes, "SCRATCHPAD_TAB_ID")
+    assert source_contains(notes, "stableProjectNoteTabs")
+    assert source_contains(notes, 'class="notes-browser"')
+    assert source_contains(drawer, "onOpenScratchpad")
+    assert source_contains(app, "kind:'global-note',resourceId:'scratchpad'")
+    assert source_contains(app, "id: 'notes.scratchpad'")
 
     # The retired modal is gone, and its three entry points now open the drawer tab.
     assert not (ROOT / "frontend" / "src" / "SessionNotesBrowser.tsx").exists()
-    assert "SessionNotesBrowser" not in app
-    assert "case 'notes':" in drawer
-    assert "openNotesBrowser" in app
-    assert "id: 'notes.browse'" in app
-    assert "runNamedCommand('notes.browse')" in app
-    assert "openBrowsedNote" in app
+    assert not source_contains(app, "SessionNotesBrowser")
+    assert source_contains(drawer, "case 'notes':")
+    assert source_contains(app, "openNotesBrowser")
+    assert source_contains(app, "id: 'notes.browse'")
+    assert source_contains(app, "runNamedCommand('notes.browse')")
+    assert source_contains(app, "openBrowsedNote")
 
     # The note selection is remembered separately from temporary editor ownership. Closing
     # the drawer leaves the per-Project selection intact; the editor host is merely unmounted.
     set_open = app[app.index("const setClipboardOpen=") : app.index("const selectDrawerTab=")]
-    assert "releaseDrawerNote" not in set_open
-    assert "selectedResourceId={props.drawerNoteId}" in drawer
+    assert not source_contains(set_open, "releaseDrawerNote")
+    assert source_contains(drawer, "selectedResourceId={props.drawerNoteId}")
     # Notes is dispatched outside the segmented body so its editor is never unmounted by a
     # tab switch. Files joined it there for the same reason once it began hosting editors too.
-    assert (
+    assert source_contains(
+        drawer,
         "selected !== 'notes' && selected !== 'files' "
-        "&& renderSegmentedBody(stack.id, selected, segment)"
-    ) in drawer
+        "&& renderSegmentedBody(stack.id, selected, segment)",
+    )
 
     # Scope follows how you arrived. Every scope-less entry point (rail, strip, drawer.notes)
     # goes through showDrawerTab and means "this Project"; only the app menu's unscoped
     # notes.browse widens it, via openNotesBrowser, which is not on that path.
-    assert "if(tab==='notes')setNotesAllProjects(false)" in app
-    assert "setNotesAllProjects(!scope)" in app
+    assert source_contains(app, "if(tab==='notes')setNotesAllProjects(false)")
+    assert source_contains(app, "setNotesAllProjects(!scope)")
     show_tab = app[app.index("const showDrawerTab=") : app.index("const openDrawerTab=")]
     open_tab = app[app.index("const openDrawerTab=") : app.index("const persistDrawerWidth=")]
-    assert "setNotesAllProjects" not in open_tab
-    assert "setNotesAllProjects(false)" in show_tab
+    assert not source_contains(open_tab, "setNotesAllProjects")
+    assert source_contains(show_tab, "setNotesAllProjects(false)")
 
 
 def test_files_is_a_drawer_navigator_rather_than_a_workspace_tab() -> None:
@@ -308,25 +319,25 @@ def test_files_is_a_drawer_navigator_rather_than_a_workspace_tab() -> None:
     drawer = source("UtilityDrawer.tsx")
     tabs = source("drawerTabs.ts")
 
-    assert "'files'" in tabs and "'notes'" in tabs
-    assert "case 'files':" in drawer
-    assert "resource={{ kind: 'files', id: project.id }}" in drawer
+    assert source_contains(tabs, "'files'") and source_contains(tabs, "'notes'")
+    assert source_contains(drawer, "case 'files':")
+    assert source_contains(drawer, "resource={{ kind: 'files', id: project.id }}")
     # Opened, never toggled: a click that names a surface and switches Project must not
     # close the panel it was asking for.
-    assert "openDrawerTab('files',project.id)" in app
-    assert "openDrawerTab('notes'," in app
+    assert source_contains(app, "openDrawerTab('files',project.id)")
+    assert source_contains(app, "openDrawerTab('notes',")
 
     # No Files leaf, and no placement rule that has to dodge one.
-    assert "isRetiredFilesLeaf" in layout
+    assert source_contains(layout, "isRetiredFilesLeaf")
     for retired in ("stackHasFiles", "isFilesLeaf", "defaultProjectLayout", "DEFAULT_FILES_RATIO"):
         assert retired not in layout, retired
         assert retired not in app, retired
     # A never-arranged Project is left empty rather than seeded with a Files column.
-    assert "seededLayouts" not in app
+    assert not source_contains(app, "seededLayouts")
 
     # Dragging a file row onto a pane survives the move, but only on desktop: the mobile
     # drawer is an overlay with no visible pane to drop onto.
-    assert "onFileDragStart={mobileWorkspace?undefined:" in app
+    assert source_contains(app, "onFileDragStart={mobileWorkspace?undefined:")
 
 
 def test_the_files_tab_hosts_the_files_it_opens() -> None:
@@ -351,31 +362,33 @@ def test_the_files_tab_hosts_the_files_it_opens() -> None:
 
     # The Files tab hosts editors now, so its body is dispatched outside the segmented switch
     # and kept mounted, exactly as the Notes host is and for the same two failures.
-    assert "const renderFilesHost" in drawer
-    assert "{filesHere && renderFilesHost(selected === 'files')}" in drawer
-    assert "resource={{ kind: 'file', id: activeDrawerFile }}" in drawer
+    assert source_contains(drawer, "const renderFilesHost")
+    assert source_contains(drawer, "{filesHere && renderFilesHost(selected === 'files')}")
+    assert source_contains(drawer, "resource={{ kind: 'file', id: activeDrawerFile }}")
 
     # Device-local, per Project, and never written into the shared layout.
-    assert "mux.drawer.files.v1" in files
-    assert "DRAWER_FILES_KEY" in app and "serializeDrawerFiles" in app
-    assert "pruneDrawerFiles" in app
+    assert source_contains(files, "mux.drawer.files.v1")
+    assert source_contains(app, "DRAWER_FILES_KEY") and source_contains(app, "serializeDrawerFiles")
+    assert source_contains(app, "pruneDrawerFiles")
     for layout_writer in ("updateLayout", "resourceLeaf", "openTab"):
         assert layout_writer not in files, layout_writer
 
     # One live editor per file per browser: the pane leaf stands down while the drawer shows
     # it, the same way a claimed note's leaf does.
-    assert "isDrawerFileOwned(drawerFiles,activeProject.id,identity.id,clipboardOpen)" in app
-    assert "workspace-leaf-placeholder note-in-drawer" in app
+    assert source_contains(
+        app, "isDrawerFileOwned(drawerFiles,activeProject.id,identity.id,clipboardOpen)"
+    )
+    assert source_contains(app, "workspace-leaf-placeholder note-in-drawer")
 
     # The pane placement is named rather than implied, because it stopped being the default.
-    assert "type FileOpenIntent='default'|'pane'" in resource
-    assert "event.ctrlKey||event.metaKey?'pane':'default'" in resource
-    assert "Open in a pane" in resource
+    assert source_contains(resource, "type FileOpenIntent='default'|'pane'")
+    assert source_contains(resource, "event.ctrlKey||event.metaKey?'pane':'default'")
+    assert source_contains(resource, "Open in a pane")
     assert "onOpenInPane" in source("DrawerFilesRail.tsx")
 
     # Unsaved work is a refusal the cap honours, not a warning it prints afterwards.
-    assert "keep:unsavedFilePaths(targetProject)" in app
-    assert "export function unsavedFilePaths" in resource
+    assert source_contains(app, "keep:unsavedFilePaths(targetProject)")
+    assert source_contains(resource, "export function unsavedFilePaths")
 
 
 def test_drawer_tabs_support_icon_and_title_modes_from_one_registry() -> None:
@@ -453,13 +466,21 @@ def test_drawer_tabs_support_icon_and_title_modes_from_one_registry() -> None:
     ids = re.findall(r"\{ id: '([a-z]+)'", tabs)
     assert len(ids) == 11, ids
     tab_css = css[css.index(".drawer-tabs{") : css.index(".drawer-tabs::")]
-    assert "flex-wrap:nowrap" in tab_css and "overflow-x:auto" in tab_css
-    assert "drawer-chrome" not in drawer
-    assert ".drawer-tabs button{position:relative;min-height:34px;flex:1 0 32px" in css
-    assert ".drawer-tabs button{min-height:44px;flex-basis:36px;min-width:36px" in css
-    assert "activeKey={selected}" in drawer
-    assert "querySelector<HTMLElement>('[role=\"tab\"][aria-selected=\"true\"]')" in rail
-    assert "revealItem(strip, selected)" in rail
+    assert source_contains(tab_css, "flex-wrap:nowrap") and source_contains(
+        tab_css, "overflow-x:auto"
+    )
+    assert not source_contains(drawer, "drawer-chrome")
+    assert source_contains(
+        css, ".drawer-tabs button{position:relative;min-height:34px;flex:1 0 32px"
+    )
+    assert source_contains(
+        css, ".drawer-tabs button{min-height:44px;flex-basis:36px;min-width:36px"
+    )
+    assert source_contains(drawer, "activeKey={selected}")
+    assert source_contains(
+        rail, 'querySelector<HTMLElement>(\'[role="tab"][aria-selected="true"]\')'
+    )
+    assert source_contains(rail, "revealItem(strip, selected)")
     icon_map = icons[icons.index("DRAWER_TAB_ICONS") :]
     for tab_id in ids:
         assert re.search(rf"^  {tab_id}: \w+Icon,$", icon_map, re.MULTILINE), tab_id
@@ -470,44 +491,46 @@ def test_drawer_tabs_support_icon_and_title_modes_from_one_registry() -> None:
     # Segments and sections are registered beside the tabs and generate their own commands,
     # which is what keeps a folded-in surface as reachable by name as it was as a tab.
     segments = source("drawerSegments.ts")
-    assert "export const DRAWER_SEGMENTS" in segments
-    assert "...DRAWER_SEGMENTS.map((segment): Command => ({" in app
-    assert "<DrawerSegmentControl" in drawer
+    assert source_contains(segments, "export const DRAWER_SEGMENTS")
+    assert source_contains(app, "...DRAWER_SEGMENTS.map((segment): Command => ({")
+    assert source_contains(drawer, "<DrawerSegmentControl")
 
     # No text glyph survives. The configured primary mark is either the short title or icon.
-    assert "glyph" not in tabs
-    assert "glyph" not in drawer
-    assert "props.tabDisplay === 'title'" in drawer
-    assert '<span class="drawer-tab-title">{item.label}</span>' in drawer
-    assert "utilityRailDisplay==='title'" in app
-    assert '<span class="drawer-tab-title">{tab.label}</span>' in app
-    assert "<Icon />" in drawer and "<Icon/>" in app
+    assert not source_contains(tabs, "glyph")
+    assert not source_contains(drawer, "glyph")
+    assert source_contains(drawer, "props.tabDisplay === 'title'")
+    assert source_contains(drawer, '<span class="drawer-tab-title">{item.label}</span>')
+    assert source_contains(app, "utilityRailDisplay==='title'")
+    assert source_contains(app, '<span class="drawer-tab-title">{tab.label}</span>')
+    assert source_contains(drawer, "<Icon />") and source_contains(app, "<Icon/>")
 
     # Icon-only means the accessible name can no longer come from visible text. Session tabs
     # also name the scope represented by their lower-right dot; Project/app tabs stay unchanged.
     # A badged tab (Alerts, Queue) names its count too: `aria-label` replaces the button's
     # content, so a count left only in the pill is one a screen reader never hears.
-    assert (
+    assert source_contains(
+        drawer,
         "aria-label={`${item.label}${item.scope === 'session' ? ', session scoped' : ''}"
-        "${badge ? `, ${badge.label}` : ''}`}"
-        in drawer
+        "${badge ? `, ${badge.label}` : ''}`}",
     )
-    assert (
+    assert source_contains(
+        app,
         "aria-label={`${tab.title}${tab.scope==='session'?'. Session scoped.':''}"
-        "${badge?` ${badge.label}.`:''}`}"
-        in app
+        "${badge?` ${badge.label}.`:''}`}",
     )
-    assert '.drawer-tabs button[data-scope="session"]:before' in css
-    assert '.utility-rail button[data-scope="session"]:before' in css
-    assert "width:3px;height:3px" in css
-    assert "background:color-mix(in srgb,var(--muted) 52%,var(--panel2));box-shadow:none" in css
+    assert source_contains(css, '.drawer-tabs button[data-scope="session"]:before')
+    assert source_contains(css, '.utility-rail button[data-scope="session"]:before')
+    assert source_contains(css, "width:3px;height:3px")
+    assert source_contains(
+        css, "background:color-mix(in srgb,var(--muted) 52%,var(--panel2));box-shadow:none"
+    )
 
     # Sized in CSS on both surfaces: these run a 9-12px font, so `1em` would be unreadable.
-    assert ".drawer-tabs button svg{width:17px" in css
-    assert ".utility-rail button svg{width:16px" in css
+    assert source_contains(css, ".drawer-tabs button svg{width:17px")
+    assert source_contains(css, ".utility-rail button svg{width:16px")
     # Touch has no rail, so the strip is the only tab control and gets a 44px target on the
     # axis it can afford: height. Width is capped by the overlay (see the floors above).
-    assert ".drawer-tabs button{min-height:44px;" in css
+    assert source_contains(css, ".drawer-tabs button{min-height:44px;")
 
 
 def test_hidden_drawer_tabs_stay_a_render_filter_with_a_way_back() -> None:
@@ -520,25 +543,27 @@ def test_hidden_drawer_tabs_stay_a_render_filter_with_a_way_back() -> None:
     # Persistence is the hidden set alone. Nothing here may reach for the layout writers:
     # normalization re-inserts a missing tab at its *canonical* position, so removing one
     # from the tree would discard wherever the user dragged it.
-    assert "DRAWER_HIDDEN_KEY = 'mux.drawer.hidden.v1'" in visibility
-    assert "storeDrawerValue(DRAWER_HIDDEN_KEY,serializeHiddenDrawerTabs(next))" in app
-    assert "moveDrawerTab" not in visibility
-    assert "serializeDrawerLayout" not in visibility
+    assert source_contains(visibility, "DRAWER_HIDDEN_KEY = 'mux.drawer.hidden.v1'")
+    assert source_contains(
+        app, "storeDrawerValue(DRAWER_HIDDEN_KEY,serializeHiddenDrawerTabs(next))"
+    )
+    assert not source_contains(visibility, "moveDrawerTab")
+    assert not source_contains(visibility, "serializeDrawerLayout")
 
     # The way back is on the strip the tab was hidden from, not only in Settings.
-    assert 'id="drawer-visible-tabs"' in app
-    assert (
-        "label={`Panels · ${DRAWER_TABS.length-hiddenDrawerTabs.length}"
-        " of ${DRAWER_TABS.length}`}"
-    ) in app
-    assert ">Show all</button>" in app
-    assert 'class="drawer-tab-visibility"' in settings
+    assert source_contains(app, 'id="drawer-visible-tabs"')
+    assert source_contains(
+        app,
+        "label={`Panels · ${DRAWER_TABS.length-hiddenDrawerTabs.length} of ${DRAWER_TABS.length}`}",
+    )
+    assert source_contains(app, ">Show all</button>")
+    assert source_contains(settings, 'class="drawer-tab-visibility"')
 
     # An empty pane is dropped rather than drawn under a fallback heading, and a drawer
     # with nothing left carries its own control back.
-    assert "node.tabs.some(tabAvailable) ? renderStack(node) : null" in drawer
-    assert "renderEmptyDrawer()" in drawer
-    assert ">Choose panels…</button>" in drawer
+    assert source_contains(drawer, "node.tabs.some(tabAvailable) ? renderStack(node) : null")
+    assert source_contains(drawer, "renderEmptyDrawer()")
+    assert source_contains(drawer, ">Choose panels…</button>")
 
 
 def test_drawer_tabs_use_recursive_device_local_layout_and_pane_dragging() -> None:
@@ -550,45 +575,48 @@ def test_drawer_tabs_use_recursive_device_local_layout_and_pane_dragging() -> No
     css = source("style.css")
 
     # The recursive layout feeds pane rails. The depth-first projection feeds the launcher.
-    assert "layout={drawerLayout}" in app
-    assert "presentation={renderedDrawerPresentation}" in app
+    assert source_contains(app, "layout={drawerLayout}")
+    assert source_contains(app, "presentation={renderedDrawerPresentation}")
     # One predicate answers "is this tab drawn" for the launcher rail and every pane
     # strip alike, so a hidden tab cannot survive in one of them. `drawerVisibility.ts`
     # owns the rule; neither surface may re-derive it.
-    assert (
+    assert source_contains(
+        app,
         "drawerLauncherTabs.filter(tab=>drawerTabVisible(tab.id,"
-        "{hidden:hiddenDrawerTabs,hasTranscript:hasHarnessTranscript(active?.backend)}))"
-    ) in app
-    assert "visibleDrawerTabs(stack.tabs, visibility).map((id, index, visibleTabs) => {" in drawer
-    assert "renderNode(layout.root)" in drawer
-    assert "onTabDragStart={beginDrawerTabDrag}" in app
-    assert "props.onTabDragStart(event, id)" in drawer
-    assert "onPointerDown={event=>beginDrawerTabDrag(event,tab.id)}" not in app
+        "{hidden:hiddenDrawerTabs,hasTranscript:hasHarnessTranscript(active?.backend)}))",
+    )
+    assert source_contains(
+        drawer, "visibleDrawerTabs(stack.tabs, visibility).map((id, index, visibleTabs) => {"
+    )
+    assert source_contains(drawer, "renderNode(layout.root)")
+    assert source_contains(app, "onTabDragStart={beginDrawerTabDrag}")
+    assert source_contains(drawer, "props.onTabDragStart(event, id)")
+    assert not source_contains(app, "onPointerDown={event=>beginDrawerTabDrag(event,tab.id)}")
 
     # The app pointer-drag contract keeps a prospective tree in refs and commits once.
-    assert "beginPointerDrag(event,drawerTab(id).label" in app
-    assert "draggable" not in drawer
-    assert "data-reorder-id={id}" in drawer
-    assert "dragDrawerLayoutRef.current=moveDrawerTabToStack" in app
-    assert "dragDrawerLayoutRef.current=edge" in app
-    assert "commitDrawerLayout(next,id)" in app
-    assert ".drawer-tabs button[data-pointer-drop-indicator" in css
-    assert ".drawer-pane[data-pointer-drop-indicator" in css
-    assert "suppressDragClickRef.current===`drawer-tab:${tab}`" in app
+    assert source_contains(app, "beginPointerDrag(event,drawerTab(id).label")
+    assert not source_contains(drawer, "draggable")
+    assert source_contains(drawer, "data-reorder-id={id}")
+    assert source_contains(app, "dragDrawerLayoutRef.current=moveDrawerTabToStack")
+    assert source_contains(app, "dragDrawerLayoutRef.current=edge")
+    assert source_contains(app, "commitDrawerLayout(next,id)")
+    assert source_contains(css, ".drawer-tabs button[data-pointer-drop-indicator")
+    assert source_contains(css, ".drawer-pane[data-pointer-drop-indicator")
+    assert source_contains(app, "suppressDragClickRef.current===`drawer-tab:${tab}`")
 
     # Legacy flat order is input only. Recursive state has its own device-local key.
-    assert "mux.drawer.layout.v1" in layout
-    assert "loadDrawerTabOrder()" in app
-    assert "loadSettings().then" in app
-    assert "!drawerLegacySettingsReady" in app
-    assert "localStorage.getItem(DRAWER_LAYOUT_KEY)===null" in app
-    assert "saveDrawerTabOrder" not in app
-    assert "mux:settings-changed',adopt" not in app
+    assert source_contains(layout, "mux.drawer.layout.v1")
+    assert source_contains(app, "loadDrawerTabOrder()")
+    assert source_contains(app, "loadSettings().then")
+    assert source_contains(app, "!drawerLegacySettingsReady")
+    assert source_contains(app, "localStorage.getItem(DRAWER_LAYOUT_KEY)===null")
+    assert not source_contains(app, "saveDrawerTabOrder")
+    assert not source_contains(app, "mux:settings-changed',adopt")
 
     # Normalization preserves singleton ownership and reset restores the canonical stack.
-    assert "export function normalizeDrawerLayout" in layout
-    assert "export function normalizeDrawerTabOrder" in order
-    assert "id: 'drawer.resetLayout'" in app
+    assert source_contains(layout, "export function normalizeDrawerLayout")
+    assert source_contains(order, "export function normalizeDrawerTabOrder")
+    assert source_contains(app, "id: 'drawer.resetLayout'")
 
 
 def test_drawer_tab_display_is_live_and_searchable() -> None:
@@ -597,47 +625,55 @@ def test_drawer_tab_display_is_live_and_searchable() -> None:
     drawer = source("UtilityDrawer.tsx")
     css = source("style.css")
 
-    assert "drawer_tab_display?:'icon'|'title'" in app
-    assert "utility_rail_display?:'icon'|'title'" in app
-    assert "setDrawerTabDisplay(config.drawer_tab_display==='title'?'title':'icon')" in app
-    assert "setUtilityRailDisplay(config.utility_rail_display==='title'?'title':'icon')" in app
+    assert source_contains(app, "drawer_tab_display?:'icon'|'title'")
+    assert source_contains(app, "utility_rail_display?:'icon'|'title'")
+    assert source_contains(
+        app, "setDrawerTabDisplay(config.drawer_tab_display==='title'?'title':'icon')"
+    )
+    assert source_contains(
+        app, "setUtilityRailDisplay(config.utility_rail_display==='title'?'title':'icon')"
+    )
     # Both controls are the app's own `Dropdown` rather than a native `<select>`; the choices
     # moved from `<option>` children into an `options` prop with them.
-    assert "Drawer tabs<Dropdown" in settings
-    assert "Right rail<Dropdown" in settings
-    assert "{value:'icon',label:'Icons'}" in settings
-    assert "{value:'title',label:'Titles'}" in settings
-    assert "tabDisplay={drawerTabDisplay}" in app
-    assert "utilityRailDisplay==='title'" in app
-    assert "const utilityRailWidth=utilityRailDisplay==='title'?112:40" in app
-    assert "props.tabDisplay === 'title'" in drawer
-    assert "surface:'tabs'|'rail'" in app
-    assert "Collapse utility drawer" in app
-    assert "drawer-display-menu" in app
-    assert ".drawer-display-menu{z-index:70}" in css
-    assert "onTab(id, id === selected)" in drawer
-    assert "beginTabLongPress" in drawer
-    assert "drawer-chrome" not in drawer
-    assert "--utility-rail-width" in app
-    assert "var(--utility-rail-width,40px)" in css
+    assert source_contains(settings, "Drawer tabs<Dropdown")
+    assert source_contains(settings, "Right rail<Dropdown")
+    assert source_contains(settings, "{value:'icon',label:'Icons'}")
+    assert source_contains(settings, "{value:'title',label:'Titles'}")
+    assert source_contains(app, "tabDisplay={drawerTabDisplay}")
+    assert source_contains(app, "utilityRailDisplay==='title'")
+    assert source_contains(app, "const utilityRailWidth=utilityRailDisplay==='title'?112:40")
+    assert source_contains(drawer, "props.tabDisplay === 'title'")
+    assert source_contains(app, "surface:'tabs'|'rail'")
+    assert source_contains(app, "Collapse utility drawer")
+    assert source_contains(app, "drawer-display-menu")
+    assert source_contains(css, ".drawer-display-menu{z-index:70}")
+    assert source_contains(drawer, "onTab(id, id === selected)")
+    assert source_contains(drawer, "beginTabLongPress")
+    assert not source_contains(drawer, "drawer-chrome")
+    assert source_contains(app, "--utility-rail-width")
+    assert source_contains(css, "var(--utility-rail-width,40px)")
 
 
 def test_recursive_drawer_exposes_tab_and_separator_accessibility() -> None:
     drawer = source("UtilityDrawer.tsx")
 
-    assert "role:'tablist'" in drawer
-    assert 'role="tab"' in drawer
-    assert 'role="tabpanel"' in drawer
-    assert "aria-controls={panelDomId(stack.id)}" in drawer
-    assert "aria-labelledby={tabDomId(stack.id, selected)}" in drawer
-    assert "tabIndex={id === selected ? 0 : -1}" in drawer
-    assert "event.key !== 'ArrowLeft' && event.key !== 'ArrowRight'" in drawer
-    assert "aria-valuenow={Math.round(node.ratio * 100)}" in drawer
-    assert "onDblClick={() => updateRatio(0.5)}" in drawer
-    assert "onPointerDown={projection" in drawer
-    assert "beginTabLongPress(event, id); props.onProjectionTabReorder?.(event, id)" in drawer
-    assert "? (mobile ? renderStack(mobileStack, focusedTab) : renderNode(layout.root))" in drawer
-    assert 'aria-live="polite"' in drawer
+    assert source_contains(drawer, "role:'tablist'")
+    assert source_contains(drawer, 'role="tab"')
+    assert source_contains(drawer, 'role="tabpanel"')
+    assert source_contains(drawer, "aria-controls={panelDomId(stack.id)}")
+    assert source_contains(drawer, "aria-labelledby={tabDomId(stack.id, selected)}")
+    assert source_contains(drawer, "tabIndex={id === selected ? 0 : -1}")
+    assert source_contains(drawer, "event.key !== 'ArrowLeft' && event.key !== 'ArrowRight'")
+    assert source_contains(drawer, "aria-valuenow={Math.round(node.ratio * 100)}")
+    assert source_contains(drawer, "onDblClick={() => updateRatio(0.5)}")
+    assert source_contains(drawer, "onPointerDown={projection")
+    assert source_contains(
+        drawer, "beginTabLongPress(event, id); props.onProjectionTabReorder?.(event, id)"
+    )
+    assert source_contains(
+        drawer, "? (mobile ? renderStack(mobileStack, focusedTab) : renderNode(layout.root))"
+    )
+    assert source_contains(drawer, 'aria-live="polite"')
 
 
 def test_menu_scope_follows_the_menu_that_opened_the_surface() -> None:
@@ -650,8 +686,8 @@ def test_menu_scope_follows_the_menu_that_opened_the_surface() -> None:
     # The lead block carries no heading: it is the app's general-purpose surfaces,
     # not a "browse projects" section. Nothing that acts on a single Project lives
     # in the app menu at all — that belongs to the Project's own context menu.
-    assert "BROWSE ALL PROJECTS" not in main_menu
-    assert "CURRENT PROJECT" not in main_menu
+    assert not source_contains(main_menu, "BROWSE ALL PROJECTS")
+    assert not source_contains(main_menu, "CURRENT PROJECT")
     # The app menu opens each browser unscoped, never its project-scoped variant.
     # Processes, bandwidth, storage, and fleet activity are one `Resources` row, so the menu
     # names the dialog rather than four of its segments; `processes.all` survives as a
@@ -683,7 +719,7 @@ def test_menu_scope_follows_the_menu_that_opened_the_surface() -> None:
         app.index("aria-label={`Project actions for") : app.index('aria-label="Sidebar actions"')
     ]
     # History survives as the prefiltered surface with nowhere else to be reached from.
-    assert "runNamedCommand('history.openProject')" in project_menu
+    assert source_contains(project_menu, "runNamedCommand('history.openProject')")
     # Notes, Processes, the fleet queue, Browse files, and Prompt library each left the
     # Project menu. Every one already opens scoped to the selected Project from the drawer
     # or another nearby surface, so the menu row duplicated a route one click away. They
@@ -695,7 +731,7 @@ def test_menu_scope_follows_the_menu_that_opened_the_surface() -> None:
         "prompts.openProject",
     ):
         assert elsewhere not in project_menu
-    assert "openProjectFiles(" not in project_menu
+    assert not source_contains(project_menu, "openProjectFiles(")
     for command in (
         "notes.browseProject",
         "processes.project",
@@ -705,16 +741,16 @@ def test_menu_scope_follows_the_menu_that_opened_the_surface() -> None:
         assert f"id: '{command}'" in app or f"id:'{command}'" in app
     # The category headings went with them: two headings over three rows apiece in a menu
     # of nine spent a fifth of its height saying what each row's own icon now says.
-    assert "BROWSE THIS PROJECT" not in project_menu
-    assert 'context-subtitle">PROJECT<' not in project_menu
+    assert not source_contains(project_menu, "BROWSE THIS PROJECT")
+    assert not source_contains(project_menu, 'context-subtitle">PROJECT<')
 
     # Scope is a visible, clearable control rather than a hidden mode, on every shell that
     # draws the surface — including the drawer tab, which opens scoped to the active Project.
-    assert "process-scope-select" in view
+    assert source_contains(view, "process-scope-select")
     # A `Dropdown` now, so the clearing row is an option object rather than an `<option>`.
-    assert "{ value: '', label: 'All projects' }" in view
-    assert "initialProjectId" in panel
-    assert 'projectScope={scope}' in source("ProcessesTab.tsx")
+    assert source_contains(view, "{ value: '', label: 'All projects' }")
+    assert source_contains(panel, "initialProjectId")
+    assert "projectScope={scope}" in source("ProcessesTab.tsx")
     # And the drawer tab is not made redundant by the dialog's Processes segment: a modal
     # covers the terminal, so the tab is what answers "what is *this* session running"
     # beside it. It ships hidden by default rather than removed.
@@ -722,8 +758,8 @@ def test_menu_scope_follows_the_menu_that_opened_the_surface() -> None:
     assert "'processes'" in source("drawerVisibility.ts")
     # History is a global overlay (not a per-project pane), opened with an
     # optional scope that pre-filters its own clearable project picker.
-    assert "const showHistory = (scope:Project|null=null)" in app
-    assert "{historyOpen&&<HistoryBrowser" in app
+    assert source_contains(app, "const showHistory = (scope:Project|null=null)")
+    assert source_contains(app, "{historyOpen&&<HistoryBrowser")
 
 
 def test_dialog_layers_stack_above_persistent_chrome() -> None:
@@ -757,42 +793,48 @@ def test_dialog_layers_stack_above_persistent_chrome() -> None:
 
 def test_worktrees_stay_out_of_navigation_but_can_launch_from_project_run() -> None:
     app = source("App.tsx")
-    assert "worktreeCreate" not in app
-    assert "manageWorktrees" not in app
-    assert "Create worktree" not in app
+    assert not source_contains(app, "worktreeCreate")
+    assert not source_contains(app, "manageWorktrees")
+    assert not source_contains(app, "Create worktree")
     run_menu = source("ProjectRunMenu.tsx")
-    assert "New worktree session" in run_menu
+    assert source_contains(run_menu, "New worktree session")
     # Both phases of the launch are App's, so the optimistic pane can exist before the checkout
     # does. The form only collects the draft and renders the creation failure it gets back.
-    assert "'/api/git/worktrees'" not in run_menu
-    assert "onWorktreeLaunch({path,branch,startPoint:worktree.startPoint.trim()," in run_menu
-    assert "'/api/git/worktrees'" in app
-    assert "'/api/git/worktrees/session'" in app
-    assert "pendingTerminal(pendingId,target,backend,{" in app
-    assert "label:'Creating worktree…'" in app
-    assert "pending_label:'Setting up worktree…'" in app
+    assert not source_contains(run_menu, "'/api/git/worktrees'")
+    assert source_contains(
+        run_menu, "onWorktreeLaunch({path,branch,startPoint:worktree.startPoint.trim(),"
+    )
+    assert source_contains(app, "'/api/git/worktrees'")
+    assert source_contains(app, "'/api/git/worktrees/session'")
+    assert source_contains(app, "pendingTerminal(pendingId,target,backend,{")
+    assert source_contains(app, "label:'Creating worktree…'")
+    assert source_contains(app, "pending_label:'Setting up worktree…'")
     # A worktree launch owns a real leaf in the focused pane like every other launch, because an
     # unpanned view is drawn nowhere at all on a phone.
-    assert "const optimisticLayout=placePendingTerminal(currentLayout,pendingId,placement)" in app
+    assert source_contains(
+        app, "const optimisticLayout=placePendingTerminal(currentLayout,pendingId,placement)"
+    )
     # The refresh pass that replays pending placements moved into the layout planner, which keeps
     # a launch the operator is watching as the pane's active tab across a long bootstrap.
     planner = source("fleetLayouts.ts")
-    assert "if (pending.projectId !== project.id || !pending.placement) continue" in planner
+    assert source_contains(
+        planner, "if (pending.projectId !== project.id || !pending.placement) continue"
+    )
     watched = "const watched = joinAnchor.projectId === project.id && joinAnchor.viewId === id"
     assert watched in planner
-    assert "selectPendingTerminal(current,session.id)" in app
-    assert "setActiveId(current=>current===pendingId?next.id:current)" in app
-    assert "normalizeWorktreeBranchInput(value)" in run_menu
-    assert "api<{worktree_root?:string}>('GET','/api/config')" in run_menu
-    assert "timeoutMs:35*60*1000" in app
-    assert "worktree-my-change" in run_menu
-    assert "setup output is in the session scrollback" in app
+    assert source_contains(app, "selectPendingTerminal(current,session.id)")
+    assert source_contains(app, "setActiveId(current=>current===pendingId?next.id:current)")
+    assert source_contains(run_menu, "normalizeWorktreeBranchInput(value)")
+    assert source_contains(run_menu, "api<{worktree_root?:string}>('GET','/api/config')")
+    assert source_contains(app, "timeoutMs:35*60*1000")
+    assert source_contains(run_menu, "worktree-my-change")
+    assert source_contains(app, "setup output is in the session scrollback")
     settings = source("Settings.tsx")
-    assert "<h3>Git and worktrees</h3>" in settings
-    assert "change('worktree_root'" in settings
+    assert source_contains(settings, "<h3>Git and worktrees</h3>")
+    assert source_contains(settings, "change('worktree_root'")
     projects = source("ProjectsManager.tsx")
-    assert "Worktree setup command" in projects
-    assert "setup_command" in projects
+    assert source_contains(projects, "Worktree setup command")
+    assert source_contains(projects, "setup_command")
 
 
 def test_run_menu_leads_with_the_action_title_and_stays_a_menu_on_a_phone() -> None:
@@ -802,22 +844,26 @@ def test_run_menu_leads_with_the_action_title_and_stays_a_menu_on_a_phone() -> N
     # A row shows the title and the run shape. The description is agent-facing prose
     # laid out `flex:none`, so it took the row's whole width and ellipsised the name a
     # human picks by - worst on package scripts, whose description is the script body.
-    assert "<strong>{action.label}</strong>{hint&&<em>{hint}</em>}" in run_menu
-    assert (
+    assert source_contains(run_menu, "<strong>{action.label}</strong>{hint&&<em>{hint}</em>}")
+    assert source_contains(
+        run_menu,
         "const hint=[action.steps.length>1?`${action.steps.length} terminals`:'',"
-        "action.inputs?.length?'asks for input':''].filter(Boolean).join(' · ')" in run_menu
+        "action.inputs?.length?'asks for input':''].filter(Boolean).join(' · ')",
     )
     # It is still reachable, on the row's tooltip and above the inputs form.
-    assert "title={[action.description,...action.steps.map(step=>step.command)]" in run_menu
+    assert source_contains(
+        run_menu, "title={[action.description,...action.steps.map(step=>step.command)]"
+    )
 
     # On a phone the menu is a menu, not the screen: a Project with many actions
     # scrolls inside a bounded box. `.project-run-menu` already sets `overflow:auto`,
     # and fitScrollingMenuInViewport lifts a bottom-anchored box back on-screen.
-    assert (
+    assert source_contains(
+        css,
         ".project-run-menu{width:min(calc(300px*var(--ui-scale)),calc(100vw - 28px));"
-        "max-height:min(58dvh,calc(100dvh - 12px))}" in css
+        "max-height:min(58dvh,calc(100dvh - 12px))}",
     )
-    assert "left:6px!important" not in css
+    assert not source_contains(css, "left:6px!important")
 
 
 def test_process_fleet_groups_sessions_and_daemon_infrastructure() -> None:
@@ -825,51 +871,51 @@ def test_process_fleet_groups_sessions_and_daemon_infrastructure() -> None:
     panel = source("ResourcesModal.tsx")
     fleet = source("processFleet.ts")
 
-    assert "projectProcessGroups" in view
+    assert source_contains(view, "projectProcessGroups")
     # A session's Project comes from the live session first and the sample second, so a
     # session moved between Projects re-files immediately instead of on the next sample.
-    assert (
-        "sessionById.get(group.session_id)?.project_id || group.project_id" in fleet
+    assert source_contains(
+        fleet, "sessionById.get(group.session_id)?.project_id || group.project_id"
     )
-    assert "All projects, sessions, and swe-mux infrastructure" in panel
-    assert "PROCESS::FLEET" in panel
+    assert source_contains(panel, "All projects, sessions, and swe-mux infrastructure")
+    assert source_contains(panel, "PROCESS::FLEET")
     # Drilling into one session retitles the frame, so the heading always says which of the
     # two scopes is on screen rather than leaving the fleet's title over one session's trees.
-    assert "selectedSessionId ? 'Session processes' : 'System'" in panel
-    assert "buildProcessTree" in view
-    assert "renderDaemonGroup" in view
+    assert source_contains(panel, "selectedSessionId ? 'Session processes' : 'System'")
+    assert source_contains(view, "buildProcessTree")
+    assert source_contains(view, "renderDaemonGroup")
     # The runtime keeps its own group. Its heading dropped the `swe-mux::` prefix that the
     # session-group heading immediately below it already spelled out.
-    assert "daemon + infrastructure" in view
-    assert "swe-mux runtime" in view
-    assert "daemon-owned child not attributed to a terminal session" in view
+    assert source_contains(view, "daemon + infrastructure")
+    assert source_contains(view, "swe-mux runtime")
+    assert source_contains(view, "daemon-owned child not attributed to a terminal session")
     # ...and it is excluded by a Project scope, because it belongs to no Project.
-    assert "if (!daemon || selectedSessionId || projectScope) return null" in view
+    assert source_contains(view, "if (!daemon || selectedSessionId || projectScope) return null")
     # Totals follow what is on screen: the daemon's own figures plus the runtime when
     # unscoped, recounted from the visible rows when not.
-    assert "fleetViewTotals(snapshot, sessionGroups, scoped)" in view
+    assert source_contains(view, "fleetViewTotals(snapshot, sessionGroups, scoped)")
 
 
 def test_accessibility_and_startup_instrumentation_remain_intact() -> None:
     combined = frontend_source()
     css = source("style.css")
 
-    assert 'role="dialog"' in combined
-    assert 'role="menu"' in combined
-    assert 'aria-live="assertive"' in combined
-    assert "useModalFocus" in combined
-    assert "prefers-reduced-motion:reduce" in css
-    assert "startup_timing_ms" in combined
-    assert "client_startup_timing_ms" in combined
-    assert "/startup-metrics" in combined
+    assert source_contains(combined, 'role="dialog"')
+    assert source_contains(combined, 'role="menu"')
+    assert source_contains(combined, 'aria-live="assertive"')
+    assert source_contains(combined, "useModalFocus")
+    assert source_contains(css, "prefers-reduced-motion:reduce")
+    assert source_contains(combined, "startup_timing_ms")
+    assert source_contains(combined, "client_startup_timing_ms")
+    assert source_contains(combined, "/startup-metrics")
 
 
 def test_browser_title_stays_stable_without_attention_count() -> None:
     combined = frontend_source()
-    index = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    index = localized_source((ROOT / "frontend" / "index.html").read_text(encoding="utf-8"))
 
-    assert "<title>swe-mux</title>" in index
-    assert "document.title" not in combined
+    assert source_contains(index, "<title>swe-mux</title>")
+    assert not source_contains(combined, "document.title")
 
 
 def test_the_transcript_tab_reads_and_only_reads() -> None:
@@ -906,12 +952,12 @@ def test_the_transcript_tab_reads_and_only_reads() -> None:
     # existing clip instead of synthesizing a second copy (`design/features/voice.md`).
     posts = set(re.findall(r"api<[^>]*>\('POST', `([^`]+)`", tab))
     assert posts == {"/api/sessions/${sessionId}/voice/generate"}, posts
-    assert "message_id: message.message_id" in tab
+    assert source_contains(tab, "message_id: message.message_id")
 
     # Copy and playback both leave the agent alone, and agent replies run to kilobytes,
     # so they stay out of the clipboard ring rather than evicting the snippets it
     # exists to hand back.
-    assert "withoutClipboardCapture" in tab
+    assert source_contains(tab, "withoutClipboardCapture")
     assert "suppressDepth > 0" in source("clipboardHistory.ts")
 
     # The pane-header route is shared by desktop panes and the mobile projection. It
@@ -919,14 +965,14 @@ def test_the_transcript_tab_reads_and_only_reads() -> None:
     # with transcripts, and stays adjacent to Queue in source/render order.
     opener_start = app.index("const openTranscriptForSession =")
     opener = app[opener_start : app.index("/** Pop one target's queue", opener_start)]
-    assert "if (session) await selectSession(session)" in opener
-    assert "openDrawerTab('transcript',session?.project_id||projectId)" in opener
+    assert source_contains(opener, "if (session) await selectSession(session)")
+    assert source_contains(opener, "openDrawerTab('transcript',session?.project_id||projectId)")
     tools_start = app.index("renderAction={(actionId:SessionTopbarActionId)=>")
     tools = app[tools_start : app.index("menu={<button", tools_start)]
-    assert "hasHarnessTranscript(session.backend)" in tools
-    assert "deliversHarnessPrompts(session.backend)" in tools
-    assert "openQueueForSession(id)" in tools
-    assert "openTranscriptForSession(id)" in tools
+    assert source_contains(tools, "hasHarnessTranscript(session.backend)")
+    assert source_contains(tools, "deliversHarnessPrompts(session.backend)")
+    assert source_contains(tools, "openQueueForSession(id)")
+    assert source_contains(tools, "openTranscriptForSession(id)")
     default_start = topbar.index("export function defaultSessionTopbarConfig")
     default = topbar[default_start : topbar.index("const METRIC_IDS", default_start)]
     assert default.index("action',id:'drawer:queue'") < default.index(
@@ -936,18 +982,24 @@ def test_the_transcript_tab_reads_and_only_reads() -> None:
     # The drawer unmounts a tab body on every tab switch, so anything that has to
     # survive that cannot be component state. The scroll place is the whole reason this
     # module exists separately from the component.
-    assert "rememberTranscriptScroll" in view and "recallTranscriptScroll" in view
-    assert "let scrollMemory" in view
-    assert "useState" not in view
+    assert source_contains(view, "rememberTranscriptScroll") and source_contains(
+        view, "recallTranscriptScroll"
+    )
+    assert source_contains(view, "let scrollMemory")
+    assert not source_contains(view, "useState")
 
     # Refreshed after the observer consumes a user message, while the agent appends, and
     # when the assistant turn ends. A timer would re-read the conversation to learn
     # nothing most of the time; the only scheduled read is the loader's backoff retry of
     # a read that came back unfinished (`transcriptLoader.ts`).
-    assert "TURN_ENDED_EVENT" in tab and "turn_ended" in source("App.tsx")
-    assert "TRANSCRIPT_CHANGED_EVENT" in tab and "transcript_message" in source("App.tsx")
-    assert "TRANSCRIPT_APPENDED_EVENT" in tab and "transcript_appended" in source("App.tsx")
-    assert "setInterval" not in tab
+    assert source_contains(tab, "TURN_ENDED_EVENT") and "turn_ended" in source("App.tsx")
+    assert source_contains(tab, "TRANSCRIPT_CHANGED_EVENT") and "transcript_message" in source(
+        "App.tsx"
+    )
+    assert source_contains(tab, "TRANSCRIPT_APPENDED_EVENT") and "transcript_appended" in source(
+        "App.tsx"
+    )
+    assert not source_contains(tab, "setInterval")
     assert "setInterval" not in source("transcriptLoader.ts")
     assert "session.regenerateTitle" in source("App.tsx")
     assert "/title/regenerate" in source("App.tsx")
@@ -955,22 +1007,26 @@ def test_the_transcript_tab_reads_and_only_reads() -> None:
     # A reader already scrolled up is not carried along by an arriving message; it is
     # offered as a button instead. Yanking the column mid-sentence every time an agent
     # speaks is what makes a live log unreadable.
-    assert "isPinnedToBottom" in tab
-    assert "transcript-jump" in tab and ".transcript-jump{" in source("style.css")
+    assert source_contains(tab, "isPinnedToBottom")
+    assert source_contains(tab, "transcript-jump") and ".transcript-jump{" in source("style.css")
 
     # Search is a local lens over the already loaded conversation. Copy-all remains the
     # complete conversation, while each message's copy control sticks only within that row.
-    assert 'type="search"' in tab and "transcriptMatchesQuery" in tab
-    assert "transcriptSearchParts" in tab
-    assert "transcript-copy-anchor" in tab
+    assert source_contains(tab, 'type="search"') and source_contains(tab, "transcriptMatchesQuery")
+    assert source_contains(tab, "transcriptSearchParts")
+    assert source_contains(tab, "transcript-copy-anchor")
     assert ".transcript-copy-anchor{position:sticky" in source("style.css")
 
     # Show-more is an explicit reading preference. It follows the session and run
     # across drawer unmounts, but the bounded registry contains no transcript text.
-    assert "TRANSCRIPT_EXPANSION_KEY" in tab
-    assert "setTranscriptMessageExpanded" in tab
-    assert "TRANSCRIPT_EXPANSION_MAX_ENTRIES = 500" in view
-    assert "sessionId: string" in view and "runId: string" in view and "messageId: string" in view
+    assert source_contains(tab, "TRANSCRIPT_EXPANSION_KEY")
+    assert source_contains(tab, "setTranscriptMessageExpanded")
+    assert source_contains(view, "TRANSCRIPT_EXPANSION_MAX_ENTRIES = 500")
+    assert (
+        source_contains(view, "sessionId: string")
+        and source_contains(view, "runId: string")
+        and source_contains(view, "messageId: string")
+    )
 
     # One message is one message whether it is being read live or out of history, so
     # both surfaces stamp it through the same helper rather than each carrying its own
@@ -979,49 +1035,53 @@ def test_the_transcript_tab_reads_and_only_reads() -> None:
     # is what silently drifts when a reader gains a feature the other does not.
     history = source("HistoryBrowser.tsx")
     for surface in (tab, history):
-        assert "transcriptTimestampLabel(message.ts)" in surface
-        assert "transcriptTimestampIso(message.ts)" in surface
-        assert "TranscriptToolCalls" in surface
-        assert "showToolCalls" in surface
+        assert source_contains(surface, "transcriptTimestampLabel(message.ts)")
+        assert source_contains(surface, "transcriptTimestampIso(message.ts)")
+        assert source_contains(surface, "TranscriptToolCalls")
+        assert source_contains(surface, "showToolCalls")
     tool_calls = source("TranscriptToolCalls.tsx")
     # One formatter for an input History carries and one the reader reads on demand.
-    assert "transcriptToolInputText(lazy ? inputs.get(call.id) : call.input)" in tool_calls
-    assert '<details class="transcript-tool-call"' in tool_calls
+    assert source_contains(
+        tool_calls, "transcriptToolInputText(lazy ? inputs.get(call.id) : call.input)"
+    )
+    assert source_contains(tool_calls, '<details class="transcript-tool-call"')
     # An input is drawn only while its call is open: a long session's tool calls toggled
     # on used to lay out every input as preformatted text.
-    assert "{isOpen && (" in tool_calls
+    assert source_contains(tool_calls, "{isOpen && (")
     # Deliberately not the same formatter the history *list* uses: a row with no
     # timestamp still owes the reader an explanation, while a message stamp that
     # cannot be rendered is simply omitted (`{stamp&&<time…>}`).
-    assert "'timestamp unavailable'" in history
-    assert "'timestamp unavailable'" not in view
+    assert source_contains(history, "'timestamp unavailable'")
+    assert not source_contains(view, "'timestamp unavailable'")
 
 
 def test_history_filters_fit_narrow_split_panes() -> None:
     css = source("style.css")
     history = source("HistoryBrowser.tsx")
 
-    assert ".history-workspace { container-type:inline-size" in css
-    assert ".history-search>* { min-width:0;max-width:100% }" in css
+    assert source_contains(css, ".history-workspace { container-type:inline-size")
+    assert source_contains(css, ".history-search>* { min-width:0;max-width:100% }")
     # A wrapping row of controls sized to their own widest option, not equal columns:
     # `Dropdown` already reserves that width, so a four-item list was taking half the
     # sidebar. The floor keeps a short list from collapsing and is capped at the
     # container, so a narrow sidebar wraps instead of overflowing.
-    assert ".history-search { display:flex;flex-wrap:wrap;align-items:center;gap:4px }" in css
-    assert "flex:0 1 auto;min-width:min(7rem,100%);max-width:100%" in css
-    assert ".history-search { display:grid" not in css
-    assert "@container (max-width:620px)" in css
+    assert source_contains(
+        css, ".history-search { display:flex;flex-wrap:wrap;align-items:center;gap:4px }"
+    )
+    assert source_contains(css, "flex:0 1 auto;min-width:min(7rem,100%);max-width:100%")
+    assert not source_contains(css, ".history-search { display:grid")
+    assert source_contains(css, "@container (max-width:620px)")
     # The control chooses which of the two stamps a row is ranked by, so the row has to
     # show both for the choice to mean anything. It is named as a sort because it now is
     # one: it used to scope only the date range, so toggling it changed nothing at all
     # unless a range happened to be set (`design/features/history.md`).
-    assert "time_basis" in history
-    assert "Sort: last activity" in history
-    assert "Sort: session started" in history
+    assert source_contains(history, "time_basis")
+    assert source_contains(history, "Sort: last activity")
+    assert source_contains(history, "Sort: session started")
     # And it opens on last activity, which is what "the most recent conversations" means.
-    assert "useState<'started'|'last_message'>('last_message')" in history
-    assert "Started {timestampLabel(historyStart(entry))}" in history
-    assert "Last {entry.last_message_role" in history
+    assert source_contains(history, "useState<'started'|'last_message'>('last_message')")
+    assert source_contains(history, "Started {timestampLabel(historyStart(entry))}")
+    assert source_contains(history, "Last {entry.last_message_role")
 
 
 def test_daemon_spawned_panes_request_focus_rather_than_setting_it() -> None:
@@ -1053,16 +1113,15 @@ def test_daemon_spawned_panes_request_focus_rather_than_setting_it() -> None:
         assert body, f"{flow} is no longer a recognisable handler"
         assert "requestFocusView(" in body.group(1), f"{flow} must request focus, not set it"
         for target in re.findall(r"setFocusedViewId\(([^\n]*)", body.group(1)):
-            assert "pendingId" in target, (
+            assert source_contains(target, "pendingId"), (
                 f"{flow} sets focus on {target.strip()}, which the layout refresh will undo; "
                 "only a placeholder this flow placed itself may be focused directly"
             )
 
     # The request is held in a ref and consulted by the reconciliation effect, or it
     # would be dropped by the very render it exists to survive.
-    assert (
-        "const requestFocusView=(id:string)=>"
-        "{pendingFocusId.current=id;setFocusedViewId(id)}"
-    ) in app
-    assert "requested:pendingFocusId.current" in app
-    assert "if(!keepRequest)pendingFocusId.current=null" in app
+    assert source_contains(
+        app, "const requestFocusView=(id:string)=>{pendingFocusId.current=id;setFocusedViewId(id)}"
+    )
+    assert source_contains(app, "requested:pendingFocusId.current")
+    assert source_contains(app, "if(!keepRequest)pendingFocusId.current=null")

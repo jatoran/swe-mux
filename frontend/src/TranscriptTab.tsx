@@ -1,3 +1,4 @@
+import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { Fragment, type VNode } from 'preact'
 import { memo } from 'preact/compat'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
@@ -172,16 +173,16 @@ function SelectSheet({ title, text, copied, onCopy, onClose }: {
     onCopy(transcriptSelectedSlice(element.value, element.selectionStart, element.selectionEnd))
   }
   return <div class="modal-layer transcript-select-layer">
-    <div class="transcript-select-sheet" ref={host} role="dialog" aria-label={`Select text from ${title}`}>
+    <div class="transcript-select-sheet" ref={host} role="dialog" aria-label={t("TranscriptTab.6407693b47", { title: title })}>
       <header>
-        <button type="button" aria-label="Close" title="Close" onClick={onClose}>×</button>
+        <button type="button" aria-label={t("TranscriptTab.7d9eb7acb1")} title={t("TranscriptTab.7d9eb7acb1")} onClick={onClose}>×</button>
         <strong>{title}</strong>
       </header>
       <textarea ref={area} class="transcript-select-text" readOnly spellcheck={false} value={text} />
       <footer>
-        <span>Drag to select, then copy. Nothing selected copies all of it.</span>
+        <span>{t("TranscriptTab.0215614d81")}</span>
         <button type="button" class={copied ? 'copied' : ''} onClick={copySelection}>
-          {copied ? 'Copied' : 'Copy selection'}
+          {copied ? t("TranscriptTab.8d525e5f15") : t("TranscriptTab.63a5c4dc29")}
         </button>
       </footer>
     </div>
@@ -274,14 +275,14 @@ const Message = memo(function Message({ message, copied, expanded, query, audio,
     <div class="transcript-copy-anchor" onClick={event => event.stopPropagation()}>
       <button
         class="transcript-copy transcript-copy-icon"
-        aria-label={`Select text from this ${kind}`}
-        title={`Select part of this ${kind}`}
+        aria-label={t("TranscriptTab.d5ed54feaa", { kind: kind })}
+        title={t("TranscriptTab.4e9eff5c1e", { kind: kind })}
         onClick={() => actions.onSelectText(message)}
       ><SelectTextIcon /></button>
       <button
         class={copied ? 'transcript-copy transcript-copy-icon copied' : 'transcript-copy transcript-copy-icon'}
-        aria-label={copied ? `Copied this ${kind}` : `Copy this ${kind}`}
-        title={copied ? 'Copied' : `Copy this ${kind}`}
+        aria-label={copied ? t("TranscriptTab.9f37974dcd", { kind: kind }) : t("TranscriptTab.a34a7dd72c", { kind: kind })}
+        title={copied ? t("TranscriptTab.8d525e5f15") : t("TranscriptTab.a34a7dd72c", { kind: kind })}
         onClick={() => actions.onCopy(message)}
       >{copied ? <CheckIcon /> : <CopyIcon />}</button>
       {/* Replies only: read aloud speaks what the agent said, and a prompt is
@@ -297,17 +298,15 @@ const Message = memo(function Message({ message, copied, expanded, query, audio,
       <span class="transcript-speaker">{transcriptSpeaker(message.role)}</span>
       {stamp && <time dateTime={transcriptTimestampIso(message.ts)}>{stamp}</time>}
     </header>
-    <p class={clamped ? 'clamped' : ''}>{query
-      ? transcriptSearchParts(message.text, query).map((part, index) =>
+    <p class={clamped ? 'clamped' : ''}>{query ? transcriptSearchParts(message.text, query).map((part, index) =>
         part.match ? <mark key={index}>{part.text}</mark> : part.text,
-      )
-      : message.text}</p>
+      ) : message.text}</p>
     {transcriptClamped(message.text) && !query && <button class="transcript-expand" onClick={event => {
       // Unfolding a long reply is not a request for its chip row.
       event.stopPropagation()
       actions.onExpand(message.message_id)
     }}>
-      {expanded ? 'Show less' : 'Show more'}
+      {expanded ? t("TranscriptTab.94ea9b1d33") : t("TranscriptTab.f5c9bd1314")}
     </button>}
   </article>
 })
@@ -558,16 +557,14 @@ export function TranscriptTab({ session, readAloud = false }: {
   }, [sessionId])
 
   const messages = data?.messages || EMPTY_MESSAGES
-  const liveMessages = useMemo(() => transcriptLiveMessages(messages), [messages])
+  const liveMessages = useMemo(() => transcriptLiveMessages(messages), [messages, uiLocale.value, catalogRevision.value])
   const visibleMessages = useMemo(
-    () => normalizedQuery ? messages.filter(message => transcriptMatchesQuery(message, normalizedQuery)) : messages,
-    [messages, normalizedQuery],
-  )
+    () => normalizedQuery ? messages.filter(message => transcriptMatchesQuery(message, normalizedQuery)) : messages, [messages, normalizedQuery, uiLocale.value, catalogRevision.value])
   // Under a search the reader asked for every match, so abandoned messages stand
   // on their own rather than inside a fold nothing would reveal them through.
   const groups: TranscriptGroup[] = useMemo(() => normalizedQuery
     ? visibleMessages.map(message => ({ kind: 'message', message }) as const)
-    : groupTranscriptMessages(visibleMessages), [visibleMessages, normalizedQuery])
+    : groupTranscriptMessages(visibleMessages), [visibleMessages, normalizedQuery, uiLocale.value, catalogRevision.value])
   // Every match is drawn under a search; otherwise the trailing groups only.
   const drawn = normalizedQuery ? groups.length : transcriptRenderCount(groups.length, renderCount)
   const drawStart = groups.length - drawn
@@ -712,7 +709,7 @@ export function TranscriptTab({ session, readAloud = false }: {
     // ring exists to hand back. The suppression only has to span the synchronous
     // part of the copy, which is where both capture hooks fire.
     const ok = await withoutClipboardCapture(() => copyPreparedText(text, manualArea.current))
-    if (!ok) { setError('The browser refused the copy. Select the text and copy it manually.'); return false }
+    if (!ok) { setError(t("TranscriptTab.34c7e2124e")); return false }
     setError('')
     setCopied(key)
     window.setTimeout(() => setCopied(current => (current === key ? null : current)), COPIED_FLASH_MS)
@@ -727,7 +724,7 @@ export function TranscriptTab({ session, readAloud = false }: {
     try {
       const complete = await loader.loadAll()
       if (!complete) {
-        setError('The whole conversation could not be read just now. Try again in a moment.')
+        setError(t("TranscriptTab.9f28a60e3a"))
         return null
       }
       return transcriptLiveMessages(loader.current?.messages || [])
@@ -773,7 +770,7 @@ export function TranscriptTab({ session, readAloud = false }: {
     // The whole reply, not its opening segment: a long reply is stored in pieces
     // until the daemon joins them, and playing the first piece alone read as the
     // agent answering in a third of a sentence.
-    void playClipGroup(clip, clip.session_id).catch(() => setError('Playback failed.'))
+    void playClipGroup(clip, clip.session_id).catch(() => setError(t("TranscriptTab.8c3a64e956")))
   }
   /**
    * Ask for one reply's audio, in one kind.
@@ -850,7 +847,7 @@ export function TranscriptTab({ session, readAloud = false }: {
     onCopy: item => void copy(item.text, item.ordinal),
     onExpand: toggleExpand,
     onSelectText: item => setSheet({
-      title: `${transcriptSpeaker(item.role)}${transcriptTimestampLabel(item.ts) ? ` · ${transcriptTimestampLabel(item.ts)}` : ''}`,
+      get title() { return t("TranscriptTab.9989fa2d2c", { value1: transcriptSpeaker(item.role), value2: transcriptTimestampLabel(item.ts) ? ` · ${transcriptTimestampLabel(item.ts)}` : '' }) },
       text: item.text,
     }),
     onSpeak: (item, kind) => void speakMessage(item, kind),
@@ -863,10 +860,10 @@ export function TranscriptTab({ session, readAloud = false }: {
     onSelectText: item => latestActions.current?.onSelectText(item),
     onSpeak: (item, kind) => latestActions.current?.onSpeak(item, kind),
     onPlay: clip => latestActions.current?.onPlay(clip),
-  }), [])
-  const audioIndex = useMemo(() => readAloud ? indexTranscriptAudio(clips) : null, [readAloud, clips])
+  }), [uiLocale.value, catalogRevision.value])
+  const audioIndex = useMemo(() => readAloud ? indexTranscriptAudio(clips) : null, [readAloud, clips, uiLocale.value, catalogRevision.value])
 
-  if (!session) return <p class="drawer-empty">Focus a session to read its conversation.</p>
+  if (!session) return <p class="drawer-empty">{t("TranscriptTab.629137fc98")}</p>
 
   const abandonedCount = messages.length - liveMessages.length
   const trailingToolCalls = data?.trailing_tool_calls || EMPTY_TOOLS
@@ -897,14 +894,10 @@ export function TranscriptTab({ session, readAloud = false }: {
           subtitle of the name rather than as the state of the transcript. */}
       <div class="transcript-tab-meta">
         <span aria-live="polite">
-          {loading && !data
-            ? 'Reading transcript…'
-            : normalizedQuery
-              ? `${visibleMessages.length} of ${messages.length} messages`
-              : `${liveMessages.length} message${liveMessages.length === 1 ? '' : 's'}`}
-          {!normalizedQuery && abandonedCount > 0 ? ` · ${abandonedCount} abandoned` : ''}
-          {unloaded > 0 ? ` · ${unloaded} earlier not loaded` : ''}
-          {data && data.hidden > 0 ? ` · ${data.hidden} CLI record${data.hidden === 1 ? '' : 's'} hidden` : ''}
+          {loading && !data ? t("TranscriptTab.fa67d3e76b") : normalizedQuery ? t("TranscriptTab.c57bfee526", { length: visibleMessages.length, value2: messages.length }) : t("TranscriptTab.0d81964da1", { length: liveMessages.length, value2: (liveMessages.length === 1) ? 'yes' : 'no' })}
+          {!normalizedQuery && abandonedCount > 0 ? t("TranscriptTab.f55c59177e", { abandonedCount: abandonedCount }) : ''}
+          {unloaded > 0 ? t("TranscriptTab.827a60a4ee", { unloaded: unloaded }) : ''}
+          {data && data.hidden > 0 ? t("TranscriptTab.e8db24d51e", { hidden: data.hidden, value2: (data.hidden === 1) ? 'yes' : 'no' }) : ''}
         </span>
       </div>
       {/* Whole-conversation selection goes through the same sheet as one message, which
@@ -912,29 +905,26 @@ export function TranscriptTab({ session, readAloud = false }: {
           flat buffer, so there is no scroller for a handle drag to lose its anchor in. */}
       <button
         disabled={!liveMessages.length || wholePending}
-        title="Select part of the conversation"
+        title={t("TranscriptTab.44730581fa")}
         onClick={() => void selectAll()}
-      >Select</button>
+      >{t("TranscriptTab.2a78025de6")}</button>
       <button
         class={copied === COPY_ALL ? 'copied' : ''}
         disabled={!liveMessages.length || wholePending}
-        title="Copy the whole conversation, with speakers"
+        title={t("TranscriptTab.242108f75b")}
         onClick={() => void copyAll()}
-      >{wholePending ? 'Loading…' : copied === COPY_ALL ? 'Copied' : 'Copy all'}</button>
-      <label class="transcript-tool-toggle">
-        <input
+      >{wholePending ? t("TranscriptTab.ba3bbbe10d") : copied === COPY_ALL ? t("TranscriptTab.8d525e5f15") : t("TranscriptTab.96e3f09a5f")}</button>
+      <label class="transcript-tool-toggle">{rich("TranscriptTab.55f4978af9", { value1: <input
           type="checkbox"
           checked={showToolCalls}
           disabled={!availableToolCalls}
           onChange={event => setShowToolCalls(event.currentTarget.checked)}
-        />
-        Tool calls
-      </label>
+        /> })}</label>
       <div class="transcript-search">
         <input
           type="search"
-          aria-label="Search transcript"
-          placeholder="Search transcript"
+          aria-label={t("TranscriptTab.4be16bc891")}
+          placeholder={t("TranscriptTab.4be16bc891")}
           autocomplete="off"
           spellcheck={false}
           value={query}
@@ -948,8 +938,8 @@ export function TranscriptTab({ session, readAloud = false }: {
         />
         {query && <button
           type="button"
-          aria-label="Clear transcript search"
-          title="Clear search"
+          aria-label={t("TranscriptTab.7e52f856bb")}
+          title={t("TranscriptTab.3b7ea51793")}
           onClick={() => updateSearch('')}
         >×</button>}
       </div>
@@ -957,23 +947,16 @@ export function TranscriptTab({ session, readAloud = false }: {
     {/* The observer can end up following a conversation that is no longer this
         PTY's. Everywhere else that shows up as odd telemetry; here it would be a
         stranger's words presented as yours, so it is said out loud. */}
-    {stale ? <p class="transcript-note warn" role="alert">
-      This pane's transcript link went stale {new Date(stale * 1000).toLocaleTimeString()}. What follows may belong to another conversation.
-    </p> : null}
+    {stale ? <p class="transcript-note warn" role="alert">{rich("TranscriptTab.ae9cc5d5d2", { value1: new Date(stale * 1000).toLocaleTimeString(uiLocale.value) })}</p> : null}
     {error && <p class="transcript-note error" role="alert">{error}</p>}
-    {normalizedQuery && hasOlder && <p class="transcript-note">
-      Searching the {messages.length} loaded messages.{' '}
-      <button type="button" class="transcript-note-action" disabled={wholePending} onClick={() => void wholeConversation()}>
-        {wholePending ? 'Loading…' : `Load the ${unloaded} earlier ones`}
-      </button>
-    </p>}
+    {normalizedQuery && hasOlder && <p class="transcript-note">{rich("TranscriptTab.471274ae3f", { length: messages.length, value2: <button type="button" class="transcript-note-action" disabled={wholePending} onClick={() => void wholeConversation()}>
+        {wholePending ? t("TranscriptTab.ba3bbbe10d") : t("TranscriptTab.38e964e766", { unloaded: unloaded })}
+      </button> })}</p>}
     <div class="transcript-tab-body" ref={body} onScroll={onScroll}>
       {moreAbove && <button type="button" class="transcript-older" disabled={olderLoading} onClick={() => growUp(true)}>
-        {olderLoading ? 'Loading earlier messages…' : 'Earlier messages'}
+        {olderLoading ? t("TranscriptTab.b8507b92ee") : t("TranscriptTab.561a197a28")}
       </button>}
-      {messages.length
-        ? visibleMessages.length
-          ? groups.slice(drawStart).map((group, offset) => {
+      {messages.length ? visibleMessages.length ? groups.slice(drawStart).map((group, offset) => {
             const index = drawStart + offset
             return group.kind === 'abandoned'
               ? <AbandonedRun
@@ -988,26 +971,16 @@ export function TranscriptTab({ session, readAloud = false }: {
                 {/* Only in the unfiltered column. Under a search the neighbours are
                     whatever matched, so "12 tool calls" between them would describe
                     a gap the reader is not looking at. */}
-                {!normalizedQuery && (index > 0 || hasOlder) && group.message.preceding_tool_calls > 0 && (
-                  showToolCalls && group.message.preceding_tools?.length
-                    ? <TranscriptToolCalls
+                {!normalizedQuery && (index > 0 || hasOlder) && group.message.preceding_tool_calls > 0 && (showToolCalls && group.message.preceding_tools?.length ? <TranscriptToolCalls
                       calls={group.message.preceding_tools}
                       load={() => seamToolInputs(sessionId, transcriptRunId, group.message.message_id)}
-                    />
-                    : <p class="transcript-tool-boundary">{transcriptToolBoundaryLabel(group.message.preceding_tool_calls)}</p>
-                )}
+                    /> : <p class="transcript-tool-boundary">{transcriptToolBoundaryLabel(group.message.preceding_tool_calls)}</p>)}
                 {renderMessage(group.message)}
               </Fragment>
-          })
-          : <p class="drawer-empty">No messages match “{normalizedQuery}”.</p>
-        : !loading && !(showToolCalls && trailingToolCalls.length) && <p class="drawer-empty">{emptyText}</p>}
-      {!normalizedQuery && trailingToolCalls.length > 0 && (showToolCalls
-        ? <TranscriptToolCalls calls={trailingToolCalls} load={() => seamToolInputs(sessionId, transcriptRunId, null)} />
-        : <p class="transcript-tool-boundary">{transcriptToolBoundaryLabel(trailingToolCalls.length)}</p>)}
+          }) : <p class="drawer-empty">{rich("TranscriptTab.186372352e", { normalizedQuery: normalizedQuery })}</p> : !loading && !(showToolCalls && trailingToolCalls.length) && <p class="drawer-empty">{emptyText}</p>}
+      {!normalizedQuery && trailingToolCalls.length > 0 && (showToolCalls ? <TranscriptToolCalls calls={trailingToolCalls} load={() => seamToolInputs(sessionId, transcriptRunId, null)} /> : <p class="transcript-tool-boundary">{transcriptToolBoundaryLabel(trailingToolCalls.length)}</p>)}
     </div>
-    {!normalizedQuery && unseen > 0 && <button class="transcript-jump" onClick={jumpToLatest}>
-      {unseen} new ↓
-    </button>}
+    {!normalizedQuery && unseen > 0 && <button class="transcript-jump" onClick={jumpToLatest}>{rich("TranscriptTab.d743e5bdfe", { unseen: unseen })}</button>}
     {sheet && <SelectSheet
       title={sheet.title}
       text={sheet.text}

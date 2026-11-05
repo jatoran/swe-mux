@@ -22,6 +22,7 @@ from .codex_tui import with_scrollback_safe_tui
 from .harness import Backend, agent_harnesses, descriptor, is_agent_harness, require_backend
 from .shim_paths import ExecutableResolution, combine_resolutions, resolve_executable
 from .spawn_contract import AGENT_FORCE_COLOR_ENV
+from .ui_messages import ui_message
 
 #: Reports are point telemetry on a launch path a human is waiting on, so the
 #: budget is a localhost round trip rather than the lifecycle notifications'
@@ -126,9 +127,7 @@ def _codex(
     prefix = _env_prefix(name)
     exe = os.environ.get(f"{prefix}_EXE", default_executable)
     native_id = args[1] if len(args) > 1 and args[0] == "resume" else str(uuid.uuid4())
-    args = with_scrollback_safe_tui(
-        [*json.loads(os.environ.get(f"{prefix}_ARGS", "[]")), *args]
-    )
+    args = with_scrollback_safe_tui([*json.loads(os.environ.get(f"{prefix}_ARGS", "[]")), *args])
     if not any("notify=" in arg for arg in args):
         notify = [sys.executable, "-m", "swe_mux.hook_client", "codex_notify"]
         args = ["-c", f"notify={json.dumps(notify)}", *args]
@@ -454,9 +453,7 @@ def _console_facts() -> dict[str, Any]:
                 facts["std_handles"][name] = "invalid"
                 continue
             mode = ctypes.c_uint32()
-            is_console = bool(
-                kernel32.GetConsoleMode(ctypes.c_void_p(handle), ctypes.byref(mode))
-            )
+            is_console = bool(kernel32.GetConsoleMode(ctypes.c_void_p(handle), ctypes.byref(mode)))
             kind = kinds.get(kernel32.GetFileType(ctypes.c_void_p(handle)), "unknown")
             facts["std_handles"][name] = f"{kind}{'/console' if is_console else ''}"
     except (OSError, AttributeError, ValueError):
@@ -631,7 +628,7 @@ def _child_argv(executable: str, args: list[str]) -> list[str]:
 
 def _build_launch(backend: Backend, args: list[str]) -> tuple[str, list[str], str]:
     if backend == "shell":
-        raise ValueError("shell does not use the agent launcher")
+        raise ValueError(ui_message("agent_launcher.a5b78ebbc2"))
     if backend == "claude":
         pass
     elif backend == "codex":

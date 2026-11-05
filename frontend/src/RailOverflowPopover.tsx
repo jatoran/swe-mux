@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import type { ComponentChildren } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
 
@@ -106,21 +107,21 @@ export function RailOverflowPopover({ label, anchor, onClose, onConfigure, onArr
     aria-label={label}
     onMouseDown={holdSoftKeyboard}
   >
-    <button type="button" class="rail-overflow-close" aria-label="Close actions" title="Close" onClick={onClose}>×</button>
+    <button type="button" class="rail-overflow-close" aria-label={t("RailOverflowPopover.821790b7ba")} title={t("RailOverflowPopover.7d9eb7acb1")} onClick={onClose}>×</button>
     <div class="rail-overflow-grid">{children}</div>
     <footer class="rail-overflow-actions">
       <button
         type="button"
         class="rail-overflow-arrange"
-        aria-label="Arrange actions"
-        title="Arrange actions - drag chips between rows"
+        aria-label={t("RailOverflowPopover.c5012fc803")}
+        title={t("RailOverflowPopover.7af898b8d3")}
         onClick={() => { onClose(); onArrange() }}
-      >Arrange</button>
+      >{t("RailOverflowPopover.d557a972ab")}</button>
       <button
         type="button"
         class="rail-overflow-configure"
-        aria-label="Configure Actions"
-        title="Configure Actions"
+        aria-label={t("RailOverflowPopover.a440d64bd0")}
+        title={t("RailOverflowPopover.a440d64bd0")}
         onClick={() => { onClose(); onConfigure() }}
       ><RailSettingsIcon /></button>
     </footer>

@@ -33,6 +33,7 @@ from ..session import (
 from ..session_resume import ResumeRefused, resume_run
 from ..transcript_repair import TranscriptLocation, resolve_row_transcript
 from ..transcript_view import TRANSCRIPT_PARSER_VERSION, ParsedConversation
+from ..ui_messages import ui_message
 from . import sessions
 
 log = logging.getLogger(__name__)
@@ -83,7 +84,7 @@ def _optional_int(request: web.Request, name: str) -> int | None:
     try:
         return int(raw)
     except ValueError as exc:
-        raise ValueError(f"{name} must be an integer") from exc
+        raise ValueError(ui_message("history.8fa041a0ae", value1=name)) from exc
 
 
 class SearchAbandoned(Exception):
@@ -143,9 +144,7 @@ async def list_history(request: web.Request) -> web.Response:
                 backend=request.query.get("backend"),
                 project_id=request.query.get("project"),
                 state=request.query.get("state"),
-                external=(
-                    external_value.lower() == "true" if external_value is not None else None
-                ),
+                external=(external_value.lower() == "true" if external_value is not None else None),
                 date_from=(
                     float(request.query["date_from"]) if request.query.get("date_from") else None
                 ),
@@ -205,7 +204,7 @@ async def start_history_backfill(request: web.Request) -> web.Response:
     body = await request.json()
     project_id = str(body.get("project_id") or "")
     if not project_id:
-        raise ValueError("project_id is required")
+        raise ValueError(ui_message("history.ca31f559b1"))
     return json_response({"job": request.app[keys.HISTORY_BACKFILLS].start(project_id)}, 202)
 
 
@@ -274,7 +273,7 @@ async def history_transcript(request: web.Request) -> web.Response:
     native_id = str(row.get("native_id") or "") or None
     if not located.readable:
         return json_response(
-            {"error": "native transcript is unavailable", "code": "transcript_unavailable"},
+            {"error": ui_message("history.4c3d8c6995"), "code": "transcript_unavailable"},
             409,
         )
     path = located.path
@@ -458,7 +457,7 @@ async def history_tool_calls(request: web.Request) -> web.Response:
     located = await _locate(request, row)
     if not located.readable:
         return json_response(
-            {"error": "native transcript is unavailable", "code": "transcript_unavailable"},
+            {"error": ui_message("history.4c3d8c6995"), "code": "transcript_unavailable"},
             409,
         )
     backend = str(row["backend"])
@@ -492,7 +491,7 @@ async def resume_history(request: web.Request) -> web.Response:
         raise NotFound(request.match_info["sid"], kind="session")
     if not row.get("agent_visible") or not has_observable_transcript(row.get("backend")):
         return json_response(
-            {"error": "only observable agent history can be resumed", "code": "not_agent"},
+            {"error": ui_message("history.83c8349c13"), "code": "not_agent"},
             422,
         )
     # History stores the stable raw session name; generated titles live in run

@@ -27,6 +27,7 @@ from ..observation import (
     session_hook_event_scope,
 )
 from ..telemetry_otlp import PARSER_VERSION, otlp_reduction
+from ..ui_messages import error_text, ui_message
 
 log = logging.getLogger(__name__)
 
@@ -75,11 +76,7 @@ def hook_event_payload(payload: dict[str, Any]) -> dict[str, Any]:
     field that explains a conversation rollover, so it is preserved under
     ``start_source`` instead.
     """
-    kept = {
-        key: value
-        for key, value in payload.items()
-        if key not in _FAN_OUT_OMITTED_KEYS
-    }
+    kept = {key: value for key, value in payload.items() if key not in _FAN_OUT_OMITTED_KEYS}
     start_source = payload.get("source")
     if isinstance(start_source, str) and start_source:
         kept["start_source"] = start_source
@@ -176,7 +173,7 @@ async def mcp_endpoint(request: web.Request) -> web.Response:
     try:
         caller = service.resolve_caller(request.headers.get("Authorization"))
     except McpAuthError as exc:
-        return json_response({"error": str(exc)}, 401)
+        return json_response({"error": error_text(exc)}, 401)
     now = time.monotonic()
     windows: dict[str, deque[float]] = request.app[keys.MCP_RATE_WINDOWS]
     if len(windows) > HOOK_WINDOW_SWEEP_AT:
@@ -195,7 +192,11 @@ async def mcp_endpoint(request: web.Request) -> web.Response:
         message = json.loads(await request.read())
     except ValueError:
         return json_response(
-            {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}},
+            {
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {"code": -32700, "message": ui_message("agent_ingress.479fb0d12a")},
+            },
             400,
         )
     if not isinstance(message, dict):
@@ -205,7 +206,7 @@ async def mcp_endpoint(request: web.Request) -> web.Response:
             {
                 "jsonrpc": "2.0",
                 "id": None,
-                "error": {"code": -32600, "message": "expected a single JSON-RPC object"},
+                "error": {"code": -32600, "message": ui_message("agent_ingress.b283ce6b35")},
             },
             400,
         )
@@ -235,7 +236,7 @@ async def hook_ingress(request: web.Request) -> web.Response:
     if boundary != "local":
         return json_response(
             {
-                "error": "hook ingress is unavailable across a non-local terminal boundary",
+                "error": ui_message("agent_ingress.5926ffd2a8"),
                 "code": "agent_bridge_unavailable",
                 "capability": "agent-bridge-unavailable",
                 "reason": (
@@ -268,13 +269,13 @@ async def hook_ingress(request: web.Request) -> web.Response:
         raise web.HTTPRequestEntityTooLarge(max_size=HOOK_BODY_LIMIT, actual_size=len(raw))
     body = json.loads(raw)
     if not isinstance(body, dict):
-        raise ValueError("hook body must be a JSON object")
+        raise ValueError(ui_message("agent_ingress.8081a46fcf"))
     event_type = str(body.get("event") or body.get("type") or "hook")
     if event_type not in _HOOK_EVENT_TYPES:
-        raise ValueError("unsupported hook event type")
+        raise ValueError(ui_message("agent_ingress.0056b95d27"))
     payload = body.get("payload") or {}
     if not isinstance(payload, dict):
-        raise ValueError("hook payload must be a JSON object")
+        raise ValueError(ui_message("agent_ingress.14ba3353b8"))
     harness = HARNESSES.get(str(getattr(session.record, "backend", "") or ""))
     if harness is None:
         # A hook speaks for an agent run, and a plain shell pane has none until an
@@ -284,7 +285,7 @@ async def hook_ingress(request: web.Request) -> web.Response:
         # resending a request that can never succeed.
         return json_response(
             {
-                "error": "hook ingress serves agent sessions; this pane runs no agent",
+                "error": ui_message("agent_ingress.43f49b7cb9"),
                 "code": "not_an_agent_session",
                 "backend": str(getattr(session.record, "backend", "") or ""),
             },
@@ -299,9 +300,9 @@ async def hook_ingress(request: web.Request) -> web.Response:
         session.observation_state["hook_sequences"] = sequence_state
     if sequence_value is not None:
         if isinstance(sequence_value, bool) or not isinstance(sequence_value, int):
-            raise ValueError("hook sequence must be a positive integer")
+            raise ValueError(ui_message("agent_ingress.0feaf3c734"))
         if sequence_value < 1 or not hook_source:
-            raise ValueError("sequenced hooks require a source and positive sequence")
+            raise ValueError(ui_message("agent_ingress.f41d91df72"))
         sequence = sequence_value
         previous_sequence = sequence_state.get(hook_source)
         if isinstance(previous_sequence, int) and sequence <= previous_sequence:
@@ -330,7 +331,7 @@ async def hook_ingress(request: web.Request) -> web.Response:
                 }
             )
     elif harness.hook_ordering_guarantee:
-        raise ValueError("this harness requires sequenced hook events")
+        raise ValueError(ui_message("agent_ingress.bc3ed110d2"))
     event_payload = hook_event_payload(payload)
     # Session-aware: a harness that runs subagents as separate threads emits
     # events that only *name* a child thread, and the payload alone cannot tell
@@ -348,9 +349,7 @@ async def hook_ingress(request: web.Request) -> web.Response:
     )
     if decision.roll_to is not None:
         reported_transcript = (
-            str(payload.get("transcript_path") or "")
-            if harness.reports_transcript_path
-            else ""
+            str(payload.get("transcript_path") or "") if harness.reports_transcript_path else ""
         )
         try:
             await request.app[keys.SESSIONS].roll_agent_conversation(

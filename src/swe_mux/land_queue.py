@@ -52,6 +52,7 @@ from .land_preconditions import (
 )
 from .land_store import LandConflict, LandEvent, LandStore
 from .path_identity import same_path
+from .ui_messages import ui_message
 from .verify_progress import VerifyProgress, sanitize_plan
 from .verify_provenance import (
     TRUSTED_VERDICTS,
@@ -129,10 +130,7 @@ def handback_excerpt(output: bytes, *, limit: int = MAX_HANDBACK_OUTPUT_BYTES) -
     text = output.decode("utf-8", "replace")
     if len(text) > limit:
         text = "... earlier output omitted ...\n" + text[-limit:]
-    kept = [
-        line if not looks_like_secret(line) else "[redacted]"
-        for line in text.splitlines()
-    ]
+    kept = [line if not looks_like_secret(line) else "[redacted]" for line in text.splitlines()]
     return "\n".join(kept).strip()
 
 
@@ -692,7 +690,7 @@ class LandQueueService:
             request_id,
             expect=("queued", "waiting"),
             state="cancelled",
-            reason="cancelled by the operator",
+            reason=ui_message("land_queue.92a5e1b128"),
             clear_waiting=True,
             event=LandEvent(step="request", outcome="cancelled"),
             now=self._clock(),
@@ -787,8 +785,12 @@ class LandQueueService:
                 row,
                 step="precondition",
                 summary=(
-                    f"the {'land' if self._lands(row) else 'verification'} could not start"
-                    f" for {int(waited // 60)} minutes: {result.reason}"
+                    ui_message(
+                        "land_queue.eb572c50b4",
+                        value1="land" if self._lands(row) else "verification",
+                        value2=int(waited // 60),
+                        value3=result.reason,
+                    )
                 ),
             )
         if row["state"] != "waiting" or row["reason"] != result.reason:
@@ -853,8 +855,7 @@ class LandQueueService:
                 now=self._clock(),
             )
             summary = (
-                f"merging {trunk_ref} into {row['branch']} conflicted in "
-                f"{len(paths)} file(s)"
+                f"merging {trunk_ref} into {row['branch']} conflicted in {len(paths)} file(s)"
                 if paths
                 else f"merging {trunk_ref} into {row['branch']} failed"
             )
@@ -1005,7 +1006,7 @@ class LandQueueService:
         reuse = LandEvent(
             step="verify",
             outcome="reused",
-            reason="these exact bytes already passed on this exact tree in this queue",
+            reason=ui_message("land_queue.542c470b01"),
             detail={
                 "gate": "reused",
                 "tree": tree,
@@ -1032,7 +1033,7 @@ class LandQueueService:
             gate="reused",
             digest=str(memo["digest"]),
             duration_ms=float(memo["duration_ms"]),
-            summary="verification was already passed on these exact bytes and this exact tree",
+            summary=ui_message("land_queue.903887c387"),
             event=reuse,
         )
 
@@ -1054,13 +1055,11 @@ class LandQueueService:
             # the gate that cleared it, and overwriting the column here would relabel it.
             gate=None,
             digest=str(row.get("verify_digest") or ""),
-            summary="the branch already contained the trunk and its verdict still stands",
+            summary=ui_message("land_queue.81c49739a7"),
             event=LandEvent(
                 step="verify",
                 outcome="standing",
-                reason=(
-                    "the branch already contained the trunk; its recorded verdict still stands"
-                ),
+                reason=(ui_message("land_queue.ac42b383e0")),
                 detail={"oid": head, "gate": row.get("verify_gate") or ""},
             ),
         )
@@ -1229,7 +1228,7 @@ class LandQueueService:
                 project_id=row["project_id"],
                 step="verify",
                 outcome="unstable",
-                reason="the retry failed differently from the first attempt",
+                reason=ui_message("land_queue.db2b76de59"),
                 detail={
                     "first_exit_code": outcomes[0].exit_code,
                     "second_exit_code": outcomes[1].exit_code,
@@ -1255,9 +1254,7 @@ class LandQueueService:
                         # gate reads as a contradiction, and the reader's next move is
                         # to doubt the switch rather than to look at who wrote the
                         # script - which is the one fact that decided it.
-                        "verify_provenance": (
-                            provenance.verdict if provenance is not None else ""
-                        ),
+                        "verify_provenance": (provenance.verdict if provenance is not None else ""),
                         "verify_provenance_reason": (
                             provenance.reason if provenance is not None else ""
                         ),
@@ -1280,7 +1277,7 @@ class LandQueueService:
             digest=final.digest or "",
             duration_ms=final.duration_ms,
             bump_attempts=True,
-            summary=f"verification passed in {final.duration_ms / 1000:.0f}s",
+            summary=ui_message("land_queue.d782fb8506", value1=final.duration_ms / 1000),
         )
 
     async def _land(self, row: dict[str, Any]) -> dict[str, Any]:
@@ -1517,9 +1514,7 @@ class LandQueueService:
         await self._emit("land_changed", updated)
         return updated
 
-    async def _solicited_reply(
-        self, row: dict[str, Any], body: str
-    ) -> tuple[str, bool, str]:
+    async def _solicited_reply(self, row: dict[str, Any], body: str) -> tuple[str, bool, str]:
         """Put one bounded answer to this request into its author's prompt queue.
 
         The single place the queue writes to a session, so a handback and a verify-only
@@ -1637,9 +1632,7 @@ class LandQueueService:
             return False, "the requesting conversation could not be identified"
         if expected_run != live_run:
             return False, "the requesting conversation was replaced"
-        if not await self._store.claim_armed_reply(
-            row["id"], cap=ARMED_REPLIES_PER_REQUEST
-        ):
+        if not await self._store.claim_armed_reply(row["id"], cap=ARMED_REPLIES_PER_REQUEST):
             return False, "this request has already spent its armed reply"
         return True, "answering this session's own land request"
 
@@ -1662,10 +1655,7 @@ class LandQueueService:
         for one queue.
         """
         found = await self._store.open_origin_requests(session_ids, since)
-        return {
-            session_id: {"kind": "land", **entry}
-            for session_id, entry in found.items()
-        }
+        return {session_id: {"kind": "land", **entry} for session_id, entry in found.items()}
 
     def _handback_body(
         self,
@@ -1702,9 +1692,7 @@ class LandQueueService:
         )
         return "\n".join(lines)
 
-    def _refused_body(
-        self, row: dict[str, Any], *, reason: str, detail: dict[str, Any]
-    ) -> str:
+    def _refused_body(self, row: dict[str, Any], *, reason: str, detail: dict[str, Any]) -> str:
         """A fixed template for a request the pipeline ended without running it.
 
         Its whole job is to keep the reader from re-reading their own branch. A
@@ -1790,9 +1778,7 @@ class LandQueueService:
             )
         return "\n".join(lines)
 
-    def _landed_body(
-        self, row: dict[str, Any], *, trunk_before: str, trunk_after: str
-    ) -> str:
+    def _landed_body(self, row: dict[str, Any], *, trunk_before: str, trunk_after: str) -> str:
         """A fixed template for a land whose author asked to be told it happened.
 
         Written only for a request that set `report_success`, and it says the two facts
@@ -1804,9 +1790,7 @@ class LandQueueService:
         gate = str(row.get("verify_gate") or "")
         proven = {
             "full": "The verification command passed.",
-            "docs_only": (
-                "The change set was documentation only, so the gate was skipped."
-            ),
+            "docs_only": ("The change set was documentation only, so the gate was skipped."),
             "reused": (
                 "These exact bytes had already passed on this exact tree in this "
                 "queue, so the gate was not run again."
@@ -1826,9 +1810,7 @@ class LandQueueService:
         ]
         return "\n".join(lines)
 
-    def _verified_body(
-        self, row: dict[str, Any], *, summary: str, duration_ms: float
-    ) -> str:
+    def _verified_body(self, row: dict[str, Any], *, summary: str, duration_ms: float) -> str:
         """A fixed template for a verify-only request that cleared its gate.
 
         It states what was proven, what was *not* done, and - because that is the whole
@@ -1988,9 +1970,7 @@ class LandQueueService:
         """
         from .git_monitor import read_git
 
-        code, output = await read_git(
-            cwd, "rev-parse", "--verify", "-q", f"{revision}^{{commit}}"
-        )
+        code, output = await read_git(cwd, "rev-parse", "--verify", "-q", f"{revision}^{{commit}}")
         if code == 0:
             return output.strip() or None
         return "" if code == 1 else None

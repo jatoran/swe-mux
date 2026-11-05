@@ -1,3 +1,4 @@
+import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { CompactGrantFlag } from './GrantGate'
 import {
@@ -89,7 +90,7 @@ export function ClipboardTab({ onInsert, onDone, onOpenSettings, autoFocusToken 
     const needle = query.trim().toLocaleLowerCase()
     const items = history?.entries || []
     return needle ? items.filter(item => item.preview.toLocaleLowerCase().includes(needle)) : items
-  }, [history, query])
+  }, [history, query, uiLocale.value, catalogRevision.value])
   useEffect(() => setIndex(current => Math.min(current, Math.max(0, entries.length - 1))), [entries.length])
 
   // An expanded entry is routinely taller than the viewport, and opening one that
@@ -134,7 +135,7 @@ export function ClipboardTab({ onInsert, onDone, onOpenSettings, autoFocusToken 
 
   const insert = (entry: ClipboardEntry) => withText(entry, text => {
     const target = onInsert(text)
-    if (target === 'none') { setNote('Focus a terminal or note first, then insert.'); return }
+    if (target === 'none') { setNote(t("ClipboardPanel.471c87714d")); return }
     onDone()
   })
 
@@ -147,10 +148,10 @@ export function ClipboardTab({ onInsert, onDone, onOpenSettings, autoFocusToken 
     if (copied) {
       if (area) area.value = ''
       setManual('')
-      setNote('Copied to the system clipboard.')
+      setNote(t("ClipboardPanel.6aa8cf268a"))
     } else {
       setManual(text)
-      setNote('Clipboard blocked — copy the text below manually.')
+      setNote(t("ClipboardPanel.16c66b35cb"))
     }
   })
 
@@ -170,7 +171,7 @@ export function ClipboardTab({ onInsert, onDone, onOpenSettings, autoFocusToken 
       const removed = await clearClipboardHistory()
       setConfirmClear(false)
       setExpanded('')
-      setNote(`Cleared ${removed} entr${removed === 1 ? 'y' : 'ies'}.`)
+      setNote(t("ClipboardPanel.020f0c8218", { value1: removed, value2: (removed === 1) ? 'yes' : 'no' }))
       await load()
     } catch (cause) { setNote(cause instanceof Error ? cause.message : String(cause)) }
   }
@@ -192,25 +193,25 @@ export function ClipboardTab({ onInsert, onDone, onOpenSettings, autoFocusToken 
   // on desktop and folded into the expanded footer on mobile, so a collapsed row is
   // pure preview rather than a persistent button row.
   const actionButton = (entry: ClipboardEntry, kind: 'insert' | 'copy' | 'pin' | 'delete') => {
-    if (kind === 'insert') return <button key="insert" class="cb-act cb-primary" disabled={busy} title="Insert into the last focused terminal or note" aria-label="Insert into the last focused terminal or note" onClick={() => void insert(entry)}><span aria-hidden="true">↵</span><b>Insert</b></button>
-    if (kind === 'copy') return <button key="copy" class="cb-act cb-primary" disabled={busy} title="Copy to the system clipboard" aria-label="Copy to system clipboard" onClick={() => void copy(entry)}><span aria-hidden="true">⧉</span><b>Copy</b></button>
-    if (kind === 'pin') return <button key="pin" class="cb-act cb-secondary" title={entry.pinned ? 'Unpin (pinned entries survive eviction and clear)' : 'Pin (survives eviction and clear)'} aria-label={entry.pinned ? 'Unpin entry' : 'Pin entry'} onClick={() => void pin(entry)}><span aria-hidden="true">{entry.pinned ? '★' : '☆'}</span><b>{entry.pinned ? 'Unpin' : 'Pin'}</b></button>
-    return <button key="delete" class="cb-act cb-secondary" title="Forget this entry" aria-label="Delete entry" onClick={() => void remove(entry)}><span aria-hidden="true">×</span><b>Delete</b></button>
+    if (kind === 'insert') return <button key="insert" class="cb-act cb-primary" disabled={busy} title={t("ClipboardPanel.a9c1393c98")} aria-label={t("ClipboardPanel.a9c1393c98")} onClick={() => void insert(entry)}><span aria-hidden="true">↵</span><b>{t("ClipboardPanel.8aa318eb7e")}</b></button>
+    if (kind === 'copy') return <button key="copy" class="cb-act cb-primary" disabled={busy} title={t("ClipboardPanel.255f4bb052")} aria-label={t("ClipboardPanel.f1cb6f527d")} onClick={() => void copy(entry)}><span aria-hidden="true">⧉</span><b>{t("ClipboardPanel.e21f935f11")}</b></button>
+    if (kind === 'pin') return <button key="pin" class="cb-act cb-secondary" title={entry.pinned ? t("ClipboardPanel.e97957111b") : t("ClipboardPanel.5b74c246ce")} aria-label={entry.pinned ? t("ClipboardPanel.c2087a369b") : t("ClipboardPanel.90e66f95f2")} onClick={() => void pin(entry)}><span aria-hidden="true">{entry.pinned ? '★' : '☆'}</span><b>{entry.pinned ? t("ClipboardPanel.ee3c716130") : t("ClipboardPanel.ff1cee7441")}</b></button>
+    return <button key="delete" class="cb-act cb-secondary" title={t("ClipboardPanel.706ff7937f")} aria-label={t("ClipboardPanel.d2968b26e9")} onClick={() => void remove(entry)}><span aria-hidden="true">×</span><b>{t("ClipboardPanel.e2d0a54968")}</b></button>
   }
 
-  const retention = history?.retention_hours ? `${history.retention_hours}h` : 'until evicted'
+  const retention = history?.retention_hours ? `${history.retention_hours}h` : t("ClipboardPanel.0a98620e46")
   return <>
-      <p class="drawer-status">{history ? `${history.count} kept · ${history.persist ? 'saved to disk' : 'memory only'} · ${retention}` : 'loading…'}</p>
+      <p class="drawer-status">{history ? t("ClipboardPanel.dcd5c0746d", { count: history.count, value2: (history.persist) ? 'yes' : 'no', retention: retention }) : t("ClipboardPanel.fbc6d752fe")}</p>
       {history && !history.enabled && <CompactGrantFlag id="clipboard.history"
-        heading="Clipboard history is off."
-        consequence="New copies are not being kept."
+        heading={t("ClipboardPanel.100e5a92c6")}
+        consequence={t("ClipboardPanel.22b24e76eb")}
         onGranted={load}/>}
       <div class="clipboard-search">
-        <input ref={search} value={query} onInput={event => setQuery(event.currentTarget.value)} onKeyDown={onSearchKey} placeholder="Filter copied text…" aria-label="Filter clipboard history" />
+        <input ref={search} value={query} onInput={event => setQuery(event.currentTarget.value)} onKeyDown={onSearchKey} placeholder={t("ClipboardPanel.72c58edf55")} aria-label={t("ClipboardPanel.d6f1aa0d2b")} />
       </div>
       {/* Articles rather than a listbox: each row carries its own action bar and an
           expandable body, neither of which a listbox option may contain. */}
-      <div class="clipboard-entries" role="group" aria-label="Copied text">
+      <div class="clipboard-entries" role="group" aria-label={t("ClipboardPanel.026eaa7f97")}>
         {entries.map((entry, position) => {
           const open = expanded === entry.id
           const text = texts[entry.id]
@@ -225,13 +226,13 @@ export function ClipboardTab({ onInsert, onDone, onOpenSettings, autoFocusToken 
               <button
                 class="clipboard-entry-body"
                 aria-expanded={open}
-                title={open ? 'Collapse' : 'Expand to read and select the full text'}
+                title={open ? t("ClipboardPanel.be6eb1fc3b") : t("ClipboardPanel.6b1d44dd60")}
                 onMouseEnter={() => setIndex(position)}
                 onClick={() => toggle(entry)}
               >
                 <span class="clipboard-entry-caret" aria-hidden="true">{open ? '⌄' : '›'}</span>
                 <span class="clipboard-entry-preview">{entry.preview}</span>
-                <small>{entry.pinned ? '★ ' : ''}{sourceLabel(entry.source)} · {relativeAge(entry.updated_at)} · {entry.char_count.toLocaleString()} chars{entry.line_count > 1 ? ` · ${entry.line_count} lines` : ''}{entry.device ? ` · ${entry.device}` : ''}</small>
+                <small>{rich("ClipboardPanel.70a85fe1b1", { value1: (entry.pinned) ? 'yes' : 'no', value2: sourceLabel(entry.source), value3: relativeAge(entry.updated_at), value4: entry.char_count.toLocaleString(uiLocale.value), value5: entry.line_count > 1 ? t("ClipboardPanel.6083078b3f", { line_count: entry.line_count }) : '', value6: entry.device ? t("ClipboardPanel.9a059b94ee", { device: entry.device }) : '' })}</small>
               </button>
               <div class="clipboard-entry-actions">
                 {actionButton(entry, 'insert')}
@@ -244,25 +245,23 @@ export function ClipboardTab({ onInsert, onDone, onOpenSettings, autoFocusToken 
               {/* Selectable, and opted out of capture: a part-selection copied back
                   out of the history surface is transport, not a new copy, and
                   capturing it would reorder the list under the reader. */}
-              <pre class="clipboard-entry-text" data-clipboard-capture="ignore">{text === undefined ? 'Loading…' : text}</pre>
+              <pre class="clipboard-entry-text" data-clipboard-capture="ignore">{text === undefined ? t("ClipboardPanel.ba3bbbe10d") : text}</pre>
               {/* Full toolbar for the open entry: Pin/Delete live here on mobile
                   (where the collapsed row hides them), with Collapse to exit. */}
-              <footer class="clipboard-entry-foot">{actionButton(entry, 'pin')}{actionButton(entry, 'delete')}<button class="cb-collapse" onClick={() => setExpanded('')}>Collapse</button></footer>
+              <footer class="clipboard-entry-foot">{actionButton(entry, 'pin')}{actionButton(entry, 'delete')}<button class="cb-collapse" onClick={() => setExpanded('')}>{t("ClipboardPanel.be6eb1fc3b")}</button></footer>
             </>}
           </article>
         })}
-        {history && !entries.length && <p class="clipboard-empty">{history.entries.length ? 'No entry matches that filter.' : history.enabled ? 'Nothing copied yet. Copies made inside swe-mux land here — the OS clipboard is never read.' : 'History is off, so nothing is being kept.'}</p>}
+        {history && !entries.length && <p class="clipboard-empty">{history.entries.length ? t("ClipboardPanel.e634130c05") : history.enabled ? t("ClipboardPanel.df707bdfb5") : t("ClipboardPanel.7668b9bfb6")}</p>}
       </div>
       {/* Mounted even when empty: the legacy `execCommand('copy')` fallback needs a
           live textarea inside the same user gesture, so it cannot wait for a
           re-render after the modern write is refused. */}
-      <div class={`clipboard-manual ${manual ? 'shown' : ''}`}><textarea ref={manualArea} readOnly value={manual} data-clipboard-capture="ignore" aria-label="Text to copy manually" /><button onClick={() => setManual('')}>Done</button></div>
+      <div class={`clipboard-manual ${manual ? 'shown' : ''}`}><textarea ref={manualArea} readOnly value={manual} data-clipboard-capture="ignore" aria-label={t("ClipboardPanel.8f9fefb9ba")} /><button onClick={() => setManual('')}>{t("ClipboardPanel.11a6767d56")}</button></div>
       {note && <p class="clipboard-note" aria-live="polite">{note}</p>}
       <footer class="drawer-actions">
-        {confirmClear
-          ? <><button class="danger" onClick={() => void clear()}>Confirm clear</button><button onClick={() => setConfirmClear(false)}>Cancel</button></>
-          : <button class="danger" disabled={!history?.count} onClick={() => setConfirmClear(true)}>Clear unpinned</button>}
-        <button onClick={onOpenSettings}>Settings</button>
+        {confirmClear ? <><button class="danger" onClick={() => void clear()}>{t("ClipboardPanel.6271c0fe59")}</button><button onClick={() => setConfirmClear(false)}>{t("ClipboardPanel.19766ed6cc")}</button></> : <button class="danger" disabled={!history?.count} onClick={() => setConfirmClear(true)}>{t("ClipboardPanel.f0bc09994b")}</button>}
+        <button onClick={onOpenSettings}>{t("ClipboardPanel.74a883a037")}</button>
       </footer>
   </>
 }

@@ -32,6 +32,7 @@ from .bounded_subprocess import run_bounded
 from .git_operations import run_git_mutation
 from .git_readonly import READ_ONLY_GIT_OPTIONS
 from .project_files import ensure_project_local_data_ignored
+from .ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -43,8 +44,7 @@ GIT_SETUP_READ_TIMEOUT_SECONDS = 4.0
 GIT_SETUP_READ_LIMIT = 64 * 1024
 ROOT_SWE_MUX_IGNORE_RULE = "/.swe-mux/"
 ROOT_SWE_MUX_IGNORE_BLOCK = (
-    "# Keep all swe-mux Project files local to this checkout.\n"
-    f"{ROOT_SWE_MUX_IGNORE_RULE}\n"
+    f"# Keep all swe-mux Project files local to this checkout.\n{ROOT_SWE_MUX_IGNORE_RULE}\n"
 )
 
 # swe-mux's fallback default branch, used only where the user has expressed no preference
@@ -165,7 +165,7 @@ async def _read_git(root: str, *args: str, operation_id: str) -> tuple[int, byte
     try:
         outcome = await run_bounded(
             ["git", *READ_ONLY_GIT_OPTIONS, "-C", root, *args],
-            label="git setup status",
+            label=ui_message("git_init.152a05307c"),
             timeout_seconds=GIT_SETUP_READ_TIMEOUT_SECONDS,
             output_limit=GIT_SETUP_READ_LIMIT,
             cwd=root,
@@ -247,7 +247,7 @@ async def ignore_swe_mux(root: str, *, operation_id: str) -> str:
     if status.tracked:
         raise RepositorySetupError(
             "swe_mux_tracked",
-            "swe-mux files are already tracked; an ignore rule would not untrack them"
+            "swe-mux files are already tracked; an ignore rule would not untrack them",
         )
     if status.ignored:
         return "already_ignored"
@@ -327,8 +327,7 @@ async def initialize_repository(
     )
     branch = await _resolved_branch(root, operation_id)
     log.info(
-        "repository_initialized operation_id=%s root=%s branch=%s gitignore=%s "
-        "swe_mux_ignore=%s",
+        "repository_initialized operation_id=%s root=%s branch=%s gitignore=%s swe_mux_ignore=%s",
         operation_id,
         root,
         branch,

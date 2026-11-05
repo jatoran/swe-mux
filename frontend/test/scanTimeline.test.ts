@@ -1,9 +1,10 @@
+import { withCatalogText } from './support/localizedSource.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 
-const source = (name:string) => readFileSync(join(import.meta.dirname, '..', 'src', name), 'utf8')
+const source = (name:string) => withCatalogText(readFileSync(join(import.meta.dirname, '..', 'src', name), 'utf8'))
 
 test('scan timeline is explicitly gated per current run and resets at conversation boundaries', () => {
   const timeline = source('ScanTimelineTab.tsx')
@@ -161,7 +162,7 @@ test('a timeline record is compact until it is opened, and opens one at a time',
   // Every record rendering its full detail made the tab a wall of prose rather than a
   // timeline. Detail is mounted only for a record the reader opened.
   assert.ok(timeline.includes('const open=!!openRecords[record.id]'))
-  assert.ok(timeline.includes('{open&&<div class="scan-record-detail"'))
+  assert.ok(timeline.includes('{open && <div class="scan-record-detail"'))
   assert.ok(timeline.includes('toggleRecord(record.id)'))
   assert.ok(timeline.includes('aria-expanded={open}'))
   // Expansion is per-device throwaway state, never server state and never a device

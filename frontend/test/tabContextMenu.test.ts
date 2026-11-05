@@ -1,10 +1,11 @@
+import { withCatalogText } from './support/localizedSource.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 
-const app=readFileSync(join(import.meta.dirname,'..','src','App.tsx'),'utf8')
-const endedPane=readFileSync(join(import.meta.dirname,'..','src','EndedPaneBanner.tsx'),'utf8')
+const app=withCatalogText(readFileSync(join(import.meta.dirname,'..','src','App.tsx'),'utf8'))
+const endedPane=withCatalogText(readFileSync(join(import.meta.dirname,'..','src','EndedPaneBanner.tsx'),'utf8'))
 
 const section=(start:string,end:string)=>{
   const from=app.indexOf(start)
@@ -34,7 +35,7 @@ test('session menus act on the session and expose only the source-appropriate ap
   const menu=section('{contextMenu && <div', '{projectMenu && <div')
   // Copy working directory is the one pane-only row left, and it stays gated: sidebar,
   // desktop-tab and mobile-tab menus are opened to rename or kill.
-  assert.match(menu,/\{contextMenu\.source==='pane'&&<button[^]*?session\.copyCwd/, 'copy-cwd must stay behind the pane gate')
+  assert.match(menu,/\{contextMenu\.source==='pane'\s*&&\s*<button[^]*?session\.copyCwd/, 'copy-cwd must stay behind the pane gate')
   assert.equal(menu.split('session.copyCwd').length-1,1,'copy-cwd must appear once, gated')
 
   // Prompt library and Resources remain absent: both are a command and a drawer tab away.
@@ -63,7 +64,7 @@ test('session menus act on the session and expose only the source-appropriate ap
 
   // Read state is one row whose label states the action, not a pair the reader
   // has to disambiguate.
-  assert.match(menu,/\{isUnread\(contextMenu\.session,ackedTurns\)\?'Mark as read':'Mark as unread'\}/)
+  assert.match(menu,/\{isUnread\(contextMenu\.session,ackedTurns\)\s*\?\s*'Mark as read'\s*:\s*'Mark as unread'\}/)
   assert.equal(menu.split("runNamedCommand('session.toggleRead')").length-1,1)
 
   // Read aloud is four rows for a setting most sessions never touch, so it sits
@@ -71,7 +72,7 @@ test('session menus act on the session and expose only the source-appropriate ap
   assert.match(menu,/<MenuGroup id="session-voice" label=\{`Read aloud · \$\{voiceModeLabel\(effectiveVoiceMode\(contextMenu\.session\)\)\}`\}/)
   assert.doesNotMatch(menu,/context-subtitle">READ ALOUD/)
 
-  const tabMenu=section('{tabMenu&&<div', 'Close tab</button>')
+  const tabMenu=section('{tabMenu && <div', 'Close tab</button>')
   assert.doesNotMatch(tabMenu,/spawnTerminal\(/, 'resource tab menus do not spawn terminals either')
 })
 
@@ -94,7 +95,7 @@ test('ended-session actions name and target the retained conversation directly',
 })
 
 test('the Project menu acts on this Project, each row with its own mark',()=>{
-  const menu=section('{projectMenu && <div', '{sidebarMenu&&<div')
+  const menu=section('{projectMenu && <div', '{sidebarMenu && <div')
 
   // Five surfaces left because each is a drawer tab or a dialog that already opens on the
   // selected Project: right-clicking a Project row to reach them was a second route to a
@@ -127,8 +128,8 @@ test('the Project menu acts on this Project, each row with its own mark',()=>{
   // elsewhere, and the touch path is the plain hand-off that closes the Project menu.
   const runRow=menu.slice(menu.indexOf('<button class="menu-row" aria-haspopup="menu"'),menu.indexOf('<span class="menu-row-label">Run</span><span class="menu-group-caret"'))
   assert.ok(runRow.length>0,'the Project menu must carry the Run row with the MenuGroup caret')
-  assert.match(runRow,/onPointerEnter=\{event=>\{if\(runFlyoutCapable&&event\.pointerType!=='touch'\)scheduleRunFlyoutOpen\(projectMenu\.project,event\.currentTarget\)\}\}/, 'a hover-capable pointer must open the Run flyout on hover')
-  assert.match(runRow,/onPointerLeave=\{event=>\{if\(runFlyoutCapable&&event\.pointerType!=='touch'\)scheduleRunFlyoutClose\(\)\}\}/, 'leaving the row must schedule the flyout closed, not close it outright')
+  assert.match(runRow,/onPointerEnter=\{event=>\{if\(runFlyoutCapable\s*&&\s*event\.pointerType!=='touch'\)scheduleRunFlyoutOpen\(projectMenu\.project,event\.currentTarget\)\}\}/, 'a hover-capable pointer must open the Run flyout on hover')
+  assert.match(runRow,/onPointerLeave=\{event=>\{if\(runFlyoutCapable\s*&&\s*event\.pointerType!=='touch'\)scheduleRunFlyoutClose\(\)\}\}/, 'leaving the row must schedule the flyout closed, not close it outright')
   assert.match(runRow,/if\(!runFlyoutCapable\)\{openRunMenu\(projectMenu\.project,event\.currentTarget,'project-menu','beside'\);return\}/, 'touch must hand off to the ordinary Run menu')
   assert.doesNotMatch(menu,/spawnTerminal|project\.newTerminal|MenuGroup id="project-run"/, 'the Project menu must not carry a backend shortcut or a nested copy of the Run menu')
 
@@ -157,13 +158,13 @@ test('mobile long-press consumes its follow-up click and background close preser
 test('file resource tabs expose scoped filesystem actions',()=>{
   const resolver=section('type FileMenuSource=', 'const sidebarPreviewRow=')
   assert.match(resolver,/menu\.leaf\.kind==='note'\?menu\.leaf\.id:''/, 'non-resource tabs must not resolve as files')
-  assert.match(resolver,/identity\?\.kind!=='file'&&identity\?\.kind!=='worktree-file'/)
+  assert.match(resolver,/identity\?\.kind!=='file'\s*&&\s*identity\?\.kind!=='worktree-file'/)
   assert.match(resolver,/\/api\/projects\/\$\{menu\.projectId\}\/reveal/)
   assert.match(resolver,/\.\.\.\(target\.worktree\?\{worktree:target\.worktree\}:\{\}\)/, 'worktree reveal must retain its registered root')
 
-  const menu=section('{tabMenu&&<div', 'Close tab</button>')
+  const menu=section('{tabMenu && <div', 'Close tab</button>')
   assert.match(menu,/fileMenuTarget\(tabMenu\)/)
   assert.match(menu,/>Open in default explorer<\/button>/)
   assert.match(menu,/>Copy full path<\/button>/)
-  assert.match(menu,/Copy path from \{fileMenuTarget\(tabMenu\)!\.worktree\?'worktree':'project'\} root/)
+  assert.match(menu,/Copy path from \{fileMenuTarget\(tabMenu\)!\.worktree\s*\?\s*'worktree'\s*:\s*'project'\} root/)
 })

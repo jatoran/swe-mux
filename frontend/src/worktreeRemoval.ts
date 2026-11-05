@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // Removing worktrees from Map: what is still going, and what may be acted on in bulk.
 //
 // Two rules this module exists to hold, both learned from the surface getting them
@@ -121,15 +122,15 @@ export function assessRemoval(
 }
 
 export function removalBlockLabel(block: RemovalBlock): string {
-  if (block === 'main') return 'main tree'
-  if (block === 'live_session') return 'in use'
-  return 'locked'
+  if (block === 'main') return t("worktreeRemoval.542e7d3815")
+  if (block === 'live_session') return t("worktreeRemoval.64c6c17ec0")
+  return t("worktreeRemoval.14493f5f54")
 }
 
 export function removalWarningLabel(warning: RemovalWarning): string {
-  if (warning === 'dirty') return 'uncommitted'
-  if (warning === 'unlanded') return 'unlanded'
-  return 'unmeasured'
+  if (warning === 'dirty') return t("worktreeRemoval.fbf980930e")
+  if (warning === 'unlanded') return t("worktreeRemoval.edb127539f")
+  return t("worktreeRemoval.e3bebb4113")
 }
 
 export type BulkRemoval = {
@@ -181,7 +182,7 @@ export function planBulkLand(
 }
 
 export function landBlockLabel(reason: LandBlock): string {
-  return reason === 'main' ? 'main tree' : 'detached HEAD'
+  return reason === 'main' ? t("worktreeRemoval.542e7d3815") : t("worktreeRemoval.448587ddd7")
 }
 
 /** One line naming what a bulk act will not touch, or an empty string when it is
@@ -195,5 +196,5 @@ export function skippedLabel(counts: Partial<Record<RemovalBlock | LandBlock, nu
       : removalBlockLabel(reason as RemovalBlock)
     parts.push(`${count} ${label}`)
   }
-  return parts.length ? `skipping ${parts.join(', ')}` : ''
+  return parts.length ? t("worktreeRemoval.5299d8bbc8", { value1: parts.join(', ') }) : ''
 }

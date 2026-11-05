@@ -1,3 +1,4 @@
+import { rich, t } from './localization/index.ts'
 import { useEffect, useState } from 'preact/hooks'
 import { subscribeContinuityFailure } from './continuityStatus'
 
@@ -8,8 +9,8 @@ export function ContinuityBanner() {
   if (!message) return null
   return (
     <div class="broadcast-banner continuity-banner" role="alert">
-      <strong>Note editor engine unavailable</strong>
-      <span>The Continuity WebAssembly engine failed to initialize: {message}. Notes cannot be edited until the app is reloaded.</span>
+      <strong>{t("ContinuityBanner.ddb0f58437")}</strong>
+      <span>{rich("ContinuityBanner.2e77672fbe", { message: message })}</span>
     </div>
   )
 }

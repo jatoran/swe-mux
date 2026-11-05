@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // Discovered agent skills: the shapes the daemon returns and the pure helpers the
 // Actions tab renders them with.
 //
@@ -61,10 +62,10 @@ export interface SkillInventory {
 const SCOPE_ORDER: SkillScope[] = ['project', 'user', 'plugin', 'system']
 
 const SCOPE_LABELS: Record<SkillScope, string> = {
-  project: 'This project',
-  user: 'Global',
-  plugin: 'Plugins',
-  system: 'Bundled',
+  get project() { return t("skills.d0f6254507") },
+  get user() { return t("skills.a258b30f88") },
+  get plugin() { return t("skills.9514b7ff48") },
+  get system() { return t("skills.79d3a1f108") },
 }
 
 export function scopeLabel(scope: SkillScope): string {
@@ -109,9 +110,9 @@ export function skillLabel(skill: AgentSkill): string {
 /** Tooltip: the caveats first, because they change what the click does. */
 export function skillTitle(skill: AgentSkill): string {
   const parts: string[] = []
-  if (skill.added_after_start) parts.push('Added after this agent loaded - restart the agent to load it.')
-  if (!skill.implicit) parts.push('Explicit-only: the agent never invokes this on its own.')
-  if (skill.shadowed_by) parts.push(`Shadowed by ${skill.shadowed_by}.`)
+  if (skill.added_after_start) parts.push(t("skills.e07aa70a41"))
+  if (!skill.implicit) parts.push(t("skills.ee0b5bb2a7"))
+  if (skill.shadowed_by) parts.push(t("skills.d6bfcabbfa", { value1: skill.shadowed_by }))
   parts.push(`${skill.invocation} · ${skill.origin}`)
   if (skill.description) parts.push(skill.description)
   return parts.join('\n')
@@ -125,12 +126,12 @@ export function inventoryNote(inventory: SkillInventory | null): string {
   if (!inventory) return ''
   const notes: string[] = []
   if (inventory.builtin_skills_hidden) {
-    notes.push("Claude's built-in skills are compiled into the CLI and are not listed here.")
+    notes.push(t("skills.83a1511a0e"))
   }
   if (inventory.skipped_plugins.length) {
-    notes.push(`${inventory.skipped_plugins.length} disabled plugin(s) not scanned.`)
+    notes.push(t("skills.58b5c9efd9", { value1: inventory.skipped_plugins.length }))
   }
-  if (inventory.truncated) notes.push('List truncated.')
-  if (inventory.errors.length) notes.push(`${inventory.errors.length} unreadable entr(ies).`)
+  if (inventory.truncated) notes.push(t("skills.b91b276f0c"))
+  if (inventory.errors.length) notes.push(t("skills.010389f857", { value1: inventory.errors.length }))
   return notes.join(' ')
 }

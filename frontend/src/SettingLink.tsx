@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import type { ComponentChildren } from 'preact'
 import { SETTING_TARGETS, requestSetting, type SettingTargetId } from './settingTargets'
 
@@ -31,7 +32,7 @@ export function SettingLink({ target, projectId, children, variant = 'button', t
   return <button
     type="button"
     class={className || (variant === 'link' ? 'setting-link inline' : 'setting-link')}
-    title={title || `${entry.label} · ${entry.where}`}
+    title={title || t("SettingLink.e1821da5f4", { label: entry.label, where: entry.where })}
     onClick={event => { event.stopPropagation(); requestSetting(target, projectId) }}
-  >{children || `Turn on ${entry.label}`}</button>
+  >{children || t("SettingLink.0ecde137a9", { label: entry.label })}</button>
 }

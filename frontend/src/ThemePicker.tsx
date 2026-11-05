@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { themeOptions, themePreviewColors, type CustomTheme, type ThemeName } from './theme'
 
@@ -84,7 +85,7 @@ export function ThemePicker({value,customTheme,open,onOpenChange,onChange,onPrev
       ref={trigger}
       type="button"
       class="theme-picker-trigger theme-picker-row"
-      aria-label={`Theme, ${selected.label}`}
+      aria-label={t("ThemePicker.8e5d2f71ec", { label: selected.label })}
       aria-haspopup="listbox"
       aria-expanded={open}
       aria-controls="theme-picker-options"
@@ -93,15 +94,15 @@ export function ThemePicker({value,customTheme,open,onOpenChange,onChange,onPrev
     >
       <span>{selected.label}</span>
       <ThemeSwatches name={selected.name} customTheme={customTheme} />
-      <span class="theme-picker-chevron" aria-hidden="true">{open?'▴':'▾'}</span>
+      <span class="theme-picker-chevron" aria-hidden="true">{open ? '▴' : '▾'}</span>
     </button>
-    {open&&<div
+    {open && <div
       ref={list}
       id="theme-picker-options"
       class="theme-picker-options"
       role="listbox"
       tabIndex={0}
-      aria-label="Theme"
+      aria-label={t("heading.efb52e7172")}
       aria-activedescendant={`theme-option-${themeOptions[activeIndex].name}`}
       onKeyDown={onListKeyDown}
     >
@@ -116,7 +117,7 @@ export function ThemePicker({value,customTheme,open,onOpenChange,onChange,onPrev
       >
         <span>{option.label}</span>
         <ThemeSwatches name={option.name} customTheme={customTheme} />
-        <span class="theme-picker-check" aria-hidden="true">{option.name===value?'✓':''}</span>
+        <span class="theme-picker-check" aria-hidden="true">{option.name===value ? '✓' : ''}</span>
       </div>)}
     </div>}
   </div>

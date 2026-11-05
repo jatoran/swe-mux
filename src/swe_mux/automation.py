@@ -27,6 +27,7 @@ from .openrouter import OpenRouterClient, OpenRouterError, OpenRouterResult
 from .session import SessionManager
 from .text_safety import utf8_safe_value
 from .transcript_view import conversation_is_readable, parse_transcript_cached
+from .ui_messages import ui_message
 
 AUTOMATION_INGEST_LOOP = "automation-ingest"
 AUTOMATION_WATCH_LOOP = "automation-watch"
@@ -162,9 +163,7 @@ TITLE_RETRY_SWEEP_LIMIT = 4
 MAX_TITLE_RETRY_DELAY_SECONDS = 900.0
 CAPABILITY_RANK = {"telemetry": 1, "inferred": 1, "semantic": 2, "derived": 2, "trusted": 3}
 ADAPTER_CAPABILITIES: dict[str, dict[str, Any]] = {
-    **{
-        name: harness.automation_capabilities() for name, harness in HARNESSES.items()
-    },
+    **{name: harness.automation_capabilities() for name, harness in HARNESSES.items()},
     "shell": {
         "native_hooks": False,
         "transcript": None,
@@ -189,11 +188,7 @@ BUILTIN_OBSERVER_CATALOG: tuple[dict[str, str], ...] = (
         "input": "The request the run opened with",
         "model": "Cheap model",
         "result": "Run note used as the generated session title",
-        "description": (
-            "Names a pane from its opening request, refines a provisional title a bounded "
-            "number of times (Title refinements, in the policy matrix) while the work is "
-            "still taking shape, and freezes it once it settles."
-        ),
+        "description": (ui_message("automation.b89ead5be1")),
     },
     {
         "id": "builtin.session-titler",
@@ -204,7 +199,7 @@ BUILTIN_OBSERVER_CATALOG: tuple[dict[str, str], ...] = (
         "input": "Last completed turn",
         "model": "Cheap model",
         "result": "Run note used as the generated session title",
-        "description": "Fallback for runs with no captured request, such as Codex.",
+        "description": ui_message("automation.5818859692"),
     },
     {
         "id": "builtin.stalled-triage",
@@ -215,7 +210,7 @@ BUILTIN_OBSERVER_CATALOG: tuple[dict[str, str], ...] = (
         "input": "Recent summary chain",
         "model": "Cheap model",
         "result": "Attention inbox warning",
-        "description": "Explains whether a detected stall appears to need user attention.",
+        "description": ui_message("automation.2ff0dc63f1"),
     },
     {
         "id": "builtin.approval_needed-triage",
@@ -226,7 +221,7 @@ BUILTIN_OBSERVER_CATALOG: tuple[dict[str, str], ...] = (
         "input": "Last completed turn",
         "model": "Cheap model",
         "result": "Attention inbox warning",
-        "description": "Summarizes an approval request without approving or rejecting it.",
+        "description": ui_message("automation.3774de5317"),
     },
     {
         "id": "builtin.context-handoff",
@@ -237,7 +232,7 @@ BUILTIN_OBSERVER_CATALOG: tuple[dict[str, str], ...] = (
         "input": "Last 18 transcript messages",
         "model": "Standard model",
         "result": "Run note tagged handoff-suggestion",
-        "description": "Drafts a concise handoff note when context usage is pressured.",
+        "description": ui_message("automation.d000630939"),
     },
 )
 
@@ -836,7 +831,7 @@ class TranscriptSliceService:
         elif kind in {"last_n_messages", "since_event", "since_annotation"}:
             selected = messages[-max_messages:]
         else:
-            raise ValueError(f"unsupported transcript slice: {kind}")
+            raise ValueError(ui_message("automation.fe5792447e", value1=kind))
         selected = selected[-max_messages:]
         selected, encoded = _encodable_messages(selected)
         while selected and len(encoded) > max_bytes:
@@ -889,11 +884,7 @@ class TranscriptSliceService:
             selected, encoded = _encodable_messages(selected[:-1])
         leftover = pending[len(selected) :]
         remaining_from = next(
-            (
-                stamp
-                for item in leftover
-                if (stamp := slice_timestamp(item.get("ts"))) is not None
-            ),
+            (stamp for item in leftover if (stamp := slice_timestamp(item.get("ts"))) is not None),
             None,
         )
         log.debug(
@@ -1170,10 +1161,7 @@ class AutomationEngine:
                 source="daemon",
                 capability="native_hook",
                 minimum="semantic",
-                reason=(
-                    "semantic transcript activity continued without an expected native hook; "
-                    "observation remains transcript-derived"
-                ),
+                reason=(ui_message("automation.491f1a6ff7")),
             )
 
     def note_native_hook(self, session_id: str, ts: float | None = None) -> None:
@@ -1262,7 +1250,9 @@ class AutomationEngine:
                         "trace": [],
                         "actions": [],
                         "loop_detected": True,
-                        "error": f"chain {event.chain_id} revisited rule {rule.id}",
+                        "error": ui_message(
+                            "automation.2dc1c639b9", value1=event.chain_id, value2=rule.id
+                        ),
                     }
                 )
                 continue
@@ -1669,10 +1659,9 @@ class AutomationEngine:
             if rule.id == FALLBACK_TITLE_RULE_ID:
                 if title is not None:
                     return False
-                if (
-                    await self._run_prompt(event, pin=not dry_run) is not None
-                    and not await self._prompt_titler_gave_up(event)
-                ):
+                if await self._run_prompt(
+                    event, pin=not dry_run
+                ) is not None and not await self._prompt_titler_gave_up(event):
                     # A captured request is stronger than the completed-turn fallback.
                     return False
             else:
@@ -1794,9 +1783,7 @@ class AutomationEngine:
         key = f"{RUN_PROMPT_CHECKPOINT_PREFIX}{event.agent_run_id}"
         pinned = dict(await self.store.checkpoint(key) or {})
         prompts = [
-            str(item)
-            for item in pinned.get("prompts", [])
-            if isinstance(item, str) and item
+            str(item) for item in pinned.get("prompts", []) if isinstance(item, str) and item
         ][:prompt_window]
         first = str(pinned.get("text") or "")
         if first and not prompts:
@@ -1885,7 +1872,7 @@ class AutomationEngine:
         try:
             if kind == "annotate":
                 if not event.agent_run_id:
-                    raise ValueError("annotations require a durable live agent run")
+                    raise ValueError(ui_message("automation.e01e833fdc"))
                 content = _template(str(action.get("content") or ""), event.snapshot(), None)
                 annotation = await self.store.create_annotation(
                     agent_run_id=event.agent_run_id,
@@ -1937,7 +1924,7 @@ class AutomationEngine:
             elif kind == "llm":
                 result = await self._llm(firing_id, rule, event, action)
             else:
-                raise ValueError(f"unsupported action: {kind}")
+                raise ValueError(ui_message("automation.30fa72b5da", value1=kind))
         except asyncio.CancelledError:
             await self.store.action_result(
                 firing_id, index, kind, "cancelled", {}, error="cancelled"
@@ -1955,25 +1942,26 @@ class AutomationEngine:
         self, firing_id: str, rule: Rule, event: NormalizedEvent, action: dict[str, Any]
     ) -> dict[str, Any]:
         if not self.config.automation_enabled:
-            raise ValueError("automation kill switch is off")
+            raise ValueError(ui_message("automation.8b19685576"))
         if not event.agent_run_id or not event.session_id:
-            raise ValueError("automatic observers require a live mux-owned agent run")
+            raise ValueError(ui_message("automation.263c9b056a"))
         session = self.sessions.sessions.get(event.session_id)
         if not session or session.record.agent_run_id != event.agent_run_id:
-            raise ValueError("agent run is no longer live")
+            raise ValueError(ui_message("automation.3dfe0f0566"))
         minimum_capability = str(action.get("minimum_capability") or "semantic")
         if CAPABILITY_RANK.get(event.capability, 0) < CAPABILITY_RANK[minimum_capability]:
             raise ValueError(
-                f"observer requires {minimum_capability} observation; "
-                f"current capability is {event.capability}"
+                ui_message(
+                    "automation.ef85a1a409", value1=minimum_capability, value2=event.capability
+                )
             )
         if session.record.parser_status == "degraded" and event.source != "native_hook":
-            raise ValueError("observer disabled because transcript parsing is degraded")
+            raise ValueError(ui_message("automation.9f1bae660b"))
         if session.record.observation_stale_since is not None:
             # The transcript parses fine; it is just no longer this session's
             # conversation (an unfollowable /clear or /new). An observer reading it
             # would title and summarize a conversation the user has already left.
-            raise ValueError("observer disabled because the followed transcript is stale")
+            raise ValueError(ui_message("automation.c31a193187"))
         needs_transcript = (
             str((action.get("input") or {}).get("slice") or "last_turn")
             not in TRANSCRIPT_FREE_SLICES
@@ -1983,7 +1971,7 @@ class AutomationEngine:
             session.record.backend,
             session.record.native_session_id,
         ):
-            raise ValueError("normalized transcript is unavailable")
+            raise ValueError(ui_message("automation.648e894505"))
         model_setting = str(action.get("model") or "cheap")
         # A retry that has run out of road may ask for the other tier; see
         # `_schedule_title_retry`. Only ever an escalation the engine set on its own
@@ -1996,7 +1984,7 @@ class AutomationEngine:
             "standard": self.config.openrouter_standard_model,
         }.get(model_setting, model_setting)
         if not model:
-            raise ValueError(f"OpenRouter {model_setting} model is not configured")
+            raise ValueError(ui_message("automation.a2f9d95a6e", value1=model_setting))
         global_spend = await self.store.spend()
         rule_spend = await self.store.spend(rule_id=rule.id)
         # Which axes bind is the budget's own business now (`budget.py`); this
@@ -2006,30 +1994,30 @@ class AutomationEngine:
             budget.spent_out(
                 self.config.automation_daily_budget,
                 global_spend,
-                label="the global daily observer",
+                label=ui_message("automation.669dbb9813"),
             ),
             budget.spent_out(
                 self.config.automation_rule_daily_budget,
                 rule_spend,
-                label="the rule daily observer",
+                label=ui_message("automation.d0a2c513a7"),
             ),
         ):
             if verdict.exhausted:
                 raise ValueError(verdict.reason)
         hour_ago = time.time() - 3600
         if await self.store.observer_call_count(hour_ago) >= self.config.automation_hourly_call_cap:
-            raise ValueError("global hourly observer call cap is exhausted")
+            raise ValueError(ui_message("automation.10c1ee6097"))
         if (
             await self.store.observer_call_count(hour_ago, rule_id=rule.id)
             >= self.config.automation_rule_hourly_call_cap
         ):
-            raise ValueError("rule hourly observer call cap is exhausted")
+            raise ValueError(ui_message("automation.46d680216e"))
         input_spec = action.get("input") or {}
         slice_kind = str(input_spec.get("slice") or "last_turn")
         if slice_kind == "prompt_text":
             prompt_text = await self._run_prompt(event)
             if not prompt_text:
-                raise ValueError("no user prompt has been observed for this run")
+                raise ValueError(ui_message("automation.2c9f0c4c3a"))
             if rule.id == PROMPT_TITLE_RULE_ID:
                 state_key = f"{TITLE_STATE_CHECKPOINT_PREFIX}{event.agent_run_id}"
                 title_state = dict(await self.store.checkpoint(state_key) or {})
@@ -2041,9 +2029,7 @@ class AutomationEngine:
                     {
                         **title_state,
                         "active_prompt_text": prompt_text,
-                        "active_prompt_count": int(
-                            (prompt_state or {}).get("prompt_count") or 1
-                        ),
+                        "active_prompt_count": int((prompt_state or {}).get("prompt_count") or 1),
                         "active_force": bool(event.payload.get("force_title")),
                         "updated_at": time.time(),
                     },
@@ -2055,9 +2041,7 @@ class AutomationEngine:
             # the retired `turn-summary` notes. `scan_records` is oldest-first;
             # `from_annotations` expects newest-first and reverses back to
             # chronological, so hand it the reversed sequence.
-            records = await self.store.scan_records(
-                agent_run_id=event.agent_run_id, limit=500
-            )
+            records = await self.store.scan_records(agent_run_id=event.agent_run_id, limit=500)
             summaries = [
                 {"created_at": item.get("t1") or item.get("created_at"), "content": text}
                 for item in reversed(records)
@@ -2069,7 +2053,7 @@ class AutomationEngine:
                 )
             ][:24]
             if not summaries:
-                raise ValueError("summary chain is unavailable")
+                raise ValueError(ui_message("automation.82e603f4a4"))
             transcript = self.slices.from_annotations(summaries)
         else:
             since_ts: float | None = None
@@ -2089,7 +2073,7 @@ class AutomationEngine:
                 native_id=session.record.native_session_id,
             )
         if transcript.estimated_tokens > self.config.automation_max_input_tokens:
-            raise ValueError("observer input exceeds the configured token limit")
+            raise ValueError(ui_message("automation.f2dd95cd43"))
         maximum_call_tokens = transcript.estimated_tokens + self.config.automation_max_output_tokens
         catalog = await self.store.model_cache()
         metadata = next((item for item in catalog["models"] if item.get("id") == model), None)
@@ -2109,14 +2093,14 @@ class AutomationEngine:
             budget.would_exceed(
                 self.config.automation_daily_budget,
                 global_spend,
-                label="the global",
+                label=ui_message("automation.b0941f4203"),
                 tokens=maximum_call_tokens,
                 usd=estimate,
             ),
             budget.would_exceed(
                 self.config.automation_rule_daily_budget,
                 rule_spend,
-                label="the rule",
+                label=ui_message("automation.0876c67517"),
                 tokens=maximum_call_tokens,
                 usd=estimate,
             ),
@@ -2435,12 +2419,16 @@ class AutomationEngine:
         if cached is not None:
             return cached
         raw: list[dict[str, Any]] = []
-        if event.type in {
-            "turn_started",
-            "turn_ended",
-            "transcript_message",
-            "title_regenerate_requested",
-        } and titler_on:
+        if (
+            event.type
+            in {
+                "turn_started",
+                "turn_ended",
+                "transcript_message",
+                "title_regenerate_requested",
+            }
+            and titler_on
+        ):
             raw.append(
                 {
                     "id": PROMPT_TITLE_RULE_ID,
@@ -2753,10 +2741,10 @@ def _template(template: str, event: dict[str, Any], result: dict[str, Any] | Non
 def _validate_result(value: dict[str, Any], schema: dict[str, Any]) -> None:
     properties = schema.get("properties") or {}
     if schema.get("additionalProperties") is False and set(value) - set(properties):
-        raise ValueError("observer response contained extra fields")
+        raise ValueError(ui_message("automation.0675c7148a"))
     for required in schema.get("required") or []:
         if required not in value:
-            raise ValueError(f"observer response omitted {required}")
+            raise ValueError(ui_message("automation.90e8cc7264", value1=required))
     for key, item in value.items():
         kind = properties.get(key, {}).get("type")
         valid_type = (
@@ -2770,20 +2758,20 @@ def _validate_result(value: dict[str, Any], schema: dict[str, Any]) -> None:
             or kind not in {"string", "number", "boolean"}
         )
         if not valid_type:
-            raise ValueError(f"observer response field {key} has the wrong type")
+            raise ValueError(ui_message("automation.e3305b323b", value1=key))
         spec = properties.get(key, {})
         if isinstance(item, str) and len(item) > int(spec.get("maxLength") or len(item)):
-            raise ValueError(f"observer response field {key} is too long")
+            raise ValueError(ui_message("automation.cfd25bc09e", value1=key))
         if isinstance(item, (int, float)) and not isinstance(item, bool):
             if "minimum" in spec and item < spec["minimum"]:
-                raise ValueError(f"observer response field {key} is below its minimum")
+                raise ValueError(ui_message("automation.90938ca97b", value1=key))
             if "maximum" in spec and item > spec["maximum"]:
-                raise ValueError(f"observer response field {key} is above its maximum")
+                raise ValueError(ui_message("automation.f58f37449c", value1=key))
 
 
 def validate_observer_result(value: dict[str, Any], schema_name: str) -> None:
     if schema_name not in OBSERVER_SCHEMAS:
-        raise ValueError("unknown observer schema")
+        raise ValueError(ui_message("automation.a770b53483"))
     _validate_result(value, OBSERVER_SCHEMAS[schema_name])
 
 

@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { availableDrawerSegments, type DrawerSegmentContext } from './drawerSegments'
 import type { DrawerTabId } from './drawerTabs'
 import { DrawerViewTabs } from './DrawerViewTabs'
@@ -33,7 +34,7 @@ export function DrawerSegmentControl({ tab, active, context, onSelect, selected 
   if (segments.length < 2) return null
   return <DrawerViewTabs
     className="drawer-segmented"
-    ariaLabel={`${tab} view`}
+    ariaLabel={t("DrawerSegmentControl.1954f44f14", { value1: tab })}
     active={active || segments[0].id}
     items={segments}
     onSelect={onSelect}

@@ -31,6 +31,7 @@ from typing import Any, Literal
 from .bounded_subprocess import run_bounded
 from .logsetup import current_request_id
 from .spawn_contract import base_session_env
+from .ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -196,7 +197,7 @@ async def run_bounded_command(
             outcome.stdout_truncated,
             outcome.duration_ms,
             timed_out=True,
-            error=f"timed out after {timeout_seconds:g}s",
+            error=ui_message("worktree_exec.1554a72492", value1=timeout_seconds),
         )
     return CommandOutcome(
         outcome.exit_code, outcome.stdout, outcome.stdout_truncated, outcome.duration_ms

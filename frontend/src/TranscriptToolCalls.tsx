@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { useState } from 'preact/hooks'
 import { transcriptToolInputText, type TranscriptToolCall } from './transcriptView'
 
@@ -27,7 +28,7 @@ export function TranscriptToolCalls({ calls, load }: {
       .then(result => { setLoaded(result); setReading('idle') })
       .catch(() => setReading('failed'))
   }
-  return <section class="transcript-tool-calls" aria-label={`${calls.length} tool call${calls.length === 1 ? '' : 's'}`}>
+  return <section class="transcript-tool-calls" aria-label={t("TranscriptToolCalls.aedbe119f3", { length: calls.length, value2: (calls.length === 1) ? 'yes' : 'no' })}>
     {calls.map(call => {
       const lazy = !!load && call.input === undefined
       const input = transcriptToolInputText(lazy ? inputs.get(call.id) : call.input)
@@ -47,11 +48,7 @@ export function TranscriptToolCalls({ calls, load }: {
         }}
       >
         <summary>{call.name}</summary>
-        {isOpen && (lazy && !loaded
-          ? <p class="transcript-tool-call-status">{reading === 'failed'
-            ? 'This input could not be read. Close and reopen to try again.'
-            : 'Reading input…'}</p>
-          : <pre>{input || '(no input)'}</pre>)}
+        {isOpen && (lazy && !loaded ? <p class="transcript-tool-call-status">{reading === 'failed' ? t("TranscriptToolCalls.f82b487c71") : t("TranscriptToolCalls.7386203b99")}</p> : <pre>{input || t("TranscriptToolCalls.e9e1728217")}</pre>)}
       </details>
     })}
   </section>

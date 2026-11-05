@@ -1,3 +1,4 @@
+import { catalogRevision, t, locale as uiLocale } from './localization/index.ts'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type {
   ContinuityChangeDetail,
@@ -155,7 +156,7 @@ function watchEditorStart(element: ContinuityEditorElement): void {
     if (abandonedEditors.has(element)) return
     const message = cause instanceof Error ? cause.message : String(cause)
     console.error('[note-editor] Continuity failed to start', cause)
-    window.dispatchEvent(new CustomEvent('mux:error', { detail: `The note editor failed to start: ${message}` }))
+    window.dispatchEvent(new CustomEvent('mux:error', { get detail() { return t("ProjectNoteEditor.f568cacfce", { message: message }) } }))
   })
 }
 
@@ -202,7 +203,7 @@ function useNoteEditorSettings(): NoteEditorSettings {
 
 /** App clipboard policy shared by Continuity's fallback request and the explicit rail action. */
 function copyNoteText(text: string): void {
-  const manualCopy = () => { window.prompt('Copy the text below:', text) }
+  const manualCopy = () => { window.prompt(t("ProjectNoteEditor.1575cb4101"), text) }
   captureCopy(text, 'note')
   if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).catch(manualCopy)
   else manualCopy()
@@ -242,7 +243,7 @@ async function handlePasteRequest(element: ContinuityEditorElement | null, remem
     }
   }
   if (text === null && remembered) text = remembered
-  if (text === null) text = window.prompt('Paste text:')
+  if (text === null) text = window.prompt(t("ProjectNoteEditor.038412c349"))
   if (text) element.insertText(text)
 }
 
@@ -252,7 +253,7 @@ let noteRailClipboard = ''
 const NOTE_CLIPBOARD_RAIL_ACTIONS: readonly RailAction[] = [
   {
     id: 'mux:copy',
-    label: 'Copy selected text',
+    get label() { return t("ProjectNoteEditor.ce848bbc11") },
     icon: () => createNoteRailIcon('copy'),
     isEnabled: snapshot => hasSelection(snapshot),
     run: editor => {
@@ -264,7 +265,7 @@ const NOTE_CLIPBOARD_RAIL_ACTIONS: readonly RailAction[] = [
   },
   {
     id: 'mux:paste',
-    label: 'Paste text',
+    get label() { return t("ProjectNoteEditor.9328724b4c") },
     icon: () => createNoteRailIcon('paste'),
     run: editor => { void handlePasteRequest(editor, noteRailClipboard) },
   },
@@ -332,9 +333,7 @@ export function ContinuityMarkdownEditor({
   localInputRef.current = onLocalInput
   const settings = useNoteEditorSettings()
   const resolvedRailActions = useMemo<readonly RailAction[]>(
-    () => [...NOTE_CLIPBOARD_RAIL_ACTIONS, ...(railActions || [])],
-    [railActions],
-  )
+    () => [...NOTE_CLIPBOARD_RAIL_ACTIONS, ...(railActions || [])], [railActions, uiLocale.value, catalogRevision.value])
   // Capture the viewport at ref detach: Preact nulls refs before removing the DOM node, so
   // the textarea scroll offsets are still live here (they read 0 once detached).
   const attachRef = useCallback((element: ContinuityEditorElement | null) => {

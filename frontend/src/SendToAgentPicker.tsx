@@ -1,3 +1,4 @@
+import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
 import { Dropdown } from './Dropdown'
@@ -80,7 +81,7 @@ export function SendToAgentPicker({ request, projects, sessions, onClose, onSend
   useModalFocus(panel, onClose, !busy)
 
   const project = projects.find(item => item.id === projectId)
-  const agents = useMemo(() => agentTargets(sessions, projectId), [sessions, projectId])
+  const agents = useMemo(() => agentTargets(sessions, projectId), [sessions, projectId, uiLocale.value, catalogRevision.value])
   // Switching project (or a target session ending under the dialog) must never leave a stale
   // session selected: sending to the wrong session is the one unrecoverable outcome here.
   useEffect(() => {
@@ -109,7 +110,7 @@ export function SendToAgentPicker({ request, projects, sessions, onClose, onSend
 
   const send = async () => {
     if (!message.trim()) {
-      setError('There is nothing to send.')
+      setError(t("SendToAgentPicker.1aa7fffc57"))
       return
     }
     setBusy(true)
@@ -147,9 +148,9 @@ export function SendToAgentPicker({ request, projects, sessions, onClose, onSend
       })
       setError(
         result.protected
-          ? `The queue refused delivery and this cannot be overridden: ${wordReasons(result.reasons)}. ` +
-            'The message stays queued; it can be sent from the Queue panel once the target is free.'
-          : `The target is not safe right now: ${wordReasons(result.reasons)}.`,
+          ? t("SendToAgentPicker.612bbb3cc7", { value1: wordReasons(result.reasons) }) +
+            t("SendToAgentPicker.12bad6fff7")
+          : t("SendToAgentPicker.ee31774ab7", { value1: wordReasons(result.reasons) }),
       )
       return
     }
@@ -195,37 +196,31 @@ export function SendToAgentPicker({ request, projects, sessions, onClose, onSend
       class="modal-layer control-plane-modal-layer"
       role="dialog"
       aria-modal="true"
-      aria-label="Send to an agent session"
+      aria-label={t("SendToAgentPicker.1909a1d3b2")}
       onMouseDown={event => event.target === event.currentTarget && !busy && onClose()}
     >
       <section class="modal control-plane-modal send-agent-modal" ref={panel}>
         <div class="modal-heading">
           <div>
-            <span>SEND::AGENT</span>
+            <span>{t("SendToAgentPicker.6a9ee46886")}</span>
             <h2>{request.label}</h2>
           </div>
-          <button type="button" aria-label="Close send to agent" disabled={busy} onClick={onClose}>
+          <button type="button" aria-label={t("SendToAgentPicker.e1202e6b65")} disabled={busy} onClick={onClose}>
             ×
           </button>
         </div>
         <div class="control-plane-modal-body">
-          <p>
-            Sending the {request.scope === 'selection' ? 'selected text' : 'whole document'}. The
-            message below is exactly what the agent receives, and nothing is sent until you say so.
-          </p>
-          <label>
-            Target project
-            <Dropdown
+          <p>{t("SendToAgentPicker.50b376c7bb", { value1: (request.scope === 'selection') ? 'yes' : 'no' })}</p>
+          <label>{rich("SendToAgentPicker.6cbb9c8057", { value1: <Dropdown
               value={projectId}
               disabled={busy}
               onChange={setProjectId}
               filter
-              filterPlaceholder="Filter Projects…"
+              filterPlaceholder={t("SendToAgentPicker.2e0060c45e")}
               options={projectDropdownOptions(projects, item => ({ value: item.id, label: item.name, detail: item.root }))}
-            />
-          </label>
-          <div class="send-agent-targets" role="radiogroup" aria-label="Send target">
-            {promptDeliveryHarnesses().map(harness=>option(newTargetKey(harness.name), null, `New ${harness.display_name} session`, 'Starts in this project, opening beside this pane'))}
+            /> })}</label>
+          <div class="send-agent-targets" role="radiogroup" aria-label={t("SendToAgentPicker.10b0a3e6d9")}>
+            {promptDeliveryHarnesses().map(harness=>option(newTargetKey(harness.name), null, t("SendToAgentPicker.3afe7e430c", { value1: harness.display_name }), t("SendToAgentPicker.47961913ea")))}
             {agents.map(session =>
               option(
                 sessionTargetKey(session.id),
@@ -234,90 +229,57 @@ export function SendToAgentPicker({ request, projects, sessions, onClose, onSend
                 `${session.backend} · ${session.state}${session.state_detail ? ` · ${session.state_detail}` : ''}`,
               ),
             )}
-            {!agents.length && (
-              <p class="send-agent-empty">
-                No live agent session in this project. Shell sessions are not offered:
-                a paste would run as commands.
-              </p>
-            )}
+            {!agents.length && (<p class="send-agent-empty">{t("SendToAgentPicker.fb24432172")}</p>)}
           </div>
-          {chosen && (
-            <label class="send-agent-submit">
+          {chosen && (<label class="send-agent-submit">
               <input
                 type="checkbox"
                 checked={submit}
                 disabled={busy}
                 onChange={event => setSubmit(event.currentTarget.checked)}
               />
-              <span>Press Enter after inserting (off fills the composer and leaves it to you)</span>
-            </label>
-          )}
-          {request.removeSelectionAfterSend && (
-            <label class="send-agent-submit">
+              <span>{t("SendToAgentPicker.8d5a82d695")}</span>
+            </label>)}
+          {request.removeSelectionAfterSend && (<label class="send-agent-submit">
               <input
                 type="checkbox"
                 checked={removeSelection}
                 disabled={busy}
                 onChange={event => setRemoveSelection(event.currentTarget.checked)}
               />
-              <span>Remove the selected text from the note after this handoff is accepted</span>
-            </label>
-          )}
+              <span>{t("SendToAgentPicker.adbadd9b40")}</span>
+            </label>)}
           {/* Same vocabulary as the Queue tab's readiness strip, from the same
               module: two hand-worded renderings of one verdict is how two surfaces
               come to describe one session differently. */}
-          {unreadied && chosen && verdict && !activeRefusal && (
-            <p class="modal-warning" role="status">
-              {agentTargetName(chosen)} is {verdict.headline}
-              {verdict.summary ? ` — ${verdict.summary}` : ''}.{' '}
-              {verdict.clears ? `${verdict.clears} ` : ''}
-              {verdict.protected
-                ? 'Sending will stage the message; the queue will refuse to deliver it until this clears, and no confirmation overrides it.'
-                : 'Sending will ask the queue to deliver; it re-checks and may ask you to confirm.'}
-            </p>
-          )}
-          {error && (
-            <p class="modal-warning" role="alert">
+          {unreadied && chosen && verdict && !activeRefusal && (<p class="modal-warning" role="status">{rich("SendToAgentPicker.089d5cf118", { value1: agentTargetName(chosen), headline: verdict.headline, value3: verdict.summary ? t("SendToAgentPicker.fa25e8025e", { summary: verdict.summary }) : '', value4: verdict.clears ? t("SendToAgentPicker.3ac0c78589", { clears: verdict.clears }) : '', value5: (verdict.protected) ? 'yes' : 'no' })}</p>)}
+          {error && (<p class="modal-warning" role="alert">
               {error}
-            </p>
-          )}
-          <label>
-            Message
-            <textarea
+            </p>)}
+          <label>{rich("SendToAgentPicker.7b7e7d7f08", { value1: <textarea
               class="send-agent-message"
               value={message}
               disabled={busy}
               onInput={event => setMessage(event.currentTarget.value)}
-              aria-label="Message sent to the agent"
-            />
-          </label>
+              aria-label={t("SendToAgentPicker.0955b0412e")}
+            /> })}</label>
         </div>
         <div class="modal-footer">
-          <span>{busy ? 'sending…' : `${message.length.toLocaleString()} characters`}</span>
-          <button type="button" disabled={busy} onClick={onClose}>
-            Cancel
-          </button>
-          {chosen && (
-            <button
+          <span>{busy ? t("SendToAgentPicker.65ea0981f8") : t("SendToAgentPicker.1827891d1e", { value1: message.length.toLocaleString(uiLocale.value) })}</span>
+          <button type="button" disabled={busy} onClick={onClose}>{t("SendToAgentPicker.19766ed6cc")}</button>
+          {chosen && (<button
               type="button"
               disabled={busy || !message.trim()}
-              title="Stage the message in the target's queue without delivering it"
+              title={t("SendToAgentPicker.c919ae9e5a")}
               onClick={() => void addToQueue()}
-            >
-              Add to queue
-            </button>
-          )}
+            >{t("SendToAgentPicker.34b25c1b96")}</button>)}
           <button
             type="button"
             class="primary"
             disabled={busy || !message.trim() || !!(activeRefusal && activeRefusal.protected)}
             onClick={() => void send()}
           >
-            {chosen
-              ? confirmMode
-                ? 'Send anyway'
-                : 'Send'
-              : `Start ${harnessDisplayName(backendFromTargetKey(target))}`}
+            {chosen ? confirmMode ? t("SendToAgentPicker.3bdd9831a4") : t("SendToAgentPicker.f6f4688ff2") : t("SendToAgentPicker.e533494669", { value1: harnessDisplayName(backendFromTargetKey(target)) })}
           </button>
         </div>
       </section>

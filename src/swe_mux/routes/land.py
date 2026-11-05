@@ -21,6 +21,7 @@ from ..project_files import (
     read_project_config,
     write_project_config,
 )
+from ..ui_messages import error_text, ui_message
 from ..verify_provenance import read_verify_provenance, verify_bypass_allowed
 from ..worktree_verify import (
     MAX_VERIFY_COMMAND_CHARS,
@@ -69,7 +70,7 @@ def _land_project(request: web.Request) -> Any:
     project_id = request.query.get("project_id") or ""
     project = request.app[keys.PROJECTS].projects.get(project_id)
     if project is None:
-        raise ValueError("unknown project")
+        raise ValueError(ui_message("land.e222820974"))
     return project
 
 
@@ -79,9 +80,7 @@ async def list_land_requests(request: web.Request) -> web.Response:
     project_id = request.query.get("project_id") or None
     project = request.app[keys.PROJECTS].projects.get(project_id or "")
     return json_response(
-        await service.status(
-            project_id=project_id, project_root=project.root if project else None
-        )
+        await service.status(project_id=project_id, project_root=project.root if project else None)
     )
 
 
@@ -98,13 +97,13 @@ async def request_land(request: web.Request) -> web.Response:
     body = await request.json()
     project = request.app[keys.PROJECTS].projects.get(str(body.get("project_id") or ""))
     if project is None:
-        raise ValueError("unknown project")
+        raise ValueError(ui_message("land.e222820974"))
     worktree_root = str(body.get("worktree_root") or "").strip()
     if not worktree_root:
-        raise ValueError("worktree_root is required")
+        raise ValueError(ui_message("land.c2f50e22a7"))
     kind = str(body.get("kind") or "land").strip()
     if kind not in ("land", "verify"):
-        raise ValueError("kind must be 'land' or 'verify'")
+        raise ValueError(ui_message("land.1f17bf2998"))
     try:
         row = await request.app[keys.LAND_QUEUE].request(
             project_id=project.id,
@@ -122,7 +121,7 @@ async def cancel_land_request(request: web.Request) -> web.Response:
     try:
         row = await request.app[keys.LAND_QUEUE].cancel(request.match_info["request_id"])
     except LandConflict as exc:
-        return json_response({"error": str(exc), "code": "not_cancellable"}, 409)
+        return json_response({"error": error_text(exc), "code": "not_cancellable"}, 409)
     return json_response(row)
 
 
@@ -207,16 +206,16 @@ async def write_land_verify_command(request: web.Request) -> web.Response:
     body = await request.json()
     project = request.app[keys.PROJECTS].projects.get(str(body.get("project_id") or ""))
     if project is None:
-        raise ValueError("unknown project")
+        raise ValueError(ui_message("land.e222820974"))
     command = str(body.get("command") or "").strip()
     if len(command) > MAX_VERIFY_COMMAND_CHARS:
-        raise ValueError(f"verify_command must be at most {MAX_VERIFY_COMMAND_CHARS} characters")
+        raise ValueError(ui_message("land.3025af6f7f", value1=MAX_VERIFY_COMMAND_CHARS))
     identity = _config_identity(request, project.id)
     current = await read_project_config(project.root, project=identity)
     if current.get("status") == "malformed":
         return json_response(
             {
-                "error": "this Project's .swe-mux/config.toml cannot be parsed; fix it first",
+                "error": ui_message("land.3028774f14"),
                 "code": "project_config_malformed",
             },
             409,
@@ -236,7 +235,7 @@ async def write_land_verify_command(request: web.Request) -> web.Response:
         written = await write_project_config(project.root, values, revision, project=identity)
     except ValueError as exc:
         if "changed externally" in str(exc):
-            return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+            return json_response({"error": error_text(exc), "code": "revision_conflict"}, 409)
         raise
     await request.app[keys.EVENTS].emit(
         "project_configuration_changed", project_id=written["project"]["id"]
@@ -292,7 +291,7 @@ async def approve_land_verify_command(request: web.Request) -> web.Response:
     body = await request.json()
     project = request.app[keys.PROJECTS].projects.get(str(body.get("project_id") or ""))
     if project is None:
-        raise ValueError("unknown project")
+        raise ValueError(ui_message("land.e222820974"))
     worktree_root = str(body.get("worktree_root") or project.root)
     digest = str(body.get("digest") or "")
     values = await read_project_config(project.root)
@@ -302,12 +301,12 @@ async def approve_land_verify_command(request: web.Request) -> web.Response:
     )
     if not info.configured or info.digest is None:
         return json_response(
-            {"error": "no verification command is configured", "code": "not_configured"}, 409
+            {"error": ui_message("land.520832f2ec"), "code": "not_configured"}, 409
         )
     if digest != info.digest:
         return json_response(
             {
-                "error": "the verification command changed; review it again before approving",
+                "error": ui_message("land.429a6ab08d"),
                 "code": "digest_mismatch",
                 "digest": info.digest,
             },

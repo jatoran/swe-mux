@@ -1,3 +1,4 @@
+import { withCatalogText } from './support/localizedSource.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -517,7 +518,7 @@ test('a save-loop report is a POST the daemon can log, and never throws at the e
 // app's global unhandled-rejection backstop. `hidden-note-editor.spec.ts` covers the same two
 // in a real browser, against the real engine.
 test('the note editor defers its element until its slot has a layout box', () => {
-  const editor = readFileSync(join(import.meta.dirname, '..', 'src', 'ProjectNoteEditor.tsx'), 'utf8')
+  const editor = withCatalogText(readFileSync(join(import.meta.dirname, '..', 'src', 'ProjectNoteEditor.tsx'), 'utf8'))
 
   assert.match(editor, /whenLayoutBox\(slot/)
   assert.match(editor, /class="note-editor-slot"/)
@@ -525,7 +526,7 @@ test('the note editor defers its element until its slot has a layout box', () =>
 })
 
 test('a note editor that cannot start reports itself instead of a raw DOM message', () => {
-  const editor = readFileSync(join(import.meta.dirname, '..', 'src', 'ProjectNoteEditor.tsx'), 'utf8')
+  const editor = withCatalogText(readFileSync(join(import.meta.dirname, '..', 'src', 'ProjectNoteEditor.tsx'), 'utf8'))
 
   assert.match(editor, /element\.ready\.catch/)
   assert.match(editor, /The note editor failed to start/)

@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // `resets_at` is a provider instant the daemon captured and stores, so every
 // countdown here is aged on the daemon's clock (`serverNow`) rather than the
 // browser's. A remote client a minute out of step would otherwise report a quota
@@ -14,15 +15,15 @@ export const accountAbbreviation=(label:string)=>[...label.trim()].slice(0,4).jo
 export const formatResetRemaining=(resetsAt?:number|null,nowSeconds=serverNow())=>{
   if(!resetsAt)return ''
   const seconds=Math.max(0,Math.ceil(resetsAt-nowSeconds))
-  if(seconds<60)return '<1m'
+  if(seconds<60)return t("providerAccountDisplay.bc5702638a")
   const minutes=Math.ceil(seconds/60),days=Math.floor(minutes/1440),hours=Math.floor((minutes%1440)/60)
-  if(days)return `${days}d${hours?`${hours}h`:''}`
+  if(days)return t("providerAccountDisplay.b615c165b8", { value1: days, value2: hours?`${hours}h`:'' })
   const mins=minutes%60
-  return hours?`${hours}h${mins?`${mins}m`:''}`:`${minutes}m`
+  return hours?t("providerAccountDisplay.85de4e3387", { value1: hours, value2: mins?`${mins}m`:'' }):t("providerAccountDisplay.10767db0b0", { value1: minutes })
 }
 
 export const quotaWindowSummary=(window?:QuotaWindowDisplay|null,nowSeconds=serverNow())=>window?`${percent(window)}${window.resets_at?` ${formatResetRemaining(window.resets_at,nowSeconds)}`:''}`:'—'
-export const quotaSummary=(account?:QuotaAccountDisplay,nowSeconds=serverNow())=>account?.quota?.status==='error'?'unavailable':`${quotaWindowSummary(account?.quota?.session,nowSeconds)} - ${quotaWindowSummary(account?.quota?.weekly,nowSeconds)}${account?.quota?.fable?` · ${percent(account.quota.fable)} Fable`:''}`
+export const quotaSummary=(account?:QuotaAccountDisplay,nowSeconds=serverNow())=>account?.quota?.status==='error'?t("providerAccountDisplay.ba691ba042"):`${quotaWindowSummary(account?.quota?.session,nowSeconds)} - ${quotaWindowSummary(account?.quota?.weekly,nowSeconds)}${account?.quota?.fable?t("providerAccountDisplay.fa8e41ad44", { value1: percent(account.quota.fable) }):''}`
 
 export type ProviderQuotaWindows={session:QuotaWindowDisplay|null;weekly:QuotaWindowDisplay|null;fable:QuotaWindowDisplay|null}
 
@@ -74,8 +75,8 @@ export const loginCommand=(commands:Record<string,string>|undefined|null,provide
 export const signInTitle=(commands:Record<string,string>|undefined|null,provider:string):string=>{
   const command=loginCommand(commands,provider)
   return command
-    ?`Runs ${command} on the daemon host and saves the account it produces.`
-    :`Runs ${provider}'s login on the daemon host and saves the account it produces.`
+    ?t("providerAccountDisplay.5eb99d1c32", { value1: command })
+    :t("providerAccountDisplay.4d57a39dba", { value1: provider })
 }
 
 export type UsageBand='unknown'|'ok'|'warn'|'critical'
@@ -106,7 +107,7 @@ export function quotaGridSegments(windows?:ProviderQuotaWindows|null,nowSeconds=
   if(windows?.fable)slots.push({key:'fable',window:windows.fable})
   return slots.filter((slot):slot is {key:QuotaGridSegment['key'];window:QuotaWindowDisplay}=>!!slot.window).map(slot=>({
     key:slot.key,
-    heading:slot.key==='fable'?'Fable':formatResetRemaining(slot.window?.resets_at,nowSeconds)||'—',
+    heading:slot.key==='fable'?t("providerAccountDisplay.6489664b94"):formatResetRemaining(slot.window?.resets_at,nowSeconds)||'—',
     text:percent(slot.window),
     band:shownUsageBand(slot.window?.used_percent),
   }))
@@ -223,7 +224,7 @@ export function strandedSessions(
     .map(account=>({label:account.label,count:spawnedSessionCount(status?.sessions,account.id)}))
     .filter(row=>row.count>0)
   const unsaved=status?.sessions?.unsaved?.[provider]||0
-  if(unsaved)rows.push({label:'a login that is not saved here',count:unsaved})
+  if(unsaved)rows.push({get label() { return t("providerAccountDisplay.404e694b45") },count:unsaved})
   return rows
 }
 
@@ -240,7 +241,7 @@ export const strandedSessionRows=(
 /** The whole explanation, drawn once the notice is expanded. */
 export const strandedSessionNotice=(row:StrandedSessions,cli:string):string=>{
   const one=row.count===1
-  return `${row.count} live session${one?'':'s'} on ${row.label}. ${cli} reads its login at startup, so ${one?'it keeps':'they keep'} spending ${row.label} until restarted.`
+  return t("providerAccountDisplay.b0172ad65c", { value1: row.count, value2: (one) ? 'yes' : 'no', value3: row.label, value4: cli, value5: (one) ? 'yes' : 'no', value6: row.label })
 }
 
 /** The collapsed line: the count and the login, nothing about why. The explanation
@@ -248,7 +249,7 @@ export const strandedSessionNotice=(row:StrandedSessions,cli:string):string=>{
  *  the number, so the line carries the part that changes and the expansion the part
  *  that does not. */
 export const strandedSessionSummary=(row:StrandedSessions):string=>
-  `${row.count} live session${row.count===1?'':'s'} still on ${row.label}`
+  t("providerAccountDisplay.0631431934", { value1: row.count, value2: (row.count===1) ? 'yes' : 'no', value3: row.label })
 
 /** What a dismissal names. The login rather than the count: a row whose count moved
  *  from 17 to 16 because one session was restarted is the notice the operator already

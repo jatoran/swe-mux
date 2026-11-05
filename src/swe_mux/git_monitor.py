@@ -22,6 +22,7 @@ from .logsetup import bound_request_id, current_request_id, new_request_id
 from .models import GitState
 from .session import Session, SessionManager
 from .session_patch import session_patch
+from .ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -99,7 +100,7 @@ async def _git(
     try:
         outcome = await run_bounded(
             ("git", *READ_ONLY_GIT_OPTIONS, "-C", cwd, *args),
-            label="git",
+            label=ui_message("git_monitor.9a881b9b9f"),
             timeout_seconds=timeout_seconds,
             output_limit=output_limit,
             stderr_limit=GIT_OUTPUT_LIMIT_BYTES,
@@ -227,9 +228,7 @@ COMMIT_CHANGE_LIMIT = 400
 #: thing this must not do.
 BLOB_DIGEST_MAX_BYTES = 2 * 1024 * 1024
 
-_RAW_CHANGE = re.compile(
-    r"^:(\d{6}) (\d{6}) ([0-9a-f]{40,64}) ([0-9a-f]{40,64}) ([A-Z])(\d*)$"
-)
+_RAW_CHANGE = re.compile(r"^:(\d{6}) (\d{6}) ([0-9a-f]{40,64}) ([0-9a-f]{40,64}) ([A-Z])(\d*)$")
 _EMPTY_OID = re.compile(r"^0{40,64}$")
 
 
@@ -431,9 +430,7 @@ async def read_excluded_range(
     side have that the other side did not", which is the branch a merge unified
     rather than the history under it.
     """
-    if not _FULL_OID.fullmatch(include) or any(
-        not _FULL_OID.fullmatch(item) for item in exclude
-    ):
+    if not _FULL_OID.fullmatch(include) or any(not _FULL_OID.fullmatch(item) for item in exclude):
         return ()
     code, output = await _git(
         cwd,
@@ -489,7 +486,7 @@ async def _git_bytes(cwd: str, *args: str, timeout_seconds: float = GIT_TIMEOUT_
     try:
         outcome = await run_bounded(
             ("git", *READ_ONLY_GIT_OPTIONS, "-C", cwd, *args),
-            label="git-bytes",
+            label=ui_message("git_monitor.fe16cfe2cf"),
             timeout_seconds=timeout_seconds,
             # The only caller digests a blob, and `read_blob_digest` has already
             # refused anything above this by asking `cat-file -s` first - so a
@@ -591,9 +588,9 @@ def _worktree_name(cwd: str, root: str, git_dir: str, common_dir: str) -> str | 
 #: calls per poll on the event loop were a recurring loop-stall frame (2026-10-12).
 #: A different answer from Git is a different key, so a checkout that is recreated
 #: as something else is never served a stale layout.
-_layout_memo: OrderedDict[
-    tuple[str, str, str, str], tuple[str | None, CheckoutLayout | None]
-] = OrderedDict()
+_layout_memo: OrderedDict[tuple[str, str, str, str], tuple[str | None, CheckoutLayout | None]] = (
+    OrderedDict()
+)
 
 
 async def _checkout_layout(
@@ -619,9 +616,9 @@ _diffstat_memo: OrderedDict[str, tuple[str | None, int, int]] = OrderedDict()
 #: branch-scoped diff moves for a strictly larger set of reasons than the
 #: HEAD-scoped one: committing changes it while leaving `dirty_hash` alone, and
 #: the base itself advances under it. All three therefore key the memo.
-_compare_memo: OrderedDict[
-    tuple[str, str], tuple[tuple[str, str, str | None], int, int, int]
-] = OrderedDict()
+_compare_memo: OrderedDict[tuple[str, str], tuple[tuple[str, str, str | None], int, int, int]] = (
+    OrderedDict()
+)
 
 #: (root, override) -> (expires_at monotonic, resolved ref). Inference costs
 #: several git calls and answers a question that changes when a remote's HEAD is

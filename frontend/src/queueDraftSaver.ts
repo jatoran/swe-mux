@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 /**
  * Autosave for the Queue pane's inline draft editor.
  *
@@ -234,7 +235,7 @@ export class QueueDraftSaver {
       this.mark(
         key,
         entry.messageId ? 'empty' : 'idle',
-        entry.messageId ? 'A queued message cannot be empty — the last saved text is kept.' : '',
+        entry.messageId ? t("queueDraftSaver.c5a003bd7f") : '',
       )
       return
     }

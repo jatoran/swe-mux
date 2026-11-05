@@ -1,3 +1,4 @@
+import { withCatalogText } from './support/localizedSource.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -8,7 +9,7 @@ import {
 } from '../src/deliveryReadiness.ts'
 import type { DeliveryReadiness } from '../src/types.ts'
 
-const src = (name: string) => readFileSync(join(import.meta.dirname, '..', 'src', name), 'utf8')
+const src = (name: string) => withCatalogText(readFileSync(join(import.meta.dirname, '..', 'src', name), 'utf8'))
 
 const reading = (patch: Partial<DeliveryReadiness> = {}): DeliveryReadiness => ({
   state: 'blocked',
@@ -49,10 +50,10 @@ test('an unmapped reason survives as itself rather than disappearing', () => {
 test('every reason the tracker can emit has a sentence', () => {
   // Read out of the classifier rather than listed here, so a new reason code lands
   // as a failing test instead of as a raw string in front of a user.
-  const classifier = readFileSync(
+  const classifier = withCatalogText(readFileSync(
     join(import.meta.dirname, '..', '..', 'src', 'swe_mux', 'delivery_readiness.py'),
     'utf8',
-  )
+  ))
   const emitted = new Set<string>()
   for (const match of classifier.matchAll(/(?:hard_block_reasons|unknown_reasons|reasons)\s*=?\.?append\(\s*"([a-z_]+)"/g)) emitted.add(match[1])
   for (const match of classifier.matchAll(/reasons = \["([a-z_]+)"\]/g)) emitted.add(match[1])

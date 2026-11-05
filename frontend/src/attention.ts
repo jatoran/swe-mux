@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // Ranked attention: the shapes the daemon publishes, and the pure helpers the
 // Alerts surface renders from. Kept JSX-free so the ordering and labelling rules
 // stay unit-testable under plain `node --experimental-strip-types`.
@@ -48,39 +49,39 @@ export type AttentionInbox = {
 export const CHANNEL_ORDER: AttentionChannel[] = ['interrupt_now', 'next_breakpoint', 'inbox', 'digest']
 
 export const CHANNEL_LABELS: Record<AttentionChannel, string> = {
-  interrupt_now: 'Needs attention now',
-  next_breakpoint: 'Review at your next pause',
-  inbox: 'Review when convenient',
-  digest: 'Digest only',
+  get interrupt_now() { return t("attention.ee788f7ad4") },
+  get next_breakpoint() { return t("attention.7c2a293429") },
+  get inbox() { return t("attention.a578cca52f") },
+  get digest() { return t("attention.0084dd0893") },
 }
 
 export const CHANNEL_HINTS: Record<AttentionChannel, string> = {
-  interrupt_now: 'Worsening, actionable, and confident enough to spend a slot of today’s budget.',
-  next_breakpoint: 'Relevant but not urgent. Waits until you naturally pause or change tasks.',
-  inbox: 'Schedulable. Read it when you choose to.',
-  digest: 'Kept as a record. No action implied.',
+  get interrupt_now() { return t("attention.1b5b80b9d3") },
+  get next_breakpoint() { return t("attention.257b94f68b") },
+  get inbox() { return t("attention.907f894f57") },
+  get digest() { return t("attention.8261372e90") },
 }
 
 export const SUPPRESSED_LABELS: Record<string, string> = {
-  budget_exhausted: 'held back: today’s interrupt budget is spent',
-  low_confidence: 'held back: not confident enough to interrupt',
-  superseded_run: 'held back: the conversation was replaced',
+  get budget_exhausted() { return t("attention.19ac445475") },
+  get low_confidence() { return t("attention.b57ce29a04") },
+  get superseded_run() { return t("attention.5e554f7580") },
 }
 
 export function suppressedLabel(reason: string): string {
-  return SUPPRESSED_LABELS[reason] || (reason.startsWith('rule:') ? `held back by your rule for ${reason.slice(5).replaceAll('_', ' ')}` : `held back: ${reason}`)
+  return SUPPRESSED_LABELS[reason] || (reason.startsWith('rule:') ? t("attention.74683c96d7", { value1: reason.slice(5).replaceAll('_', ' ') }) : t("attention.3c681c771a", { value1: reason }))
 }
 
 /** The fan-out headline, or an honest statement that it is not measurable yet. */
 export function fanoutHeadline(fanout: FanOut): string {
   if (fanout.status !== 'ok' || !fanout.sustainable_agents) {
-    return `Sustainable fan-out unknown: ${fanout.samples} of ${fanout.required} interaction samples so far. ${fanout.attended_now} agent sessions live.`
+    return t("attention.d516a46ac4", { value1: fanout.samples, value2: fanout.required, value3: fanout.attended_now })
   }
-  return `You are sustainable at about ${fanout.sustainable_agents} attended agents right now. ${fanout.attended_now} live.`
+  return t("attention.47b00ccf01", { value1: fanout.sustainable_agents, value2: fanout.attended_now })
 }
 
 export function budgetLine(budget: AttentionBudget): string {
-  return `${budget.used}/${budget.daily_budget} interrupts today · ${budget.burst_used}/${budget.hourly_cap} this hour`
+  return t("attention.7037257d9d", { value1: budget.used, value2: budget.daily_budget, value3: budget.burst_used, value4: budget.hourly_cap })
 }
 
 /** What the counter does not count, drawn as visible text under it. A counter of
@@ -89,7 +90,7 @@ export function budgetLine(budget: AttentionBudget): string {
  *  cheap-blocking work routes to the next breakpoint before the budget is consulted,
  *  and a session's `awaiting` status belongs to status detection, which no budget
  *  state reaches. */
-export const BUDGET_NOTE = 'Permission prompts and anything else quick to resolve never count as interrupts, however many are waiting, and a session waiting on you shows as awaiting even with the budget spent.'
+export const budgetNote = () => (t("attention.29aec2ca90"))
 
 export const fetchAttentionInbox = () => api<AttentionInbox>('GET', '/api/attention/inbox')
 

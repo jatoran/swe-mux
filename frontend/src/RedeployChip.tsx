@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { useEffect, useState } from 'preact/hooks'
 import {
   elapsedLabel, phaseDetail, phaseLabel, sessionsNote, type RedeployState,
@@ -44,7 +45,7 @@ export function RedeployChip({ state, inline }: { state: RedeployState; inline?:
       type="button"
       class="redeploy-chip-summary"
       aria-expanded={expanded}
-      title={`${label} - ${detail}`}
+      title={t("RedeployChip.cf7202f9e0", { label: label, detail: detail })}
       onClick={() => setExpanded(value => !value)}
     >
       <span class="redeploy-spinner" aria-hidden="true" />

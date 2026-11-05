@@ -1,9 +1,10 @@
+import { t } from './localization/index.ts'
 import type { ComponentChildren } from 'preact'
 import { displayModelName } from './modelDisplay'
 
 export function ModelName({
   model,
-  fallback = 'model unavailable',
+  fallback = t("ModelName.9bbe267eee"),
 }: {
   model?: string | null
   fallback?: ComponentChildren

@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { cloneElement, type VNode } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
 
@@ -100,10 +101,8 @@ export function RailStrip({ chips, onConfigure, label, device, rowId, arranging,
         type="button"
         class={`rail-more${open ? ' rail-more-open' : ''}`}
         aria-expanded={open}
-        aria-label={`Open all ${chips.length} action${chips.length === 1 ? '' : 's'} in this row`}
-        title={arranging
-          ? 'Arranging: drag chips between rows'
-          : `Open all ${chips.length} action${chips.length === 1 ? '' : 's'} in this row (hold to arrange)`}
+        aria-label={t("RailStrip.022bb8b64f", { length: chips.length, value2: (chips.length === 1) ? 'yes' : 'no' })}
+        title={arranging ? t("RailStrip.60610d24c1") : t("RailStrip.b7cab4a85c", { length: chips.length, value2: (chips.length === 1) ? 'yes' : 'no' })}
         disabled={arranging}
         onPointerDown={event => press.begin(event, arrange)}
         onContextMenu={event => press.contextMenu(event, arrange)}

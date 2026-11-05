@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 /**
  * The portable per-Project file, `.swe-mux/config.toml`, as an editor sees it.
  *
@@ -168,24 +169,24 @@ export function revisionConflict(cause: unknown): ProjectConfigConflict | null {
 }
 
 const CONFLICT_LABELS: Record<string, string> = {
-  automations: 'the automation opt-ins',
-  scan_timeline_auto_enable: 'the scan timeline arming rule',
-  title_refinements: 'the title refinement count',
-  session_control_grant: 'the session-control authority',
-  spawn_grant: 'the spawn authority',
-  land_grant: 'the auto-merge authority',
-  land_verify_grant: 'the verification-command authority',
-  interject_grant: 'the interject authority',
-  approval_allow: "the Project's approval rules",
-  approval_ceiling: 'the approval ceiling',
-  worktree: 'the worktree commands',
-  ignore_patterns: 'the ignore patterns',
-  preferred_backend: 'the default backend',
-  default_shell_profile: 'the shell profile',
-  default_agent_profiles: 'the launch profiles',
-  default_agent_models: 'the default models',
-  prompt_library_scope: 'the prompt library scope',
-  notification_sounds_enabled: 'the notification sound setting',
+  get automations() { return t("projectConfig.75481fe0e5") },
+  get scan_timeline_auto_enable() { return t("projectConfig.1f0b754100") },
+  get title_refinements() { return t("projectConfig.89d18222b3") },
+  get session_control_grant() { return t("projectConfig.7d8b4b858d") },
+  get spawn_grant() { return t("projectConfig.49433a2ce7") },
+  get land_grant() { return t("projectConfig.962aba3835") },
+  get land_verify_grant() { return t("projectConfig.6aa15e32b7") },
+  get interject_grant() { return t("projectConfig.9dcff33c40") },
+  get approval_allow() { return t("projectConfig.42c65c6b80") },
+  get approval_ceiling() { return t("projectConfig.fd347d09cf") },
+  get worktree() { return t("projectConfig.1d5858def2") },
+  get ignore_patterns() { return t("projectConfig.9e71e0da27") },
+  get preferred_backend() { return t("projectConfig.e068e36476") },
+  get default_shell_profile() { return t("projectConfig.25db01f3c5") },
+  get default_agent_profiles() { return t("projectConfig.0992425707") },
+  get default_agent_models() { return t("projectConfig.75cdec7cbd") },
+  get prompt_library_scope() { return t("projectConfig.646e6f4481") },
+  get notification_sounds_enabled() { return t("projectConfig.6028c330be") },
 }
 
 /**
@@ -201,7 +202,7 @@ export function conflictNotice(fields: string[]): string {
     ? named.length === 1
       ? named[0]
       : `${named.slice(0, -1).join(', ')} and ${named[named.length - 1]}`
-    : 'this Project’s configuration'
-  return `Something else changed ${subject} while this panel was open. `
-    + 'The panel now shows the current value — make the change again to overwrite it.'
+    : t("projectConfig.aac47b54ba")
+  return t("projectConfig.601893051b", { value1: subject })
+    + t("projectConfig.f631422669")
 }

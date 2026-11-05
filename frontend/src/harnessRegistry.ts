@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { HARNESS_REGISTRY_SEED } from './harnessRegistrySeed.ts'
 import { TERMINAL_SUBMIT_SETTLE_MS, TERMINAL_SUBMIT_SETTLE_PER_KIB_MS } from './terminalActions.ts'
 
@@ -165,7 +166,7 @@ const LEVEL: Record<HarnessLevel, number> = {
 let installed: readonly HarnessDescriptor[] = HARNESS_REGISTRY_SEED.harnesses
 
 export function installHarnessRegistry(payload: HarnessRegistryPayload): void {
-  if (![1,2].includes(payload.version) || !Array.isArray(payload.harnesses)) throw new Error('unsupported harness registry payload')
+  if (![1,2].includes(payload.version) || !Array.isArray(payload.harnesses)) throw new Error(t("harnessRegistry.e2674e5060"))
   installed = payload.harnesses.map(harness => ({
     ...harness,
     state_sources: [...harness.state_sources],

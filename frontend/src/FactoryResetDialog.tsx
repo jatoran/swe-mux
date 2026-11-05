@@ -1,3 +1,4 @@
+import { rich, t } from './localization/index.ts'
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 import { useModalFocus } from './modalFocus'
 import {
@@ -64,44 +65,40 @@ export function FactoryResetDialog({ onClose }: Props) {
 
   const start = useCallback(async () => {
     if (!preview) return
-    setStage({ name: 'resetting', note: 'Stopping sessions…' })
+    setStage({ name: 'resetting', get note() { return t("FactoryResetDialog.988ab6fd25") } })
     try {
       const accepted = await requestFactoryReset(typed, external)
       if (accepted.clear_client_storage) {
-        setStage({ name: 'resetting', note: 'Clearing this device…' })
+        setStage({ name: 'resetting', get note() { return t("FactoryResetDialog.928f2c0ff7") } })
         await clearClientStorage()
       }
-      setStage({ name: 'resetting', note: 'Waiting for swe-mux to come back…' })
+      setStage({ name: 'resetting', get note() { return t("FactoryResetDialog.b4f43c296a") } })
       if (await waitForDaemon()) { location.reload(); return }
       setStage({
         name: 'error',
-        message: 'The daemon did not come back in time. It is most likely still resetting; '
-          + 'reload this page, and check daemon.log in the data directory if it stays away.',
+        message: t("FactoryResetDialog.488b2737cb")
+          + t("FactoryResetDialog.62e40edc64"),
       })
     } catch (cause) {
       setStage({ name: 'error', message: cause instanceof Error ? cause.message : String(cause) })
     }
   }, [external, preview, typed])
 
-  const phrase = preview?.confirmation_phrase || 'factory reset'
+  const phrase = preview?.confirmation_phrase || t("FactoryResetDialog.71718398e5")
   const armed = !!preview && preview.relaunchable && preview.local
     && confirmationMatches(typed, phrase)
   const sessions = preview?.sessions || []
 
-  return <div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="Factory reset" onClick={() => { if (closable) onClose() }}>
+  return <div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label={t("FactoryResetDialog.46a0b85a51")} onClick={() => { if (closable) onClose() }}>
     <div class="modal daemon-reload-modal factory-reset-dialog" ref={ref} onClick={event => event.stopPropagation()}>
-      <h2>Reset swe-mux to a fresh install?</h2>
+      <h2 data-heading-message="FactoryResetDialog.593038df97">{t("FactoryResetDialog.593038df97")}</h2>
 
-      {stage.name === 'loading' && <p>Reading what this would remove…</p>}
+      {stage.name === 'loading' && <p>{t("FactoryResetDialog.90369d250a")}</p>}
 
       {preview && <>
         <p class={`redeploy-interrupts${sessions.length ? ' redeploy-blocked' : ''}`}>
-          <strong>{sessions.length
-            ? `Every live session ends (${sessions.length}).`
-            : 'No sessions are running.'}</strong>
-          <span>{sessions.length
-            ? 'Stop them yourself first if any agent is mid-run: this terminates them where they stand, and unsaved work in a terminal is lost.'
-            : 'Nothing is running, so nothing is interrupted.'}</span>
+          <strong>{sessions.length ? t("FactoryResetDialog.8db15a168e", { length: sessions.length }) : t("FactoryResetDialog.e2e8c68312")}</strong>
+          <span>{sessions.length ? t("FactoryResetDialog.acbd90cd96") : t("FactoryResetDialog.6abec3acd7")}</span>
         </p>
         {sessions.length > 0 && <ul class="factory-reset-sessions">
           {sessions.map(session => <li key={session.id}>
@@ -110,44 +107,27 @@ export function FactoryResetDialog({ onClose }: Props) {
           </li>)}
         </ul>}
 
-        <p>Configuration, Projects, history, the database, notes, prompts, plugins, credentials
-          and every log are moved out of <code>{preview.data_dir}</code> into its <code>.trash</code>
-          folder ({preview.entries.length} items). Nothing is deleted, so the space stays used until
-          you empty it - and the old install can be recovered by hand.</p>
+        <p>{rich("FactoryResetDialog.a9d80eb7c0", { value1: <code>{preview.data_dir}</code>, value2: <code>{t("FactoryResetDialog.e46d8b606c")}</code>, length: preview.entries.length })}</p>
 
-        <p class="profile-hint"><strong>Left alone:</strong> files inside your repositories
-          (<code>.swe-mux/</code> config, actions and notes stay exactly as they are),
-          {preview.worktrees.length > 0
-            ? ` your ${preview.worktrees.length} worktree checkout${preview.worktrees.length === 1 ? '' : 's'},`
-            : ' worktree checkouts,'} downloaded voice models, and the shim directory on your PATH.</p>
+        <p class="profile-hint">{rich("FactoryResetDialog.68fb98d1de", { value1: <strong>{t("FactoryResetDialog.2ba578348b")}</strong>, value2: <code>{t("FactoryResetDialog.d26d49f68e")}</code>, value3: preview.worktrees.length > 0 ? t("FactoryResetDialog.e74249d81e", { length: preview.worktrees.length, value2: (preview.worktrees.length === 1) ? 'yes' : 'no' }) : t("FactoryResetDialog.e2ebe8ea07") })}</p>
 
         <label class="check" data-setting="factory_reset_external">
-          <span>Also undo shortcuts and installed agent skills</span>
+          <span>{t("FactoryResetDialog.59b618019f")}</span>
           <input type="checkbox" checked={external} disabled={stage.name === 'resetting'} onChange={event => setExternal(event.currentTarget.checked)} />
-          <small>Removes the Start Menu, startup and desktop entries, and the swe-mux skill from
-            <code>~/.claude</code> and <code>~/.agents</code> - only files carrying swe-mux's own
-            marker. Off by default: each of those was a separate act you approved.</small>
+          <small>{rich("FactoryResetDialog.55a4710838", { value1: <code>{t("FactoryResetDialog.37e4f76126")}</code>, value2: <code>{t("FactoryResetDialog.23b532f481")}</code> })}</small>
         </label>
 
         {external && preview.external_left.length > 0 && <ul class="factory-reset-left">
           {preview.external_left.map(item => <li key={item.item}>{item.detail}</li>)}
         </ul>}
 
-        {!preview.local && <p class="settings-inline-error">
-          A factory reset can only be started from the machine swe-mux runs on. Every other
-          control here is scoped to a session or a Project; this one is scoped to the machine.
-        </p>}
+        {!preview.local && <p class="settings-inline-error">{t("FactoryResetDialog.80a3640b1d")}</p>}
 
-        {!preview.relaunchable && <p class="settings-inline-error">
-          This daemon has no relaunch command, so it could reset the install and never come back.
-          Start swe-mux normally and try again.
-        </p>}
+        {!preview.relaunchable && <p class="settings-inline-error">{t("FactoryResetDialog.5f2da3f44f")}</p>}
 
-        <label class="factory-reset-confirm">Type <code>{phrase}</code> to confirm
-          <input type="text" value={typed} autocomplete="off" spellcheck={false}
+        <label class="factory-reset-confirm">{rich("FactoryResetDialog.99597a7c29", { value1: <code>{phrase}</code>, value2: <input type="text" value={typed} autocomplete="off" spellcheck={false}
             disabled={stage.name === 'resetting'}
-            onInput={event => setTyped(event.currentTarget.value)} />
-        </label>
+            onInput={event => setTyped(event.currentTarget.value)} /> })}</label>
       </>}
 
       {stage.name === 'resetting' && <p class="update-dialog-progress" aria-live="polite">
@@ -155,14 +135,14 @@ export function FactoryResetDialog({ onClose }: Props) {
       </p>}
 
       {stage.name === 'error' && <p class="redeploy-interrupts redeploy-blocked">
-        <strong>Not reset.</strong>
+        <strong>{t("FactoryResetDialog.baa4363bff")}</strong>
         <span>{stage.message}</span>
       </p>}
 
       <div class="modal-actions">
-        <button type="button" onClick={onClose} disabled={!closable}>{stage.name === 'error' ? 'Close' : 'Cancel'}</button>
+        <button type="button" onClick={onClose} disabled={!closable}>{stage.name === 'error' ? t("FactoryResetDialog.7d9eb7acb1") : t("FactoryResetDialog.19766ed6cc")}</button>
         <button type="button" class="primary update-dialog-reap" disabled={!armed || stage.name === 'resetting'} onClick={() => void start()}>
-          {stage.name === 'resetting' ? 'Resetting…' : 'End every session and reset'}
+          {stage.name === 'resetting' ? t("FactoryResetDialog.1505f40de6") : t("FactoryResetDialog.fd2e336163")}
         </button>
       </div>
     </div>

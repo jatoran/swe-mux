@@ -1,3 +1,5 @@
+import { locale as uiLocale } from './localization/index.ts'
+import { rich, t } from './localization/index.ts'
 import { useEffect, useState } from 'preact/hooks'
 import { api } from './api'
 import { ModelName } from './ModelName'
@@ -36,25 +38,25 @@ export function LegacyToolTelemetry({ from }: { from: number }) {
   }, [from])
   const total = shadow ? Object.values(shadow.classes).reduce((sum, value) => sum + value, 0) : 0
   return <div class="operational-telemetry">
-    <p class="telemetry-caveat">The legacy tool table, drawn from the operational snapshot the ledger replaced. It stays here until the shadow comparison below has been read and the switch in Settings → Usage retires it; retiring it deletes nothing.</p>
+    <p class="telemetry-caveat">{t("LegacyToolTelemetry.2d73f478dc")}</p>
     {error && <div class="usage-error" role="alert">{error}</div>}
-    <section class="usage-table"><h3>Shadow comparison · legacy against canonical</h3>
+    <section class="usage-table"><h3 data-heading-message="LegacyToolTelemetry.bca52fd0e2">{t("LegacyToolTelemetry.bca52fd0e2")}</h3>
       {shadow ? <div>
-        <p>{shadow.runs.toLocaleString()} runs · {shadow.pairs.toLocaleString()} run/tool pairs compared · {total ? Math.round((shadow.classes.agree || 0) / total * 100) : 0}% agree.</p>
-        <div class="usage-table-scroll"><table><thead><tr><th>class</th><th>pairs</th></tr></thead>
-          <tbody>{Object.entries(shadow.classes).map(([name, count]) => <tr key={name}><td>{name.replace(/_/g, ' ')}</td><td>{count.toLocaleString()}</td></tr>)}</tbody></table></div>
+        <p>{rich("LegacyToolTelemetry.d2cf674cfa", { value1: shadow.runs.toLocaleString(uiLocale.value), value2: shadow.pairs.toLocaleString(uiLocale.value), value3: total ? Math.round((shadow.classes.agree || 0) / total * 100) : 0 })}</p>
+        <div class="usage-table-scroll"><table><thead><tr><th>{t("LegacyToolTelemetry.0889113e04")}</th><th>{t("LegacyToolTelemetry.fb09562410")}</th></tr></thead>
+          <tbody>{Object.entries(shadow.classes).map(([name, count]) => <tr key={name}><td>{name.replace(/_/g, ' ')}</td><td>{count.toLocaleString(uiLocale.value)}</td></tr>)}</tbody></table></div>
         <p class="telemetry-caveat">{shadow.interpretation}</p>
-        {shadow.examples.length ? <div class="usage-table-scroll"><table><thead><tr><th>run</th><th>tool</th><th>legacy uses</th><th>canonical requests</th><th>native</th><th>class</th></tr></thead>
-          <tbody>{shadow.examples.map(item => <tr key={`${item.run_id}-${item.raw_tool}`}><td>{item.run_id.slice(0, 8)}</td><td>{item.raw_tool}</td><td>{item.legacy?.uses ?? '·'}</td><td>{item.canonical?.with_request ?? '·'}</td><td>{item.canonical?.native ?? '·'}</td><td>{item.verdict.replace(/_/g, ' ')}</td></tr>)}</tbody></table></div> : <p>Every pair agrees in this window.</p>}
-      </div> : <p>Comparing…</p>}
+        {shadow.examples.length ? <div class="usage-table-scroll"><table><thead><tr><th>{t("LegacyToolTelemetry.acba255121")}</th><th>{t("LegacyToolTelemetry.7c9bbe5ec9")}</th><th>{t("LegacyToolTelemetry.257f10c608")}</th><th>{t("LegacyToolTelemetry.569bf5f4e2")}</th><th>{t("LegacyToolTelemetry.bef32d2c31")}</th><th>{t("LegacyToolTelemetry.0889113e04")}</th></tr></thead>
+          <tbody>{shadow.examples.map(item => <tr key={`${item.run_id}-${item.raw_tool}`}><td>{item.run_id.slice(0, 8)}</td><td>{item.raw_tool}</td><td>{item.legacy?.uses ?? '·'}</td><td>{item.canonical?.with_request ?? '·'}</td><td>{item.canonical?.native ?? '·'}</td><td>{item.verdict.replace(/_/g, ' ')}</td></tr>)}</tbody></table></div> : <p>{t("LegacyToolTelemetry.2179fc9205")}</p>}
+      </div> : <p>{t("LegacyToolTelemetry.d753da6bf6")}</p>}
     </section>
-    <section class="usage-table"><h3>Legacy cross-project tool metrics</h3>{status?.tools.metrics.length ? <div class="usage-table-scroll"><table>
-      <thead><tr><th>backend/model</th><th>project/session</th><th>tool to taxonomy</th><th>events</th><th>uses</th><th>errors</th><th>avg duration</th></tr></thead>
+    <section class="usage-table"><h3 data-heading-message="LegacyToolTelemetry.55bb95b2e9">{t("LegacyToolTelemetry.55bb95b2e9")}</h3>{status?.tools.metrics.length ? <div class="usage-table-scroll"><table>
+      <thead><tr><th>{t("LegacyToolTelemetry.c50ed2e59e")}</th><th>{t("LegacyToolTelemetry.d68f8336c0")}</th><th>{t("LegacyToolTelemetry.2666955e8e")}</th><th>{t("LegacyToolTelemetry.862417b9e7")}</th><th>{t("LegacyToolTelemetry.f480ffb297")}</th><th>{t("LegacyToolTelemetry.be4bd56772")}</th><th>{t("LegacyToolTelemetry.04a0a6eab6")}</th></tr></thead>
       <tbody>{status.tools.metrics.map(item => <tr key={`${item.session_id}-${item.raw_tool}`}>
-        <td>{item.backend} · <ModelName model={item.model}/></td><td>{item.project_id ? item.project_id.slice(0, 8) : 'unassigned'} · {item.session_id.slice(0, 8)}</td>
-        <td>{item.raw_tool} to {item.taxonomy}</td><td>{item.events}</td><td>{item.uses}</td><td>{item.errors}</td>
-        <td>{item.average_duration_ms == null ? 'unavailable' : `${Math.round(item.average_duration_ms)}ms`}</td>
+        <td>{item.backend} · <ModelName model={item.model}/></td><td>{item.project_id ? item.project_id.slice(0, 8) : t("LegacyToolTelemetry.2f23e841e4")} · {item.session_id.slice(0, 8)}</td>
+        <td>{rich("LegacyToolTelemetry.d36e2e59f9", { raw_tool: item.raw_tool, taxonomy: item.taxonomy })}</td><td>{item.events}</td><td>{item.uses}</td><td>{item.errors}</td>
+        <td>{item.average_duration_ms == null ? t("LegacyToolTelemetry.ba691ba042") : t("LegacyToolTelemetry.a6825715cf", { value1: Math.round(item.average_duration_ms) })}</td>
       </tr>)}</tbody>
-    </table></div> : <p>No legacy tool records.</p>}<small>Legacy parser {status?.tools.parser_version || 'unknown'} · {status?.tools.unknown_or_unmapped || 0} unknown or unmapped events · no time range: the legacy table is all-time and capped at its row limit, which is one of the reasons it is being retired.</small></section>
+    </table></div> : <p>{t("LegacyToolTelemetry.bb4c6cef3e")}</p>}<small>{rich("LegacyToolTelemetry.b65b5c9f11", { value1: status?.tools.parser_version || t("LegacyToolTelemetry.b23a6a8439"), value2: status?.tools.unknown_or_unmapped || 0 })}</small></section>
   </div>
 }

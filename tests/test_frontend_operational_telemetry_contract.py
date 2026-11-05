@@ -1,11 +1,13 @@
 from pathlib import Path
 
+from tests.support.frontend_source import localized_source, source_contains
+
 ROOT = Path(__file__).parents[1]
 FRONTEND = ROOT / "frontend" / "src"
 
 
 def source(name: str) -> str:
-    return (FRONTEND / name).read_text(encoding="utf-8")
+    return localized_source((FRONTEND / name).read_text(encoding="utf-8"))
 
 
 def test_process_fleet_exposes_durable_identity_state_and_rechecked_actions() -> None:
@@ -17,16 +19,16 @@ def test_process_fleet_exposes_durable_identity_state_and_rechecked_actions() ->
     # still every field, and the actions still sit beside it.
     rows = source("processRows.ts")
     fleet = source("processFleet.ts")
-    assert "identity_id" in view
-    assert "suspected_orphan" in fleet
-    assert "evidence_reason" in rows
-    assert "confidence" in rows
-    assert "attribution" in rows
-    assert "first_seen" in rows
-    assert "last_seen" in rows
-    assert "'seen'" in rows
-    assert "Re-checks the durable process fingerprint" in view
-    assert "identity_id: process.identity_id" in view
+    assert source_contains(view, "identity_id")
+    assert source_contains(fleet, "suspected_orphan")
+    assert source_contains(rows, "evidence_reason")
+    assert source_contains(rows, "confidence")
+    assert source_contains(rows, "attribution")
+    assert source_contains(rows, "first_seen")
+    assert source_contains(rows, "last_seen")
+    assert source_contains(rows, "'seen'")
+    assert source_contains(view, "Re-checks the durable process fingerprint")
+    assert source_contains(view, "identity_id: process.identity_id")
     assert "auto" + "kill" not in view.lower()
 
 
@@ -34,17 +36,25 @@ def test_operational_evidence_keeps_identity_and_collection_boundaries() -> None
     fleet = source("FleetActivityView.tsx")
     runs = source("WorkloadTelemetry.tsx")
     quota = source("QuotaAnalytics.tsx")
-    assert "OPERATIONAL_TELEMETRY_PATH" in quota
-    assert "OPERATIONAL_TELEMETRY_PATH" not in fleet
-    for route in ("tools/summary", "quality", "compactions", "verifications",
-                  "metrics/summary", "compare", "inefficiencies/review", "export/"):
+    assert source_contains(quota, "OPERATIONAL_TELEMETRY_PATH")
+    assert not source_contains(fleet, "OPERATIONAL_TELEMETRY_PATH")
+    for route in (
+        "tools/summary",
+        "quality",
+        "compactions",
+        "verifications",
+        "metrics/summary",
+        "compare",
+        "inefficiencies/review",
+        "export/",
+    ):
         assert f"/api/telemetry/v2/{route}" in fleet
-    assert "/api/telemetry/v2/runs/" in runs
-    assert "/api/telemetry/v2/turns/" in runs
-    assert "legacy_dashboard_enabled" in fleet
-    assert "runtime_parent_unavailable" in fleet
-    assert "Missing measurements are not zero" in fleet
-    assert "Correlation does not establish who used an account" in quota
+    assert source_contains(runs, "/api/telemetry/v2/runs/")
+    assert source_contains(runs, "/api/telemetry/v2/turns/")
+    assert source_contains(fleet, "legacy_dashboard_enabled")
+    assert source_contains(fleet, "runtime_parent_unavailable")
+    assert source_contains(fleet, "Missing measurements are not zero")
+    assert source_contains(quota, "Correlation does not establish who used an account")
     for money in ("cost_usd", "AutomationSpendView", "formatMoney"):
         assert money not in fleet
 
@@ -55,24 +65,24 @@ def test_reset_indicator_is_purple_deduplicated_and_sound_is_per_device_profile(
     alert_settings = source("NotificationPushSettings.tsx")
     device_settings = source("deviceSettings.ts")
     styles = source("style.css")
-    assert "quota-reset-indicator" in accounts
+    assert source_contains(accounts, "quota-reset-indicator")
     # Dismissal is server-side review, not a per-browser marker: the old localStorage
     # key meant "mark seen" at the desk left the same alert waiting on the phone.
-    assert "swe-mux:last-seen-reset" not in accounts
+    assert not source_contains(accounts, "swe-mux:last-seen-reset")
     # Sound preferences moved from per-browser localStorage to server-persisted
     # desktop/mobile device-class profiles; the old local blob is imported once.
-    assert "soundPreferencesFor" in sounds and "rawDomain" in sounds
-    assert "'swe-mux:session-sounds-v1'" in device_settings
-    assert "migrateLegacySounds" in device_settings
-    assert "unexpected_quota_reset" in sounds
-    assert "/api/telemetry/quota-resets/review" in accounts
-    assert "'seen'" in accounts
-    assert "manual Codex usage" in accounts
-    assert "discard as error" in accounts
-    assert "Sound in the open app" in alert_settings
-    assert "Enable alerts for" in alert_settings
-    assert "settings-profile-switch" in alert_settings
-    assert "#a855f7" in styles
+    assert source_contains(sounds, "soundPreferencesFor") and source_contains(sounds, "rawDomain")
+    assert source_contains(device_settings, "'swe-mux:session-sounds-v1'")
+    assert source_contains(device_settings, "migrateLegacySounds")
+    assert source_contains(sounds, "unexpected_quota_reset")
+    assert source_contains(accounts, "/api/telemetry/quota-resets/review")
+    assert source_contains(accounts, "'seen'")
+    assert source_contains(accounts, "manual Codex usage")
+    assert source_contains(accounts, "discard as error")
+    assert source_contains(alert_settings, "Sound in the open app")
+    assert source_contains(alert_settings, "Enable alerts for")
+    assert source_contains(alert_settings, "settings-profile-switch")
+    assert source_contains(styles, "#a855f7")
 
 
 def test_settings_expose_bounded_process_and_quota_controls() -> None:

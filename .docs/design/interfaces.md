@@ -3,6 +3,18 @@
 All JSON APIs are rooted at `/api`. PTY and event streams use `/pty/{session_id}` and
 `/events` WebSockets.
 
+## UI language
+
+`Config.ui_language` accepts `""`, `en`, or `zh-Hans` through the ordinary configuration API.
+Explicit selection is shared through `configuration_changed`.
+Without a saved selection, HTTP presentation negotiates a supported locale from `Accept-Language`.
+JSON responses identify their presentation language and vary by that request header.
+Localized conditional responses include the locale in their validator.
+
+`POST /api/diagnostics/localization` accepts at most twenty content-free events containing operation, locale, optional message id, and a bounded reason.
+Malformed batches are rejected before any event is logged.
+See [UI localization](features/localization.md).
+
 ## Onboarding
 
 - `GET /api/onboarding`: durable setup, tour, and task progress, shared by clients.

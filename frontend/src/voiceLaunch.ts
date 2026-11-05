@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 /**
  * Spoken aliases for one ordinary session-spawn command.
  *
@@ -22,7 +23,7 @@ export function sessionLaunchVoicePhrases({
   if (backend === 'shell') names.add('terminal')
 
   const targets = [`in ${projectName}`]
-  if (projectNumber !== null) targets.push(`in project ${projectNumber}`)
+  if (projectNumber !== null) targets.push(t("voiceLaunch.6e94c44b8b", { value1: projectNumber }))
   if (currentProject) targets.push('')
 
   const phrases: string[] = []

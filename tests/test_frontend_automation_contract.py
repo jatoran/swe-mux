@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tests.support.frontend_source import localized_source, source_contains
+
 ROOT = Path(__file__).parents[1]
 
 
 def source(name: str) -> str:
-    return (ROOT / "frontend" / "src" / name).read_text(encoding="utf-8")
+    return localized_source((ROOT / "frontend" / "src" / name).read_text(encoding="utf-8"))
 
 
 def test_automation_dashboard_exposes_complete_user_facing_model() -> None:
@@ -18,25 +20,25 @@ def test_automation_dashboard_exposes_complete_user_facing_model() -> None:
 
     # Three tabs, and the tab is the question: what may run (and where), what
     # it costs, what it did.
-    assert "export type AutomationView='policy'|'usage'|'activity'" in dashboard
+    assert source_contains(dashboard, "export type AutomationView='policy'|'usage'|'activity'")
     # The built-in observers (session titler, attention observers) are rows in the
     # policy matrix since schema 36 - per-Project automations switched globally and
     # per Project like every other consumer - so the dashboard draws no separate
     # observer section and owns no observer switch of its own.
-    assert "System observers" not in dashboard
-    assert "updateBuiltin" not in dashboard
-    assert "Custom rules" in dashboard
-    assert "built_in_rules" in dashboard
-    assert "all-session health" in dashboard
-    assert "Learned fixes" in dashboard
-    assert "automation-knowledge-browser" in dashboard
-    assert "Demonstrated resolution" in dashboard
-    assert "Built-in observers are controlled in Settings." not in dashboard
+    assert not source_contains(dashboard, "System observers")
+    assert not source_contains(dashboard, "updateBuiltin")
+    assert source_contains(dashboard, "Custom rules")
+    assert source_contains(dashboard, "built_in_rules")
+    assert source_contains(dashboard, "all-session health")
+    assert source_contains(dashboard, "Learned fixes")
+    assert source_contains(dashboard, "automation-knowledge-browser")
+    assert source_contains(dashboard, "Demonstrated resolution")
+    assert not source_contains(dashboard, "Built-in observers are controlled in Settings.")
     # A collapsible band rather than a bare heading: the detail view is transcript-first
     # and everything above the conversation collapses (`design/features/history.md`).
-    assert "section('notes','Run notes'" in history
-    assert "Derived annotations" not in history
-    assert "Derived annotations" not in app
+    assert source_contains(history, "section('notes','Run notes'")
+    assert not source_contains(history, "Derived annotations")
+    assert not source_contains(app, "Derived annotations")
 
 
 def test_every_switch_has_one_owner_matrix_global_dashboard_per_rule() -> None:
@@ -53,36 +55,36 @@ def test_every_switch_has_one_owner_matrix_global_dashboard_per_rule() -> None:
     matrix = source("AutomationMatrix.tsx")
 
     # Install switches: the matrix owns the controls and Settings owns none.
-    assert 'data-setting="automation_enabled"' in matrix
-    assert "automation_global_allow" in matrix
-    assert "change('automation_enabled'" not in settings
-    assert "change('scan_timeline_enabled'" not in settings
+    assert source_contains(matrix, 'data-setting="automation_enabled"')
+    assert source_contains(matrix, "automation_global_allow")
+    assert not source_contains(settings, "change('automation_enabled'")
+    assert not source_contains(settings, "change('scan_timeline_enabled'")
     # ...and the limits view no longer carries a second copy of either switch.
     # The names may appear in prose explaining where the controls went; a
     # *control* form of either is the second owner this refuses.
-    assert "change('automation_enabled'" not in policy
-    assert "change('scan_timeline_enabled'" not in policy
-    assert 'data-setting="automation_enabled"' not in policy
-    assert 'data-setting="scan_timeline_enabled"' not in policy
-    assert "updateControl" not in dashboard
+    assert not source_contains(policy, "change('automation_enabled'")
+    assert not source_contains(policy, "change('scan_timeline_enabled'")
+    assert not source_contains(policy, 'data-setting="automation_enabled"')
+    assert not source_contains(policy, 'data-setting="scan_timeline_enabled"')
+    assert not source_contains(dashboard, "updateControl")
     # Per-rule switches for custom rules stay dashboard-only; the built-in
     # observers are matrix rows, so no surface writes an observer switch by name.
-    assert "updateRule" in dashboard
-    assert "observer_titler_enabled" not in settings
-    assert "observer_summarizer_enabled" not in settings
-    assert "attention_observers_enabled" not in settings
-    assert "observer_titler_enabled" not in dashboard
-    assert "attention_observers_enabled" not in dashboard
+    assert source_contains(dashboard, "updateRule")
+    assert not source_contains(settings, "observer_titler_enabled")
+    assert not source_contains(settings, "observer_summarizer_enabled")
+    assert not source_contains(settings, "attention_observers_enabled")
+    assert not source_contains(dashboard, "observer_titler_enabled")
+    assert not source_contains(dashboard, "attention_observers_enabled")
     # ...and the matrix draws rows by the registry's `family` - the titler in a
     # Titling block directly above the re-titler, the attention observers under
     # Attention - never by dependency shape, which the depth indentation already draws.
-    assert "'titling'" in matrix
-    assert "'attention'" in matrix
-    assert "item.family" in matrix
+    assert source_contains(matrix, "'titling'")
+    assert source_contains(matrix, "'attention'")
+    assert source_contains(matrix, "item.family")
     # Every row expands to what the switch does, and the copy comes from the
     # daemon's registry rather than a second one written in the browser.
-    assert "item.description" in matrix
-    assert "aria-expanded" in matrix
+    assert source_contains(matrix, "item.description")
+    assert source_contains(matrix, "aria-expanded")
 
 
 def test_the_matrix_is_the_one_editor_and_greys_the_ceiling_rather_than_hiding_it() -> None:
@@ -95,27 +97,33 @@ def test_the_matrix_is_the_one_editor_and_greys_the_ceiling_rather_than_hiding_i
     """
     matrix = source("AutomationMatrix.tsx")
 
-    assert "globally_allowed" in matrix, "the ceiling must come from the resolved payload"
-    assert "globally-off" in matrix
-    assert "install_switch" in matrix, "dedicated switches write their own keys"
+    assert source_contains(matrix, "globally_allowed"), (
+        "the ceiling must come from the resolved payload"
+    )
+    assert source_contains(matrix, "globally-off")
+    assert source_contains(matrix, "install_switch"), "dedicated switches write their own keys"
     # The install has two things to say about a row and they are two controls,
     # the same split the authority rows below already draw. They were one
     # checkbox until 2026-08-31, and the missing half is why a new Project
     # inherited nothing: the only thing an operator could say install-wide was
     # "no", so every "yes" had to be repeated per Project at creation time.
-    assert "automation_project_defaults" in matrix, "the Default column writes the template"
-    assert "install_default" in matrix, "the default is the daemon's resolved answer"
-    assert "off everywhere" in matrix, "the ceiling half must say what it does"
+    assert source_contains(matrix, "automation_project_defaults"), (
+        "the Default column writes the template"
+    )
+    assert source_contains(matrix, "install_default"), "the default is the daemon's resolved answer"
+    assert source_contains(matrix, "off everywhere"), "the ceiling half must say what it does"
     # Three positions on the Project cell, not two. "Follow global" and
     # "explicitly off" are different states, and collapsing them is what makes
     # an install default unreachable once anything has touched the Project.
-    assert "Follow global" in matrix
-    assert "inherit" in matrix, "a Default checkbox must say how far it reaches"
-    assert "PUT',`/api/projects/${project.project_id}/automations`" in matrix
-    assert "'POST','/api/grants'" in matrix, "presets apply through the ordinary grant"
+    assert source_contains(matrix, "Follow global")
+    assert source_contains(matrix, "inherit"), "a Default checkbox must say how far it reaches"
+    assert source_contains(matrix, "PUT',`/api/projects/${project.project_id}/automations`")
+    assert source_contains(matrix, "'POST','/api/grants'"), (
+        "presets apply through the ordinary grant"
+    )
     # The starting-set presets live here: full-screen on a first run, a button after.
-    assert "Choose preset" in matrix
-    assert "mux.automationPresetsSeen" in matrix
+    assert source_contains(matrix, "Choose preset")
+    assert source_contains(matrix, "mux.automationPresetsSeen")
 
 
 def test_the_rules_editor_lives_on_the_dashboard_not_in_the_settings_save() -> None:
@@ -129,11 +137,11 @@ def test_the_rules_editor_lives_on_the_dashboard_not_in_the_settings_save() -> N
     dashboard = source("AutomationDashboard.tsx")
     settings = source("Settings.tsx")
 
-    assert "'/api/automation/rules?validate=1'" in dashboard
-    assert "'/api/automation/rules'" in dashboard
-    assert "rules.toml" in dashboard
-    assert "/api/automation/rules" not in settings
-    assert "rules.toml" not in settings
+    assert source_contains(dashboard, "'/api/automation/rules?validate=1'")
+    assert source_contains(dashboard, "'/api/automation/rules'")
+    assert source_contains(dashboard, "rules.toml")
+    assert not source_contains(settings, "/api/automation/rules")
+    assert not source_contains(settings, "rules.toml")
 
 
 def test_the_workspace_answers_and_edits_what_runs_where() -> None:
@@ -147,21 +155,21 @@ def test_the_workspace_answers_and_edits_what_runs_where() -> None:
     dashboard = source("AutomationDashboard.tsx")
     matrix = source("AutomationMatrix.tsx")
 
-    assert "'/api/automation/projects'" in dashboard
-    assert "<AutomationPolicyMatrix" in dashboard
-    assert "fleetCount" in matrix
-    assert "projectDropdownOptions" in matrix
+    assert source_contains(dashboard, "'/api/automation/projects'")
+    assert source_contains(dashboard, "<AutomationPolicyMatrix")
+    assert source_contains(matrix, "fleetCount")
+    assert source_contains(matrix, "projectDropdownOptions")
 
 
 def test_automation_diagnostics_are_separated_from_primary_workflows() -> None:
     dashboard = source("AutomationDashboard.tsx")
 
-    assert "Historical event dry-run" in dashboard
-    assert "Research-only delivery-readiness diagnostics" in dashboard
-    assert "delivery_state" in dashboard
-    assert "Parser coverage" in dashboard
-    assert "Diagnostics" in dashboard
+    assert source_contains(dashboard, "Historical event dry-run")
+    assert source_contains(dashboard, "Research-only delivery-readiness diagnostics")
+    assert source_contains(dashboard, "delivery_state")
+    assert source_contains(dashboard, "Parser coverage")
+    assert source_contains(dashboard, "Diagnostics")
     # The away report is a *reading of the attention inbox*, not a fact about the pipeline
     # that fills it, so it lives with the inbox in the Alerts drawer tab.
-    assert "What happened while I was away?" not in dashboard
+    assert not source_contains(dashboard, "What happened while I was away?")
     assert "What happened while I was away?" in source("Notifications.tsx")

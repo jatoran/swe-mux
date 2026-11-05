@@ -1,3 +1,4 @@
+import { rich, t } from './localization/index.ts'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { withoutClipboardCapture } from './clipboardHistory'
@@ -27,7 +28,7 @@ type Props={
   onSendToAgent?:(request:SendToAgentRequest)=>void
 }
 
-const scopeTitle=(scope:ReviewLocator['scope'])=>({unstaged:'Unstaged changes',staged:'Staged changes',conflicted:'Conflicts',branch:'Branch comparison',commit:'Commit changes'})[scope]
+const scopeTitle=(scope:ReviewLocator['scope'])=>({get unstaged() { return t("GitReviewModal.05b0213bff") },get staged() { return t("GitReviewModal.88b4f86927") },conflicted:'Conflicts',get branch() { return t("GitReviewModal.410844e68e") },get commit() { return t("GitReviewModal.c137a48499") }})[scope]
 
 export function GitReviewModal(props:Props) {
   const panel=useRef<HTMLElement>(null)
@@ -57,7 +58,7 @@ export function GitReviewModal(props:Props) {
   const load=async(path:string)=>{
     if(patches.has(path))return
     if(stale&&props.locator.scope!=='commit'&&patches.size){
-      setError('This local review is stale. Close and reopen it before loading another file.')
+      setError(t("GitReviewModal.baf6ef069e"))
       return
     }
     const mine=++generation.current
@@ -66,7 +67,7 @@ export function GitReviewModal(props:Props) {
       const raw=await api<unknown>('GET',`/api/git/diff?${patchRequestQuery(props.project.id,props.locator,path)}`,undefined,{timeoutMs:20000})
       if(mine!==generation.current)return
       const parsed=parsePatchSnapshot(raw)
-      if(!parsed)throw new Error('The daemon returned an invalid patch snapshot.')
+      if(!parsed)throw new Error(t("GitReviewModal.ef475920ea"))
       setPatches(current=>new Map(current).set(path,parsed))
     }catch(cause){if(mine===generation.current)setError(cause instanceof Error?cause.message:String(cause))}
     finally{if(mine===generation.current)setLoading(false)}
@@ -106,8 +107,8 @@ export function GitReviewModal(props:Props) {
   const edit=(annotation:GitAnnotation)=>{setSelection(annotation.anchor);setDraft(annotation.text)}
   const remove=(key:string)=>{setAnnotations(items=>deleteAnnotation(items,key));if(selection&&key===annotationKey(selection)){setSelection(null);setDraft('')}}
   const widgets=(items:GitAnnotation[],anchor:AnnotationAnchor|null)=><div class="git-review-widgets">
-    {items.map(item=><article class="git-annotation" key={item.key}><p>{item.text}</p><div><button onClick={()=>edit(item)}>Edit</button><button onClick={()=>remove(item.key)}>Delete</button></div></article>)}
-    {anchor&&<div class="git-annotation-composer"><label>Review comment<textarea value={draft} onInput={event=>setDraft(event.currentTarget.value)} autofocus/></label><div><button disabled={!draft.trim()} onClick={save}>Save</button><button onClick={()=>{setSelection(null);setDraft('')}}>Cancel</button></div></div>}
+    {items.map(item=><article class="git-annotation" key={item.key}><p>{item.text}</p><div><button onClick={()=>edit(item)}>{t("GitReviewModal.464c4ffd01")}</button><button onClick={()=>remove(item.key)}>{t("GitReviewModal.e2d0a54968")}</button></div></article>)}
+    {anchor && <div class="git-annotation-composer"><label>{rich("GitReviewModal.4281d0d108", { value1: <textarea value={draft} onInput={event=>setDraft(event.currentTarget.value)} autofocus/> })}</label><div><button disabled={!draft.trim()} onClick={save}>{t("GitReviewModal.1509f561f2")}</button><button onClick={()=>{setSelection(null);setDraft('')}}>{t("GitReviewModal.19766ed6cc")}</button></div></div>}
   </div>
   const packet=()=>generateReviewPacket({
     projectName:props.project.name,projectId:props.project.id,repositoryRoot:props.repositoryRoot,locator:props.locator,
@@ -116,54 +117,54 @@ export function GitReviewModal(props:Props) {
   const copy=async(text:string,label:string)=>{
     setRecovery('')
     const ok=await withoutClipboardCapture(()=>copyPreparedText(text))
-    if(ok)setNotice(`${label} copied.`)
-    else{setRecovery(text);setNotice('Clipboard write was blocked. Copy from the recovery field.')}
+    if(ok)setNotice(t("GitReviewModal.80a056eab2", { label: label }))
+    else{setRecovery(text);setNotice(t("GitReviewModal.3471e28389"))}
   }
-  const send=()=>props.onSendToAgent?.({projectId:props.project.id,label:`Git review: ${scopeTitle(props.locator.scope)}`,scope:'document',message:packet()})
+  const send=()=>props.onSendToAgent?.({projectId:props.project.id,get label() { return t("GitReviewModal.851515b21d", { value1: scopeTitle(props.locator.scope) }) },scope:'document',message:packet()})
   const currentFileAllowed=!!selected&&selected.status[0]!=='D'&&selected.status[1]!=='D'&&selected.currentExists!==false
 
   const headingDetail=props.locator.scope==='commit'
-    ? `${props.locator.commit?.slice(0,8)} ${props.locator.parent?`vs ${props.locator.parent.slice(0,8)}`:'initial commit'}`
+    ? `${props.locator.commit?.slice(0,8)} ${props.locator.parent?`vs ${props.locator.parent.slice(0,8)}`:t("GitReviewModal.2135c38eb7")}`
     : `${props.locator.worktree}${props.locator.comparisonRef?` vs ${props.locator.comparisonRef}`:''}`
   return <div class="modal-backdrop git-review-backdrop" role="presentation">
     <section ref={panel} class="modal git-review-modal" role="dialog" aria-modal="true" aria-labelledby="git-review-title">
       <header class="git-review-header">
         <div><h2 id="git-review-title">{props.project.name} - {scopeTitle(props.locator.scope)}</h2><p title={headingDetail}>{headingDetail}</p></div>
-        <button aria-label="Close Git review" onClick={props.onClose}>×</button>
+        <button aria-label={t("GitReviewModal.baf9d406af")} onClick={props.onClose}>×</button>
       </header>
-      {stale&&<p class="git-review-stale" role="status">Changes updated - reload review. This frozen snapshot and its annotations were not replaced.</p>}
+      {stale && <p class="git-review-stale" role="status">{t("GitReviewModal.002ac5bd2d")}</p>}
       <div class="git-review-layout">
-        <nav class="git-review-files" aria-label="Changed files">
-          {props.files.map(file=>{const count=annotations.filter(item=>item.anchor.path===file.path).length;return <button class={file.path===selected?.path?'active':''} title={file.path} onClick={()=>choose(file.path)}><span>{file.path}</span>{count>0&&<b>{count}</b>}</button>})}
-          {props.truncated&&<p>File list truncated.</p>}
+        <nav class="git-review-files" aria-label={t("GitReviewModal.5d4041aa7a")}>
+          {props.files.map(file=>{const count=annotations.filter(item=>item.anchor.path===file.path).length;return <button class={file.path===selected?.path?'active':''} title={file.path} onClick={()=>choose(file.path)}><span>{file.path}</span>{count>0 && <b>{count}</b>}</button>})}
+          {props.truncated && <p>{t("GitReviewModal.9e2f48fd8a")}</p>}
         </nav>
         <main ref={content} class={`git-review-content ${view} ${wrap?'wrap':'nowrap'}`}>
           <div class="git-review-filebar">
-            <button disabled={index<=0} aria-label="Previous changed file" onClick={()=>move(-1)}>‹</button>
-            <Dropdown ariaLabel="Selected changed file" value={selected?.path||''} onChange={choose} options={props.files.map(file=>({value:file.path,label:file.path}))}/>
-            <button disabled={index<0||index>=props.files.length-1} aria-label="Next changed file" onClick={()=>move(1)}>›</button>
-            <button class={view==='unified'?'active':''} onClick={()=>setManualView('unified')}>Unified</button>
-            <button class={view==='split'?'active':''} onClick={()=>setManualView('split')}>Split</button>
-            <button class={wrap?'active':''} aria-pressed={wrap} onClick={()=>setWrap(value=>!value)}>Wrap</button>
-            <button disabled={!currentFileAllowed} title={currentFileAllowed?`Open current file in ${props.locator.worktree||props.project.root}`:selected?.currentExists===false?'This historical path is absent from the current working copy.':'Deleted files have no current working copy.'} onClick={()=>selected&&props.onOpenFile(props.locator.worktree||props.project.root,selected.path)}>Open current file</button>
+            <button disabled={index<=0} aria-label={t("GitReviewModal.55f8f16499")} onClick={()=>move(-1)}>‹</button>
+            <Dropdown ariaLabel={t("GitReviewModal.809052fa4e")} value={selected?.path||''} onChange={choose} options={props.files.map(file=>({value:file.path,label:file.path}))}/>
+            <button disabled={index<0||index>=props.files.length-1} aria-label={t("GitReviewModal.123245f14b")} onClick={()=>move(1)}>›</button>
+            <button class={view==='unified'?'active':''} onClick={()=>setManualView('unified')}>{t("GitReviewModal.ad6a950b46")}</button>
+            <button class={view==='split'?'active':''} onClick={()=>setManualView('split')}>{t("GitReviewModal.32afaa7843")}</button>
+            <button class={wrap?'active':''} aria-pressed={wrap} onClick={()=>setWrap(value=>!value)}>{t("GitReviewModal.70bfd7fbcd")}</button>
+            <button disabled={!currentFileAllowed} title={currentFileAllowed ? t("GitReviewModal.f7d530a671", { value1: props.locator.worktree||props.project.root }) : selected?.currentExists===false ? t("GitReviewModal.5980a2d722") : t("GitReviewModal.78d2001d3f")} onClick={()=>selected&&props.onOpenFile(props.locator.worktree||props.project.root,selected.path)}>{t("GitReviewModal.1c10e9e29d")}</button>
           </div>
-          {loading&&<p class="git-diff-state">Loading patch…</p>}
-          {error&&<div class="git-diff-state error" role="alert"><p>{error}</p><button onClick={()=>selected&&void load(selected.path)}>Retry</button></div>}
-          {!loading&&!error&&snapshot?.binary&&<p class="git-diff-state">Binary file - textual diff unavailable.</p>}
-          {!loading&&!error&&snapshot?.tooLarge&&<p class="git-diff-state">Patch exceeds the 1 MiB or 10,000-line review limit.</p>}
-          {!loading&&!error&&snapshot?.unavailableReason&&<p class="git-diff-state">{snapshot.unavailableReason}</p>}
-          {!loading&&!error&&snapshot?.patch&&<LazyGitDiff patch={snapshot.patch} viewType={view} wrap={wrap} annotations={annotations.filter(item=>item.anchor.path===selected.path)} selectedAnchor={selection} onGutter={gutter} renderWidget={widgets}/>}
+          {loading && <p class="git-diff-state">{t("GitReviewModal.290aeae431")}</p>}
+          {error && <div class="git-diff-state error" role="alert"><p>{error}</p><button onClick={()=>selected&&void load(selected.path)}>{t("GitReviewModal.942087cc2d")}</button></div>}
+          {!loading&&!error&&snapshot?.binary && <p class="git-diff-state">{t("GitReviewModal.49100f7a7a")}</p>}
+          {!loading&&!error&&snapshot?.tooLarge && <p class="git-diff-state">{t("GitReviewModal.e917e21aa4")}</p>}
+          {!loading&&!error&&snapshot?.unavailableReason && <p class="git-diff-state">{snapshot.unavailableReason}</p>}
+          {!loading&&!error&&snapshot?.patch && <LazyGitDiff patch={snapshot.patch} viewType={view} wrap={wrap} annotations={annotations.filter(item=>item.anchor.path===selected.path)} selectedAnchor={selection} onGutter={gutter} renderWidget={widgets}/>}
         </main>
       </div>
       <footer class="git-review-footer">
-        <span aria-live="polite">{annotations.length} annotation{annotations.length===1?'':'s'}{notice?` - ${notice}`:''}</span>
-        <label><input type="checkbox" checked={includePatches} onChange={event=>setIncludePatches(event.currentTarget.checked)}/> Include full loaded patches</label>
-        <button disabled={!annotations.length} onClick={()=>setAnnotations([])}>Clear annotations</button>
-        <button onClick={()=>void copy(packet(),'Review packet')}>Copy review packet</button>
-        <button disabled={!snapshot?.patch} onClick={()=>snapshot?.patch&&void copy(snapshot.patch,'Raw patch')}>Copy raw patch</button>
-        <button disabled={!props.onSendToAgent} onClick={send}>Send to agent…</button>
+        <span aria-live="polite">{rich("GitReviewModal.8ccb225e01", { length: annotations.length, value2: (annotations.length===1) ? 'yes' : 'no', value3: notice ? t("GitReviewModal.3acf01eae0", { notice: notice }) : '' })}</span>
+        <label>{rich("GitReviewModal.6628fc2d46", { value1: <input type="checkbox" checked={includePatches} onChange={event=>setIncludePatches(event.currentTarget.checked)}/> })}</label>
+        <button disabled={!annotations.length} onClick={()=>setAnnotations([])}>{t("GitReviewModal.6ebb5eccfe")}</button>
+        <button onClick={()=>void copy(packet(),t("GitReviewModal.c06840d76f"))}>{t("GitReviewModal.cbe511df4b")}</button>
+        <button disabled={!snapshot?.patch} onClick={()=>snapshot?.patch&&void copy(snapshot.patch,t("GitReviewModal.a0e7d0efb9"))}>{t("GitReviewModal.d1aaef5898")}</button>
+        <button disabled={!props.onSendToAgent} onClick={send}>{t("GitReviewModal.74915d54b9")}</button>
       </footer>
-      {recovery&&<label class="git-review-recovery">Clipboard recovery<textarea readOnly value={recovery} onFocus={event=>event.currentTarget.select()}/></label>}
+      {recovery && <label class="git-review-recovery">{rich("GitReviewModal.e12b96cb2e", { value1: <textarea readOnly value={recovery} onFocus={event=>event.currentTarget.select()}/> })}</label>}
     </section>
   </div>
 }

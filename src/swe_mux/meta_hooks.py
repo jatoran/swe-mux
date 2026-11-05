@@ -22,6 +22,7 @@ from .bounded_subprocess import run_bounded
 from .event_bus import EventBus
 from .models import MuxEvent
 from .session import SessionManager
+from .ui_messages import error_text, ui_message
 
 log = logging.getLogger(__name__)
 
@@ -173,7 +174,7 @@ class MetaHookEngine:
         except OSError as exc:
             self.diagnostic = {
                 "status": "invalid",
-                "error": str(exc),
+                "error": error_text(exc),
                 "rules": len(self.rules),
                 "retained_last_known_good": True,
             }
@@ -194,7 +195,7 @@ class MetaHookEngine:
             self._fingerprint = fingerprint
             self.diagnostic = {
                 "status": "invalid",
-                "error": str(exc),
+                "error": error_text(exc),
                 "rules": len(self.rules),
                 "retained_last_known_good": True,
             }
@@ -389,7 +390,7 @@ class MetaHookEngine:
         # small cap only keeps a chatty hook from holding memory it was never owed.
         outcome = await run_bounded(
             command,
-            label="meta-hook",
+            label=ui_message("meta_hooks.91f2288f70"),
             timeout_seconds=float(action.get("timeout_seconds", 10)),
             output_limit=4096,
             stderr_limit=4096,
@@ -400,7 +401,7 @@ class MetaHookEngine:
             raise TimeoutError("hook subprocess timed out")
         code = outcome.exit_code
         if code:
-            raise RuntimeError(f"hook subprocess exited with status {code}")
+            raise RuntimeError(ui_message("meta_hooks.8368544ac6", value1=code))
 
     async def _post_http(self, action: dict[str, Any], event: MuxEvent) -> None:
         payload = event.snapshot()

@@ -58,6 +58,7 @@ from .sqlite_store import (
     run_sqlite_operation,
 )
 from .transcript_view import final_exchange, transcript_message_page
+from .ui_messages import error_text, ui_message
 from .voice import speechify
 
 if TYPE_CHECKING:
@@ -242,6 +243,7 @@ def _round_budget(remaining: int) -> str:
         "into one response, and do not re-read anything a tool already returned."
     )
 
+
 SYSTEM_PRIMER = """You are Mux, the operator's assistant inside swe-mux, a fleet manager for \
 coding-agent terminal sessions (Claude Code, Codex, and others) organized into Projects.
 You operate the workspace; you never write code and never run shell commands. When the \
@@ -364,7 +366,7 @@ def strip_hold_sentinel(text: str) -> tuple[bool, str]:
     match = _HOLD_PREFIX.match(text or "")
     if match is None:
         return False, (text or "").strip()
-    return True, (text or "")[match.end():].strip()
+    return True, (text or "")[match.end() :].strip()
 
 
 def _encode_transcript_cursor(anchor: Any) -> str:
@@ -395,10 +397,7 @@ def _decode_transcript_cursor(raw: Any) -> tuple[dict[str, Any] | None, str]:
         return None, ""
     if not isinstance(raw, str) or len(raw) > _TRANSCRIPT_CURSOR_MAX_CHARS:
         return None, "before must be the next_before string from a previous read_transcript"
-    unusable = (
-        "before is not a cursor this reader issued; "
-        "omit it to read the newest messages"
-    )
+    unusable = "before is not a cursor this reader issued; omit it to read the newest messages"
     try:
         decoded = json.loads(raw)
     except ValueError:
@@ -618,9 +617,7 @@ def resolve_note_section(markdown: str, section: str) -> dict[str, Any]:
     if not headings:
         raise AssistantError("this note has no headings to target by section")
     exact = [item for item in headings if str(item["text"]).casefold() == wanted]
-    matches = exact or [
-        item for item in headings if wanted in str(item["text"]).casefold()
-    ]
+    matches = exact or [item for item in headings if wanted in str(item["text"]).casefold()]
     if not matches:
         names = ", ".join(str(item["text"]) for item in headings[:NOTE_OUTLINE_LIMIT])
         raise AssistantError(f'no section named "{section[:60]}"; this note has: {names}')
@@ -857,11 +854,13 @@ def summarize_command_labels(commands: Any) -> list[str]:
             continue
         detail = f"{template}, one per {'Project' if 'project' in template else 'session'}"
         if prefix == "session.spawn:":
-            harnesses = sorted({
-                match.group("harness")
-                for match in (_SPAWN_LABEL.match(member) for member in members)
-                if match
-            })
+            harnesses = sorted(
+                {
+                    match.group("harness")
+                    for match in (_SPAWN_LABEL.match(member) for member in members)
+                    if match
+                }
+            )
             if harnesses:
                 detail = f"{template}, harnesses: {', '.join(harnesses)}"
         lines.append(f"{detail} ({len(members)} available)")
@@ -981,7 +980,7 @@ class _SentenceStreamer:
                     # `flush` still speaks it alone if the model stops here.
                     self._scan_from = match.end()
                     continue
-                self.buffer = self.buffer[match.end():]
+                self.buffer = self.buffer[match.end() :]
                 self._scan_from = 0
             elif len(self.buffer) >= STREAM_SENTENCE_MAX_CHARS:
                 cut = self.buffer.rfind(" ", 0, STREAM_SENTENCE_MAX_CHARS)
@@ -1330,9 +1329,7 @@ def restate_action(kind: str, arguments: dict[str, Any], *, spoken: bool = False
     text = str(
         arguments.get("text") or arguments.get("stage_text") or arguments.get("seed_text") or ""
     )
-    preview = "" if spoken else (
-        f' "{text[:120]}{"…" if len(text) > 120 else ""}"' if text else ""
-    )
+    preview = "" if spoken else (f' "{text[:120]}{"…" if len(text) > 120 else ""}"' if text else "")
     target = str(arguments.get("session") or arguments.get("project") or "")
     if kind == "send_to_session":
         mode = "send" if arguments.get("deliver") else "queue a draft"
@@ -1349,15 +1346,9 @@ def restate_action(kind: str, arguments: dict[str, Any], *, spoken: bool = False
         # The card is where the operator learns whether the prompt will run or
         # wait: the two parameters differ in exactly that, so the card says it.
         if str(arguments.get("stage_text") or ""):
-            return (
-                f"spawn a {backend} session{on_model} in {target}, "
-                f"prompt staged unsent{preview}"
-            )
+            return f"spawn a {backend} session{on_model} in {target}, prompt staged unsent{preview}"
         if str(arguments.get("seed_text") or ""):
-            return (
-                f"spawn a {backend} session{on_model} in {target}, "
-                f"running the prompt{preview}"
-            )
+            return f"spawn a {backend} session{on_model} in {target}, running the prompt{preview}"
         return f"spawn a {backend} session{on_model} in {target}{preview}"
     if kind == "create_project":
         # The absolute path is the whole point of this card: the operator
@@ -1367,9 +1358,7 @@ def restate_action(kind: str, arguments: dict[str, Any], *, spoken: bool = False
         name = str(arguments.get("name") or "")
         root = str(arguments.get("root") or "")
         where = "" if spoken else (f" at {root}" if root else "")
-        git_note = (
-            " and initialize an empty git repository" if arguments.get("git") else ""
-        )
+        git_note = " and initialize an empty git repository" if arguments.get("git") else ""
         revive = ""
         if arguments.get("restores"):
             revive = (
@@ -1415,8 +1404,10 @@ def restate_action(kind: str, arguments: dict[str, Any], *, spoken: bool = False
     # Retired kinds still sit in stored ledgers; a card the operator already
     # confirmed should not degrade into a bare tool name months later.
     if kind in {"append_project_note", "edit_project_note"}:
-        return f"write to the {target} project note:{preview}" if preview else (
-            f"write to the {target} project note"
+        return (
+            f"write to the {target} project note:{preview}"
+            if preview
+            else (f"write to the {target} project note")
         )
     if kind == "interrupt_session":
         return f"interrupt the agent in {target}"
@@ -1482,14 +1473,14 @@ def action_outcome_line(label: str, steps: list[dict[str, Any]]) -> tuple[str, b
             True,
         )
     failed = [
-        item for item in steps
+        item
+        for item in steps
         if item.get("exit_code") not in (None, 0) or item.get("state") == "crashed"
     ]
     if failed:
-        codes = sorted({
-            str(item.get("exit_code")) for item in failed
-            if item.get("exit_code") is not None
-        })
+        codes = sorted(
+            {str(item.get("exit_code")) for item in failed if item.get("exit_code") is not None}
+        )
         detail = f"exit code {', '.join(codes)}" if codes else "a failed step"
         return f'The "{label}" action finished with {detail}.', True
     if any(item.get("unhealthy") for item in steps):
@@ -1557,9 +1548,8 @@ class AssistantService:
         history_search: Callable[..., Awaitable[dict[str, Any]]] | None = None,
         note_read: Callable[[str, str | None], Awaitable[dict[str, Any]]] | None = None,
         note_list: Callable[[str], Awaitable[list[dict[str, Any]]]] | None = None,
-        note_write: Callable[
-            [str, str | None, dict[str, Any]], Awaitable[dict[str, Any]]
-        ] | None = None,
+        note_write: Callable[[str, str | None, dict[str, Any]], Awaitable[dict[str, Any]]]
+        | None = None,
         create_project_op: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
         # Project Actions. Three closures over the one service the Run menu and
         # the MCP surface already use, so the assistant adds no second authority:
@@ -1567,12 +1557,9 @@ class AssistantService:
         # would run, and start an action whose file a human approved. Unwired,
         # both tools report honestly that the daemon does not offer them.
         action_catalog: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
-        action_preview: Callable[
-            [str, str, dict[str, str]], Awaitable[dict[str, Any]]
-        ] | None = None,
-        action_run: Callable[
-            [str, str, dict[str, str]], Awaitable[dict[str, Any]]
-        ] | None = None,
+        action_preview: Callable[[str, str, dict[str, str]], Awaitable[dict[str, Any]]]
+        | None = None,
+        action_run: Callable[[str, str, dict[str, str]], Awaitable[dict[str, Any]]] | None = None,
     ) -> None:
         self.config = config
         self.events = events
@@ -1627,7 +1614,7 @@ class AssistantService:
             # is spending. A provider that reports no cost leaves it blind, and
             # the token axis is the honest backstop (`budget.py`).
             "budget_status": budget.spent_out(
-                self.config.assistant_daily_budget, spend, label="the assistant's daily"
+                self.config.assistant_daily_budget, spend, label=ui_message("assistant.29ecfd4e95")
             ).as_dict(),
             "trust_reversible": self.config.assistant_trust_reversible,
             "diagnostic": self.diagnostic,
@@ -1666,9 +1653,7 @@ class AssistantService:
             raise AssistantError("unknown dialog")
         if self.turn_running(dialog_id):
             return await self._queue_turn(dialog_id, body, client_context or {})
-        return await self.start_turn_now(
-            dialog_id, str(uuid.uuid4()), body, client_context or {}
-        )
+        return await self.start_turn_now(dialog_id, str(uuid.uuid4()), body, client_context or {})
 
     async def start_turn_now(
         self, dialog_id: str, turn_id: str, body: str, client_context: dict[str, Any]
@@ -1713,9 +1698,7 @@ class AssistantService:
         )
         return turn_id
 
-    async def _queue_turn(
-        self, dialog_id: str, body: str, client_context: dict[str, Any]
-    ) -> str:
+    async def _queue_turn(self, dialog_id: str, body: str, client_context: dict[str, Any]) -> str:
         """Hold an utterance that arrived while a turn was running.
 
         Refusing it was the old behaviour and the client had nowhere to put the
@@ -1734,23 +1717,34 @@ class AssistantService:
             waiting.text = merged
             waiting.client_context = client_context or waiting.client_context
             await self.events.emit(
-                "assistant_turn_queued", source="assistant", dialog_id=dialog_id,
-                turn_id=waiting.turn_id, text=merged, merged=True,
+                "assistant_turn_queued",
+                source="assistant",
+                dialog_id=dialog_id,
+                turn_id=waiting.turn_id,
+                text=merged,
+                merged=True,
             )
             log.info(
                 "assistant turn merged into the waiting one dialog=%s turn=%s chars=%d",
-                dialog_id, waiting.turn_id, len(merged),
+                dialog_id,
+                waiting.turn_id,
+                len(merged),
             )
             return waiting.turn_id
         turn_id = str(uuid.uuid4())
         self._queued[dialog_id] = _QueuedTurn(turn_id, body, client_context)
         await self.events.emit(
-            "assistant_turn_queued", source="assistant", dialog_id=dialog_id,
-            turn_id=turn_id, text=body, merged=False,
+            "assistant_turn_queued",
+            source="assistant",
+            dialog_id=dialog_id,
+            turn_id=turn_id,
+            text=body,
+            merged=False,
         )
         log.info(
             "assistant turn queued behind a running one dialog=%s turn=%s",
-            dialog_id, turn_id,
+            dialog_id,
+            turn_id,
         )
         return turn_id
 
@@ -1804,11 +1798,16 @@ class AssistantService:
             except (AssistantError, OpenRouterError) as exc:
                 log.warning(
                     "assistant queued turn could not start dialog=%s turn=%s error=%s",
-                    dialog_id, waiting.turn_id, str(exc)[:200],
+                    dialog_id,
+                    waiting.turn_id,
+                    str(exc)[:200],
                 )
                 await self.events.emit(
-                    "assistant_turn_failed", source="assistant", dialog_id=dialog_id,
-                    turn_id=waiting.turn_id, error=str(exc)[:500],
+                    "assistant_turn_failed",
+                    source="assistant",
+                    dialog_id=dialog_id,
+                    turn_id=waiting.turn_id,
+                    error=str(exc)[:500],
                 )
 
         task = asyncio.create_task(run(), name=f"assistant-queued-{waiting.turn_id}")
@@ -1829,12 +1828,15 @@ class AssistantService:
         # service; a restart expires every pending action anyway.
         self._queued.clear()
         for task in [
-            *self._turn_tasks.values(), *self._window_tasks.values(),
-            *self._queue_starters, *self._outcome_watches,
+            *self._turn_tasks.values(),
+            *self._window_tasks.values(),
+            *self._queue_starters,
+            *self._outcome_watches,
         ]:
             task.cancel()
         pending = [
-            *self._turn_tasks.values(), *self._window_tasks.values(),
+            *self._turn_tasks.values(),
+            *self._window_tasks.values(),
             *self._outcome_watches,
         ]
         self._turn_tasks.clear()
@@ -1883,8 +1885,7 @@ class AssistantService:
             log.warning("assistant title lookup failed", exc_info=True)
             titles = {}
         return {
-            session.record.id: record_display_name(session.record, titles)
-            for session in sessions
+            session.record.id: record_display_name(session.record, titles) for session in sessions
         }
 
     async def resolve_session(self, reference: str) -> tuple[Session | None, list[str]]:
@@ -1909,9 +1910,7 @@ class AssistantService:
         if len(exact) == 1:
             return exact[0], []
         partial = [
-            session
-            for session in live
-            if any(needle in name for name in names(session) if name)
+            session for session in live if any(needle in name for name in names(session) if name)
         ]
         if len(partial) == 1:
             return partial[0], []
@@ -1956,11 +1955,7 @@ class AssistantService:
         # address anything with.
         projects = [record.name for record in self.projects.ordered_projects()]
         live = self._live_sessions()
-        cold = [
-            session
-            for session in self.sessions.sessions.values()
-            if session.record.cold
-        ]
+        cold = [session for session in self.sessions.sessions.values() if session.record.cold]
         display = await self._display_names([*live, *cold])
         rows: list[dict[str, Any]] = []
         for session in [*live, *cold]:
@@ -2161,8 +2156,8 @@ class AssistantService:
                 },
             }
 
-        session_property = {"type": "string", "description": "The session's name from the snapshot"}
-        project_property = {"type": "string", "description": "The project's name from the snapshot"}
+        session_property = {"type": "string", "description": ui_message("assistant.0b2c5dfaef")}
+        project_property = {"type": "string", "description": ui_message("assistant.a4ed5ec44a")}
         return [
             tool(
                 "session_detail",
@@ -2186,17 +2181,12 @@ class AssistantService:
                         "minimum": 200,
                         "maximum": TRANSCRIPT_TEXT_MAX_CHARS,
                         "description": (
-                            "Characters of each message to return "
-                            f"(default {TRANSCRIPT_TEXT_CHARS}). Raise it for a message "
-                            "reported as truncated."
+                            ui_message("assistant.b0e446adcb", value1=TRANSCRIPT_TEXT_CHARS)
                         ),
                     },
                     "before": {
                         "type": "string",
-                        "description": (
-                            "The next_before cursor from a previous read of this session, to "
-                            "read the messages before that page. Omit for the newest."
-                        ),
+                        "description": (ui_message("assistant.04116ee449")),
                     },
                 },
                 ["session"],
@@ -2219,7 +2209,7 @@ class AssistantService:
                 {
                     "query": {
                         "type": "string",
-                        "description": "A specific phrase to look for. Required and non-empty.",
+                        "description": ui_message("assistant.ec2a3379f8"),
                     },
                     "limit": {"type": "integer", "minimum": 1, "maximum": 10},
                 },
@@ -2240,17 +2230,19 @@ class AssistantService:
                     "project": project_property,
                     "note": {
                         "type": "string",
-                        "description": "The note's title from list_project_notes",
+                        "description": ui_message("assistant.338837638f"),
                     },
                     "from_line": {
                         "type": "integer",
                         "minimum": 1,
-                        "description": "1-indexed first line to return (default 1)",
+                        "description": ui_message("assistant.c5a45acd08"),
                     },
                     "max_lines": {
                         "type": "integer",
                         "minimum": 1,
-                        "description": f"Lines to return, up to {NOTE_PAGE_MAX_LINES}",
+                        "description": ui_message(
+                            "assistant.968d10a8ab", value1=NOTE_PAGE_MAX_LINES
+                        ),
                     },
                 },
                 ["project"],
@@ -2259,7 +2251,12 @@ class AssistantService:
                 "list_queue",
                 "Prompt-queue state: per-session pending counts, or one session's "
                 "queued messages when `session` is given.",
-                {"session": {**session_property, "description": "Optional session name"}},
+                {
+                    "session": {
+                        **session_property,
+                        "description": ui_message("assistant.d9e46c32be"),
+                    }
+                },
                 [],
             ),
             tool(
@@ -2269,35 +2266,29 @@ class AssistantService:
                     "project": project_property,
                     "note": {
                         "type": "string",
-                        "description": "Note title; omit for the primary note",
+                        "description": ui_message("assistant.31be196939"),
                     },
                     "where": {
                         "type": "string",
                         "enum": list(NOTE_WRITE_POSITIONS),
-                        "description": (
-                            "Default top. Use end ONLY when the operator said the "
-                            "end or the bottom."
-                        ),
+                        "description": (ui_message("assistant.aba1c47df8")),
                     },
                     "section": {
                         "type": "string",
-                        "description": (
-                            "Heading to write under, from the note outline; "
-                            "combines with top or end"
-                        ),
+                        "description": (ui_message("assistant.2e0fccd333")),
                     },
                     "line": {
                         "type": "integer",
                         "minimum": 1,
-                        "description": "For at_line: the line the text becomes",
+                        "description": ui_message("assistant.c17490bc62"),
                     },
                     "anchor": {
                         "type": "string",
-                        "description": "For after/before: a unique span to sit beside",
+                        "description": ui_message("assistant.15e1b07714"),
                     },
                     "find": {
                         "type": "string",
-                        "description": "For replace: a unique span to replace",
+                        "description": ui_message("assistant.ef25f2de42"),
                     },
                     "text": {"type": "string"},
                 },
@@ -2326,17 +2317,11 @@ class AssistantService:
                 {
                     "name": {
                         "type": "string",
-                        "description": (
-                            "The project's name; the folder name is derived from it "
-                            "deterministically (spaces become hyphens)"
-                        ),
+                        "description": (ui_message("assistant.90ff39e0f8")),
                     },
                     "git": {
                         "type": "boolean",
-                        "description": (
-                            "Also initialize an empty git repository (no commits are "
-                            "made). Recommended when coding sessions will work there."
-                        ),
+                        "description": (ui_message("assistant.55536229ff")),
                     },
                 },
                 ["name"],
@@ -2350,9 +2335,7 @@ class AssistantService:
                     "project": project_property,
                     "backend": {
                         "type": "string",
-                        "description": (
-                            "Harness name, e.g. claude or codex; omit for the project default"
-                        ),
+                        "description": (ui_message("assistant.6d4eed94f7")),
                     },
                     # This parameter was first documented (2026-08-20) as staging
                     # without sending, after reading its summary instead of tracing
@@ -2363,34 +2346,15 @@ class AssistantService:
                     # below is the real stage-without-send path.
                     "seed_text": {
                         "type": "string",
-                        "description": (
-                            "A first prompt the new agent starts RUNNING immediately "
-                            "— this submits it, with no chance for the operator to "
-                            "review. Use stage_text instead whenever they want the "
-                            "text left unsent. Omit both for an empty session."
-                        ),
+                        "description": (ui_message("assistant.9078fdc20e")),
                     },
                     "stage_text": {
                         "type": "string",
-                        "description": (
-                            "Text left waiting in the new session's composer WITHOUT "
-                            "sending it, so the operator can review, edit, and press "
-                            "Enter themselves. This is what 'put this in the chat "
-                            "without sending it' means. Cannot be combined with "
-                            "seed_text."
-                        ),
+                        "description": (ui_message("assistant.35574d0fe5")),
                     },
                     "model": {
                         "type": "string",
-                        "description": (
-                            "The model the new session's CLI should run, when the "
-                            "operator names one ('open an opus session'). Use the "
-                            "harness's own spelling — a short alias like opus, "
-                            "sonnet or haiku, or a full model id. Omit it "
-                            "otherwise. Whether a model can be chosen at all is "
-                            "per harness: the tool refuses before anything spawns "
-                            "and names what that harness accepts."
-                        ),
+                        "description": (ui_message("assistant.b329253dca")),
                     },
                 },
                 ["project"],
@@ -2414,7 +2378,7 @@ class AssistantService:
                 {
                     "command": {
                         "type": "string",
-                        "description": "The command label or a close paraphrase",
+                        "description": ui_message("assistant.cc5f6b85fc"),
                     }
                 },
                 ["command"],
@@ -2456,16 +2420,11 @@ class AssistantService:
                     "project": project_property,
                     "action": {
                         "type": "string",
-                        "description": (
-                            "The action's title or id, from list_project_actions"
-                        ),
+                        "description": (ui_message("assistant.6adc01efea")),
                     },
                     "inputs": {
                         "type": "object",
-                        "description": (
-                            "Values for the action's declared inputs, as "
-                            "id-to-string. Omit when it declares none."
-                        ),
+                        "description": (ui_message("assistant.cf79d3f2f9")),
                         "additionalProperties": {"type": "string"},
                     },
                 },
@@ -2504,7 +2463,9 @@ class AssistantService:
         # registration tombstone that deletes nothing on disk, and the folder the
         # tool minted inside the configured parent is empty.
         if kind in {
-            "write_project_note", "spawn_session", "type_into_session",
+            "write_project_note",
+            "spawn_session",
+            "type_into_session",
             "create_project",
         }:
             return ACTION_CLASS_REVERSIBLE
@@ -2553,9 +2514,7 @@ class AssistantService:
         return row
 
     async def _emit_action(self, row: dict[str, Any]) -> None:
-        await self.events.emit(
-            "assistant_action", source="assistant", **action_snapshot(row)
-        )
+        await self.events.emit("assistant_action", source="assistant", **action_snapshot(row))
 
     async def _finish_action(
         self, action_id: str, *, status: str, result: str | None = None
@@ -2599,7 +2558,8 @@ class AssistantService:
             )
         except Exception:  # noqa: BLE001 - a reporting gap must not fail an action
             log.warning(
-                "assistant action transcript write failed action=%s", row.get("id"),
+                "assistant action transcript write failed action=%s",
+                row.get("id"),
                 exc_info=True,
             )
             return
@@ -2607,7 +2567,10 @@ class AssistantService:
             return
         log.info(
             "assistant action recorded in transcript action=%s dialog=%s kind=%s status=%s",
-            row.get("id"), row.get("dialog_id"), row.get("kind"), row.get("status"),
+            row.get("id"),
+            row.get("dialog_id"),
+            row.get("kind"),
+            row.get("status"),
         )
         await self.events.emit(
             "assistant_message",
@@ -2641,7 +2604,12 @@ class AssistantService:
         if action_class == ACTION_CLASS_READ:
             result = await self._execute_read(kind, arguments)
             await self._record_action(
-                dialog_id, turn_id, kind, action_class, arguments, "executed",
+                dialog_id,
+                turn_id,
+                kind,
+                action_class,
+                arguments,
+                "executed",
                 result=json.dumps(result, ensure_ascii=False)[:2_000],
             )
             return result
@@ -2671,7 +2639,12 @@ class AssistantService:
         if policy == "cancel_window":
             expires = time.time() + CANCEL_WINDOW_SECONDS
             row = await self._record_action(
-                dialog_id, turn_id, kind, action_class, arguments, "scheduled",
+                dialog_id,
+                turn_id,
+                kind,
+                action_class,
+                arguments,
+                "scheduled",
                 expires_at=expires,
             )
             self._schedule_window(row)
@@ -2685,7 +2658,13 @@ class AssistantService:
             }
         expires = time.time() + CONFIRM_TTL_SECONDS
         row = await self._record_action(
-            dialog_id, turn_id, kind, action_class, arguments, "pending", expires_at=expires,
+            dialog_id,
+            turn_id,
+            kind,
+            action_class,
+            arguments,
+            "pending",
+            expires_at=expires,
         )
         return {
             "pending_confirmation": True,
@@ -2704,9 +2683,7 @@ class AssistantService:
         thing being done — the same write proposed from a phone and a desktop is
         one write.
         """
-        payload = {
-            key: value for key, value in arguments.items() if key != "client_id"
-        }
+        payload = {key: value for key, value in arguments.items() if key != "client_id"}
         return f"{kind}:{json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)}"
 
     async def _duplicate_action(
@@ -2755,7 +2732,9 @@ class AssistantService:
         if status in {"pending", "scheduled"}:
             log.info(
                 "assistant duplicate proposal suppressed action=%s kind=%s status=%s",
-                row["id"], row["kind"], status,
+                row["id"],
+                row["kind"],
+                status,
             )
             return {
                 "pending_confirmation": True,
@@ -2769,7 +2748,8 @@ class AssistantService:
             }
         log.info(
             "assistant duplicate execution suppressed action=%s kind=%s",
-            row["id"], row["kind"],
+            row["id"],
+            row["kind"],
         )
         return {
             "already_done": True,
@@ -2809,7 +2789,8 @@ class AssistantService:
                 if current is not None:
                     log.info(
                         "assistant cancel window elapsed action=%s kind=%s",
-                        action_id, current["kind"],
+                        action_id,
+                        current["kind"],
                     )
                     await self._execute_mutation_row(current)
             finally:
@@ -2849,7 +2830,9 @@ class AssistantService:
             log.warning(
                 "assistant card announced again action=%s kind=%s status=%s; "
                 "the cancel window moves once per card",
-                action_id, row["kind"], row["status"],
+                action_id,
+                row["kind"],
+                row["status"],
             )
             return {"extended": False, "action": action_snapshot(row)}
         if row["status"] != "scheduled":
@@ -2867,7 +2850,8 @@ class AssistantService:
             await self._emit_action(updated)
             log.info(
                 "assistant cancel window extended action=%s kind=%s remaining=%.1fs",
-                action_id, updated["kind"],
+                action_id,
+                updated["kind"],
                 float(updated.get("expires_at") or 0) - time.time(),
             )
         return {"extended": extended, "action": action_snapshot(updated)}
@@ -2893,9 +2877,7 @@ class AssistantService:
             raise AssistantError("the confirmation expired; ask again")
         if not await self.store.claim_action(action_id, ("pending", "scheduled")):
             final = await self.store.action(action_id)
-            raise AssistantError(
-                f"the action is already {(final or row)['status']}"
-            )
+            raise AssistantError(f"the action is already {(final or row)['status']}")
         result = await self._execute_mutation_row(row)
         final = await self.store.action(action_id)
         return {"result": result, "action": action_snapshot(final or row)}
@@ -2923,12 +2905,15 @@ class AssistantService:
     ) -> dict[str, Any] | None:
         """Resolve names now so ambiguity is answered before anything pends."""
         if kind in {
-            "send_to_session", "interrupt_session", "end_session",
-            "type_into_session", "submit_session_composer",
+            "send_to_session",
+            "interrupt_session",
+            "end_session",
+            "type_into_session",
+            "submit_session_composer",
         }:
             session, candidates = await self.resolve_session(str(arguments.get("session") or ""))
             if session is None:
-                return {"error": "session did not resolve", "candidates": candidates}
+                return {"error": ui_message("assistant.e018652e58"), "candidates": candidates}
             # Rewritten to the display name so the restatement the operator
             # confirms names the session the way their screen does.
             names = await self._display_names([session])
@@ -2936,18 +2921,13 @@ class AssistantService:
         if kind in {"spawn_session", "write_project_note", "run_project_action"}:
             project, candidates = self.resolve_project(str(arguments.get("project") or ""))
             if project is None:
-                return {"error": "project did not resolve", "candidates": candidates}
+                return {"error": ui_message("assistant.b7ed304ef2"), "candidates": candidates}
             arguments["project"] = project.name
         if kind == "spawn_session" and (
             str(arguments.get("seed_text") or "").strip()
             and str(arguments.get("stage_text") or "").strip()
         ):
-            return {
-                "error": (
-                    "seed_text and stage_text cannot be combined: seed_text runs the "
-                    "prompt, stage_text leaves it unsent — pick the one the operator asked for"
-                )
-            }
+            return {"error": (ui_message("assistant.e4ddb52c2d"))}
         if kind == "spawn_session":
             refusal = self._preflight_spawn_model(arguments)
             if refusal is not None:
@@ -2963,27 +2943,31 @@ class AssistantService:
         if kind == "write_project_note":
             where = str(arguments.get("where") or "top")
             if where not in NOTE_WRITE_POSITIONS:
-                return {"error": f"where must be one of {', '.join(NOTE_WRITE_POSITIONS)}"}
-            if where == "at_line" and int(arguments.get("line") or 0) < 1:
-                return {"error": "at_line needs a 1-indexed line number"}
-            if where in {"after", "before"} and not str(arguments.get("anchor") or ""):
-                return {"error": f"{where} needs an anchor — a unique span to sit beside"}
-            if where == "replace" and not str(arguments.get("find") or ""):
-                return {"error": "replace needs the text to find"}
-            if where != "replace" and not str(arguments.get("text") or "").strip():
-                return {"error": "text must not be empty"}
-            if str(arguments.get("section") or "").strip() and where not in {"top", "end"}:
                 return {
-                    "error": (
-                        "section only combines with where=top or where=end; "
-                        f"{where} already names its own position"
+                    "error": ui_message(
+                        "assistant.e1507f1b42", value1=", ".join(NOTE_WRITE_POSITIONS)
                     )
                 }
+            if where == "at_line" and int(arguments.get("line") or 0) < 1:
+                return {"error": ui_message("assistant.e2a32ae30d")}
+            if where in {"after", "before"} and not str(arguments.get("anchor") or ""):
+                return {"error": ui_message("assistant.2ee152e8a6", value1=where)}
+            if where == "replace" and not str(arguments.get("find") or ""):
+                return {"error": ui_message("assistant.95d6551577")}
+            if where != "replace" and not str(arguments.get("text") or "").strip():
+                return {"error": ui_message("assistant.c39f5e572b")}
+            if str(arguments.get("section") or "").strip() and where not in {"top", "end"}:
+                return {"error": (ui_message("assistant.e9b9d66c3d", value1=where))}
         text = arguments.get("text") or arguments.get("seed_text")
-        if kind in {
-            "send_to_session", "type_into_session",
-        } and not str(text or "").strip():
-            return {"error": "text must not be empty"}
+        if (
+            kind
+            in {
+                "send_to_session",
+                "type_into_session",
+            }
+            and not str(text or "").strip()
+        ):
+            return {"error": ui_message("assistant.c39f5e572b")}
         return None
 
     def _preflight_spawn_model(self, arguments: dict[str, Any]) -> dict[str, Any] | None:
@@ -3013,13 +2997,7 @@ class AssistantService:
             str(getattr(project, "default_backend", "") or "") if project else ""
         )
         if not backend:
-            return {
-                "error": (
-                    "name the harness as well (backend): this project has no default "
-                    "one, and whether a model can be chosen — and which names are "
-                    "accepted — is a property of the CLI"
-                )
-            }
+            return {"error": (ui_message("assistant.fed2aae2a7"))}
         try:
             arguments["model"] = resolve_spawn_model(backend, model)
         except ValueError as exc:
@@ -3033,9 +3011,7 @@ class AssistantService:
         arguments["backend"] = backend
         return None
 
-    async def _preflight_create_project(
-        self, arguments: dict[str, Any]
-    ) -> dict[str, Any] | None:
+    async def _preflight_create_project(self, arguments: dict[str, Any]) -> dict[str, Any] | None:
         """Resolve a spoken name to the exact folder that would be created.
 
         Everything that can be answered before a card pends is answered here: the
@@ -3053,48 +3029,36 @@ class AssistantService:
         arguments.pop("restores", None)
         name = str(arguments.get("name") or "").strip()
         if not name:
-            return {"error": "the project needs a name"}
+            return {"error": ui_message("assistant.be16e1bf90")}
         parent_setting = str(self.config.new_project_parent or "").strip()
         if not parent_setting:
-            return {
-                "error": "no new-project location is configured; ask the operator to "
-                "set Settings → Projects → New project location first"
-            }
+            return {"error": ui_message("assistant.4424a52dd9")}
         parent = Path(parent_setting).expanduser()
         if not parent.is_dir():
-            return {
-                "error": f"the configured new-project location does not exist: {parent}"
-                " - ask the operator to fix Settings → Projects → New project location"
-            }
+            return {"error": ui_message("assistant.7557f4fa1d", value1=parent)}
         folder = suggest_folder_name(name)
         try:
             validate_leaf_name(
                 folder,
-                label="project folder name",
+                label=ui_message("assistant.94819a6cd7"),
                 reserved_names=RESERVED_PROJECT_FOLDER_NAMES,
             )
         except ValueError as exc:
-            return {"error": f'"{name}" does not make a usable folder name: {exc}'}
+            return {"error": ui_message("assistant.14e67a26b2", value1=name, value2=exc)}
         target = (parent / folder).resolve()
         for record in self.projects.projects.values():
             if same_path(record.root, target):
-                return {
-                    "error": f'that folder is already registered as the project '
-                    f'"{record.name}"'
-                }
+                return {"error": ui_message("assistant.c20a2a62f8", value1=record.name)}
         try:
             if target.exists():
                 if not target.is_dir():
-                    return {"error": f"{target} already exists and is not a folder"}
+                    return {"error": ui_message("assistant.7929d2bb5a", value1=target)}
                 if any(target.iterdir()):
                     # Adopting existing work from a chat message is the add-existing
                     # flow's job, where a human is looking at the folder.
-                    return {
-                        "error": f"{target} already exists and is not empty; register "
-                        "it with the Add project dialog instead"
-                    }
+                    return {"error": ui_message("assistant.0d694d0ece", value1=target)}
         except OSError as exc:
-            return {"error": f"cannot inspect {target}: {exc}"}
+            return {"error": ui_message("assistant.dcf5562771", value1=target, value2=exc)}
         arguments["name"] = name
         arguments["root"] = str(target)
         removed = await self.projects.history.removed_project_for_root(str(target))
@@ -3102,9 +3066,7 @@ class AssistantService:
             arguments["restores"] = removed.name
         return None
 
-    async def _preflight_run_action(
-        self, arguments: dict[str, Any]
-    ) -> dict[str, Any] | None:
+    async def _preflight_run_action(self, arguments: dict[str, Any]) -> dict[str, Any] | None:
         """Resolve an action name and refuse anything that cannot execute.
 
         Everything answerable before a card pends is answered here, because a
@@ -3125,16 +3087,16 @@ class AssistantService:
         arguments.pop("action_label", None)
         arguments.pop("steps", None)
         if self.action_preview is None:
-            return {"error": "Project Actions are not available on this daemon"}
+            return {"error": ui_message("assistant.b56bbcc323")}
         project, candidates = self.resolve_project(str(arguments.get("project") or ""))
         if project is None:
-            return {"error": "project did not resolve", "candidates": candidates}
+            return {"error": ui_message("assistant.b7ed304ef2"), "candidates": candidates}
         reference = str(arguments.get("action") or "").strip()
         if not reference:
-            return {"error": "name the action to run"}
+            return {"error": ui_message("assistant.3c775441de")}
         raw_inputs = arguments.get("inputs") or {}
         if not isinstance(raw_inputs, dict):
-            return {"error": "inputs must be a map of input id to string value"}
+            return {"error": ui_message("assistant.fee52a5069")}
         inputs = {str(key): str(value) for key, value in raw_inputs.items()}
         preview = await self.action_preview(project.id, reference, inputs)
         if preview.get("error"):
@@ -3165,9 +3127,10 @@ class AssistantService:
         except Exception as exc:  # noqa: BLE001 - the ledger must record any failure
             log.exception("assistant action failed action=%s kind=%s", row["id"], row["kind"])
             await self._finish_action(str(row["id"]), status="failed", result=str(exc)[:500])
-            return {"error": f"the action failed: {str(exc)[:300]}"}
+            return {"error": ui_message("assistant.a33783d7dc", value1=str(exc)[:300])}
         await self._finish_action(
-            str(row["id"]), status="executed",
+            str(row["id"]),
+            status="executed",
             result=json.dumps(result, ensure_ascii=False)[:2_000],
         )
         return result
@@ -3184,9 +3147,7 @@ class AssistantService:
             # reports back — the daemon never types into a PTY directly.
             # `target_session_id`, not `session_id`: the latter is a first-class
             # MuxEvent field the bus lifts out of the payload.
-            outcome = await self._dispatch_client(
-                row, {"target_session_id": session.record.id}
-            )
+            outcome = await self._dispatch_client(row, {"target_session_id": session.record.id})
             if kind == "type_into_session":
                 return {
                     "typed": True,
@@ -3216,9 +3177,7 @@ class AssistantService:
             project, _candidates = self.resolve_project(str(arguments.get("project") or ""))
             if project is None:
                 raise AssistantError("the target project no longer exists")
-            backend = str(arguments.get("backend") or "").strip() or (
-                project.default_backend or ""
-            )
+            backend = str(arguments.get("backend") or "").strip() or (project.default_backend or "")
             seed = str(arguments.get("seed_text") or "").strip()
             stage = str(arguments.get("stage_text") or "").strip()
             # Already resolved to the CLI's own spelling by preflight, which also
@@ -3360,14 +3319,17 @@ class AssistantService:
         session_ids = [str(item.get("id")) for item in sessions if item.get("id")]
         if not session_ids:
             detail = "; ".join(str(item.get("error") or "")[:120] for item in errors)
-            raise AssistantError(
-                f'no step of "{label}" started{": " + detail if detail else ""}'
-            )
+            raise AssistantError(f'no step of "{label}" started{": " + detail if detail else ""}')
         log.info(
             "assistant_action_run action_id=%s label=%s project_id=%s dialog=%s "
             "steps=%d failures=%d inputs=%d",
-            action_id, label, project.id, row.get("dialog_id"),
-            len(session_ids), len(errors), len(inputs),
+            action_id,
+            label,
+            project.id,
+            row.get("dialog_id"),
+            len(session_ids),
+            len(errors),
+            len(inputs),
         )
         self._watch_action_outcome(str(row.get("dialog_id") or ""), label, session_ids)
         result: dict[str, Any] = {
@@ -3390,9 +3352,7 @@ class AssistantService:
             ][:8]
         return result
 
-    def _watch_action_outcome(
-        self, dialog_id: str, label: str, session_ids: list[str]
-    ) -> None:
+    def _watch_action_outcome(self, dialog_id: str, label: str, session_ids: list[str]) -> None:
         """Report an action's outcome once its step sessions finish.
 
         Deferred rather than awaited inline for two reasons that both matter: a
@@ -3421,7 +3381,9 @@ class AssistantService:
             log.log(
                 logging.WARNING if issue else logging.INFO,
                 "assistant_action_outcome label=%s dialog=%s issue=%s steps=%s",
-                label, dialog_id, issue,
+                label,
+                dialog_id,
+                issue,
                 [
                     f"{item['state']}:{item['exit_code']}"
                     f"{':unhealthy' if item['unhealthy'] else ''}"
@@ -3445,14 +3407,18 @@ class AssistantService:
         session = self.sessions.sessions.get(session_id)
         if session is None:
             return {
-                "session_id": session_id, "state": "unknown",
-                "exit_code": None, "unhealthy": False,
+                "session_id": session_id,
+                "state": "unknown",
+                "exit_code": None,
+                "unhealthy": False,
             }
         record = session.record
         if str(record.state) not in TERMINAL_SESSION_STATES:
             return {
-                "session_id": session_id, "state": "running",
-                "exit_code": None, "unhealthy": False,
+                "session_id": session_id,
+                "state": "running",
+                "exit_code": None,
+                "unhealthy": False,
             }
         return {
             "session_id": session_id,
@@ -3514,7 +3480,7 @@ class AssistantService:
         if kind == "session_detail":
             session, candidates = await self.resolve_session(str(arguments.get("session") or ""))
             if session is None:
-                return {"error": "session did not resolve", "candidates": candidates}
+                return {"error": ui_message("assistant.e018652e58"), "candidates": candidates}
             record = session.record
             now = time.time()
             display = await self._display_names([session])
@@ -3548,9 +3514,9 @@ class AssistantService:
         if kind == "read_transcript":
             session, candidates = await self.resolve_session(str(arguments.get("session") or ""))
             if session is None:
-                return {"error": "session did not resolve", "candidates": candidates}
+                return {"error": ui_message("assistant.e018652e58"), "candidates": candidates}
             if not session.transcript_path or not session.transcript_path.exists():
-                return {"error": "the session has no readable transcript"}
+                return {"error": ui_message("assistant.1e65a1be12")}
             count = max(1, min(int(arguments.get("messages") or 10), 30))
             requested_chars = int(arguments.get("chars") or TRANSCRIPT_TEXT_CHARS)
             chars = max(200, min(requested_chars, TRANSCRIPT_TEXT_MAX_CHARS))
@@ -3602,7 +3568,7 @@ class AssistantService:
             return transcript
         if kind == "search_history":
             if self.history_search is None:
-                return {"error": "history search is not wired on this daemon"}
+                return {"error": ui_message("assistant.241ece8cda")}
             search_query = str(arguments.get("query") or "").strip()
             # An empty query asks the archive for everything and sorts it, which
             # is the most expensive thing this tool can do and never what the
@@ -3610,8 +3576,8 @@ class AssistantService:
             # no useful answer to narrow down to.
             if not search_query:
                 return {
-                    "error": "search_history needs a query",
-                    "hint": "name what to look for - a phrase, a file, a session name",
+                    "error": ui_message("assistant.53c7ed1a6a"),
+                    "hint": ui_message("assistant.38709a435e"),
                 }
             try:
                 page = await self.history_search(
@@ -3625,7 +3591,7 @@ class AssistantService:
                 # no explanation, which is the failure this replaces.
                 log.info("assistant search_history exceeded its budget query=%r", search_query[:80])
                 return {
-                    "error": str(exc),
+                    "error": error_text(exc),
                     "retry_with": "a narrower phrase, or ask the operator which project to look in",
                 }
             # Same rule as read_transcript: a cut summary says it was cut. This
@@ -3648,9 +3614,9 @@ class AssistantService:
         if kind == "list_project_notes":
             project, candidates = self.resolve_project(str(arguments.get("project") or ""))
             if project is None:
-                return {"error": "project did not resolve", "candidates": candidates}
+                return {"error": ui_message("assistant.b7ed304ef2"), "candidates": candidates}
             if self.note_list is None:
-                return {"error": "note listing is not wired on this daemon"}
+                return {"error": ui_message("assistant.2fce78a725")}
             items = await self.note_list(project.id)
             return {
                 "notes": [
@@ -3665,9 +3631,9 @@ class AssistantService:
         if kind == "read_project_note":
             project, candidates = self.resolve_project(str(arguments.get("project") or ""))
             if project is None:
-                return {"error": "project did not resolve", "candidates": candidates}
+                return {"error": ui_message("assistant.b7ed304ef2"), "candidates": candidates}
             if self.note_read is None:
-                return {"error": "note reading is not wired on this daemon"}
+                return {"error": ui_message("assistant.6902ff1123")}
             note = await self.note_read(project.id, str(arguments.get("note") or "") or None)
             if note.get("error"):
                 return {"error": str(note["error"]), "candidates": note.get("candidates") or []}
@@ -3692,9 +3658,9 @@ class AssistantService:
         if kind == "list_project_actions":
             project, candidates = self.resolve_project(str(arguments.get("project") or ""))
             if project is None:
-                return {"error": "project did not resolve", "candidates": candidates}
+                return {"error": ui_message("assistant.b7ed304ef2"), "candidates": candidates}
             if self.action_catalog is None:
-                return {"error": "Project Actions are not available on this daemon"}
+                return {"error": ui_message("assistant.b56bbcc323")}
             catalog = await self.action_catalog(project.id)
             actions = [
                 {
@@ -3739,7 +3705,7 @@ class AssistantService:
             if reference:
                 session, candidates = await self.resolve_session(reference)
                 if session is None:
-                    return {"error": "session did not resolve", "candidates": candidates}
+                    return {"error": ui_message("assistant.e018652e58"), "candidates": candidates}
                 view = await self.prompt_queue.target_view(session.record.id)
                 return {
                     "messages": [
@@ -3760,9 +3726,7 @@ class AssistantService:
             return {
                 "targets": [
                     {
-                        "session": display.get(
-                            str(row.get("target_session_id")), row.get("label")
-                        ),
+                        "session": display.get(str(row.get("target_session_id")), row.get("label")),
                         "project": self._project_name(str(row.get("project_id") or "")),
                         "pending": row.get("pending"),
                         "blocked": row.get("blocked"),
@@ -3788,13 +3752,17 @@ class AssistantService:
         """
         command = str(arguments.get("command") or "").strip()
         if not command:
-            return {"error": "command must not be empty"}
+            return {"error": ui_message("assistant.33c8b9ec77")}
         recorded: dict[str, Any] = {"command": command}
         if arguments.get("client_id"):
             recorded["client_id"] = str(arguments["client_id"])
         row = await self._record_action(
-            dialog_id, turn_id, "run_ui_command", ACTION_CLASS_NAVIGATION,
-            recorded, "dispatched",
+            dialog_id,
+            turn_id,
+            "run_ui_command",
+            ACTION_CLASS_NAVIGATION,
+            recorded,
+            "dispatched",
             expires_at=time.time() + UI_ACK_TIMEOUT_SECONDS,
         )
         loop = asyncio.get_running_loop()
@@ -3806,22 +3774,18 @@ class AssistantService:
             await self._finish_action(
                 str(row["id"]), status="failed", result="no device acknowledged"
             )
-            return {
-                "error": "no connected device acknowledged the UI command; the operator "
-                "may not have a workspace open"
-            }
+            return {"error": ui_message("assistant.2038305b5f")}
         finally:
             self._ui_acks.pop(str(row["id"]), None)
         status = "executed" if outcome.get("ok") else "failed"
         await self._finish_action(
-            str(row["id"]), status=status,
+            str(row["id"]),
+            status=status,
             result=json.dumps(outcome, ensure_ascii=False)[:1_000],
         )
         return outcome
 
-    async def _dispatch_client(
-        self, row: dict[str, Any], extra: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def _dispatch_client(self, row: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
         """Hand an already-claimed mutation to the originating device.
 
         The action row keeps its persisted status ('executing'); only a
@@ -3875,15 +3839,20 @@ class AssistantService:
                 await self._run_turn_inner(dialog_id, turn_id, text, client_context)
             except asyncio.CancelledError:
                 await self.events.emit(
-                    "assistant_turn_failed", source="assistant",
-                    dialog_id=dialog_id, turn_id=turn_id, error="interrupted",
+                    "assistant_turn_failed",
+                    source="assistant",
+                    dialog_id=dialog_id,
+                    turn_id=turn_id,
+                    error="interrupted",
                 )
             except (AssistantError, OpenRouterError) as exc:
                 message = str(exc)[:500] or exc.__class__.__name__
                 self.diagnostic = message
                 log.warning(
                     "assistant turn failed dialog=%s turn=%s error=%s",
-                    dialog_id, turn_id, message,
+                    dialog_id,
+                    turn_id,
+                    message,
                 )
                 await self.store.add_message(
                     {
@@ -3903,14 +3872,17 @@ class AssistantService:
                     }
                 )
                 await self.events.emit(
-                    "assistant_turn_failed", source="assistant",
-                    dialog_id=dialog_id, turn_id=turn_id, error=message,
+                    "assistant_turn_failed",
+                    source="assistant",
+                    dialog_id=dialog_id,
+                    turn_id=turn_id,
+                    error=message,
                 )
 
     async def _budget_check(self) -> None:
         spend = await self.automation_store.spend(rule_id=ASSISTANT_RULE_ID)
         verdict = budget.spent_out(
-            self.config.assistant_daily_budget, spend, label="the assistant's daily"
+            self.config.assistant_daily_budget, spend, label=ui_message("assistant.29ecfd4e95")
         )
         if verdict.exhausted:
             raise AssistantError(f"{verdict.reason}; raise it in Settings → Assistant")
@@ -3989,8 +3961,14 @@ class AssistantService:
         log.debug(
             "assistant model call turn=%s step=%d dialog=%s in=%d cached=%d written=%d "
             "out=%d discount=%s",
-            turn_id, step, dialog_id, turn.input_tokens, turn.cached_tokens,
-            turn.cache_write_tokens, turn.output_tokens, turn.cache_discount_usd,
+            turn_id,
+            step,
+            dialog_id,
+            turn.input_tokens,
+            turn.cached_tokens,
+            turn.cache_write_tokens,
+            turn.output_tokens,
+            turn.cache_discount_usd,
         )
         return turn
 
@@ -3998,9 +3976,8 @@ class AssistantService:
         self, dialog_id: str, turn_id: str, text: str, client_context: dict[str, Any]
     ) -> None:
         started = time.perf_counter()
-        history = await self.store.messages(
-            dialog_id, limit=self.config.assistant_context_messages
-        )
+        history = await self.store.messages(dialog_id, limit=self.config.assistant_context_messages)
+
         # The prompt is ordered by how often each part changes, most stable
         # first, because a provider's cache can only reuse an unchanged *prefix*.
         # One volatile line high up ends that prefix there and re-bills
@@ -4125,7 +4102,10 @@ class AssistantService:
             # a sentence and half a sentence is not speakable.
             streamer = _SentenceStreamer(emit_sentence)
             turn = await self._model_call(
-                messages, tools, turn_id, step,
+                messages,
+                tools,
+                turn_id,
+                step,
                 streamer.feed if self.config.assistant_stream_replies else None,
                 dialog_id=dialog_id,
             )
@@ -4174,20 +4154,35 @@ class AssistantService:
                 try:
                     arguments = json.loads(str(function.get("arguments") or "{}"))
                     if not isinstance(arguments, dict):
-                        raise ValueError("arguments must be an object")
+                        raise ValueError(ui_message("assistant.78db169b3f"))
                 except ValueError:
                     arguments = {}
                 await self.events.emit(
-                    "assistant_tool_status", source="assistant",
-                    dialog_id=dialog_id, turn_id=turn_id, tool=name, status="running",
+                    "assistant_tool_status",
+                    source="assistant",
+                    dialog_id=dialog_id,
+                    turn_id=turn_id,
+                    tool=name,
+                    status="running",
                 )
                 known = {
-                    "session_detail", "read_transcript", "search_history",
-                    "read_project_note", "list_project_notes", "list_queue",
-                    "write_project_note", "send_to_session",
-                    "spawn_session", "interrupt_session", "end_session", "run_ui_command",
-                    "type_into_session", "submit_session_composer", "create_project",
-                    "list_project_actions", "run_project_action",
+                    "session_detail",
+                    "read_transcript",
+                    "search_history",
+                    "read_project_note",
+                    "list_project_notes",
+                    "list_queue",
+                    "write_project_note",
+                    "send_to_session",
+                    "spawn_session",
+                    "interrupt_session",
+                    "end_session",
+                    "run_ui_command",
+                    "type_into_session",
+                    "submit_session_composer",
+                    "create_project",
+                    "list_project_actions",
+                    "run_project_action",
                 }
                 if name in known:
                     try:
@@ -4197,7 +4192,7 @@ class AssistantService:
                     except AssistantError as exc:
                         result = {"error": str(exc)[:500]}
                 else:
-                    result = {"error": f"unknown tool {name}"}
+                    result = {"error": ui_message("assistant.4360a1a661", value1=name)}
                 if result.get("pending_confirmation"):
                     if not result.get("duplicate"):
                         cards_opened += 1
@@ -4207,16 +4202,17 @@ class AssistantService:
                 # the card says everything the turn has to say.
                 suppress_speech = cards_opened == 1 and mutations_executed == 0
                 await self.events.emit(
-                    "assistant_tool_status", source="assistant",
-                    dialog_id=dialog_id, turn_id=turn_id, tool=name,
+                    "assistant_tool_status",
+                    source="assistant",
+                    dialog_id=dialog_id,
+                    turn_id=turn_id,
+                    tool=name,
                     status="failed" if result.get("error") else "done",
                 )
                 payload = json.dumps(result, ensure_ascii=False)
                 if len(payload) > MAX_TOOL_RESULT_CHARS:
                     payload = payload[:MAX_TOOL_RESULT_CHARS] + '… (truncated)"'
-                messages.append(
-                    {"role": "tool", "tool_call_id": call_ref, "content": payload}
-                )
+                messages.append({"role": "tool", "tool_call_id": call_ref, "content": payload})
             remaining = MAX_MODEL_CALLS_PER_TURN - step - 1
             if remaining <= 0:
                 # The model asked for more work and there is no round left to do
@@ -4238,7 +4234,11 @@ class AssistantService:
             log.warning(
                 "assistant turn exhausted its rounds dialog=%s turn=%s calls=%d "
                 "cards=%d mutations=%d",
-                dialog_id, turn_id, totals["calls"], cards_opened, mutations_executed,
+                dialog_id,
+                turn_id,
+                totals["calls"],
+                cards_opened,
+                mutations_executed,
             )
             # Deliberately not gated on `suppress_speech`: a turn that stopped
             # early is the one thing the operator must hear about, whatever else
@@ -4290,7 +4290,10 @@ class AssistantService:
             )
             log.info(
                 "assistant turn held dialog=%s turn=%s calls=%d cost=%.5f",
-                dialog_id, turn_id, totals["calls"], totals["cost_usd"],
+                dialog_id,
+                turn_id,
+                totals["calls"],
+                totals["cost_usd"],
             )
             self.diagnostic = None
             return
@@ -4317,11 +4320,21 @@ class AssistantService:
             "assistant turn complete dialog=%s turn=%s calls=%d in=%d cached=%d "
             "written=%d out=%d cost=%.5f discount=%s elapsed=%.0fms sentences=%d "
             "cards=%d mutations=%d suppressed=%s exhausted=%s",
-            dialog_id, turn_id, totals["calls"], totals["input_tokens"],
-            totals["cached_tokens"], totals["cache_write_tokens"], totals["output_tokens"],
-            totals["cost_usd"], totals["cache_discount_usd"], elapsed_ms,
-            sentence_index, cards_opened, mutations_executed,
-            suppress_speech, exhausted,
+            dialog_id,
+            turn_id,
+            totals["calls"],
+            totals["input_tokens"],
+            totals["cached_tokens"],
+            totals["cache_write_tokens"],
+            totals["output_tokens"],
+            totals["cost_usd"],
+            totals["cache_discount_usd"],
+            elapsed_ms,
+            sentence_index,
+            cards_opened,
+            mutations_executed,
+            suppress_speech,
+            exhausted,
         )
         self.diagnostic = None
         await self.events.emit(
@@ -4341,4 +4354,3 @@ class AssistantService:
             held=False,
             usage={**totals, "elapsed_ms": elapsed_ms},
         )
-

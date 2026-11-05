@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { useState } from 'preact/hooks'
 import { api } from './api'
 import { landRequestMessage } from './gitLand'
@@ -35,23 +36,20 @@ export function LandMessage({ requestId }: { requestId: string }) {
 
   const copy = async () => {
     try { await navigator.clipboard.writeText(body); setNote('Copied.') }
-    catch { setNote('Clipboard access was blocked. Select the text below and copy it.') }
+    catch { setNote(t("LandMessage.5f864edfd7")) }
   }
 
   return <details class="git-land-message" onToggle={event => {
     setNote('')
     if (event.currentTarget.open) void load()
   }}>
-    <summary>What the queue said</summary>
-    {state === 'loading' && <p class="git-state">Reading the trail…</p>}
-    {state === 'error' && <p class="git-state error">The trail could not be read.</p>}
-    {state === 'empty' && <p class="git-state">
-      This row predates the daemon recording what it said; the one-line reason above is
-      all of it.
-    </p>}
+    <summary>{t("LandMessage.aada2b06bf")}</summary>
+    {state === 'loading' && <p class="git-state">{t("LandMessage.bd28fafa32")}</p>}
+    {state === 'error' && <p class="git-state error">{t("LandMessage.7a1b30e004")}</p>}
+    {state === 'empty' && <p class="git-state">{t("LandMessage.16c6590eb0")}</p>}
     {body && <>
       <div>
-        <button onClick={() => void copy()}>Copy for an agent</button>
+        <button onClick={() => void copy()}>{t("LandMessage.372c550f57")}</button>
         {note && <small role="status">{note}</small>}
       </div>
       <pre class="git-land-source">{body}</pre>

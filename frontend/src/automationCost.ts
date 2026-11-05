@@ -1,3 +1,5 @@
+import { numberFormatter } from './localization/index.ts'
+import { t } from './localization/index.ts'
 /**
  * Formatting and the row model behind the automation dashboard's cost view.
  *
@@ -105,9 +107,9 @@ export type SpendRow = SpendRule & {
   callShare: number
 }
 
-const usd = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
-const integer = new Intl.NumberFormat()
-const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 })
+const usd = numberFormatter({ style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
+const integer = numberFormatter()
+const compact = numberFormatter({ notation: 'compact', maximumFractionDigits: 1 })
 
 /**
  * Currency at whatever precision the magnitude actually carries.
@@ -146,11 +148,11 @@ export function formatCount(value: number): string {
 export function formatDuration(seconds: number | null | undefined): string {
   const total = Math.round(Number(seconds) || 0)
   if (total <= 0) return '—'
-  if (total < 60) return `${total}s`
-  if (total < 3600) return `${Math.floor(total / 60)}m ${total % 60}s`
+  if (total < 60) return t("automationCost.c8168e554c", { total: total })
+  if (total < 3600) return t("automationCost.565fc0fdc0", { value1: Math.floor(total / 60), value2: total % 60 })
   const hours = Math.floor(total / 3600)
   const minutes = Math.round((total % 3600) / 60)
-  return minutes ? `${hours}h ${minutes}m` : `${hours}h`
+  return minutes ? t("automationCost.bbceabb1db", { value1: hours, value2: minutes }) : t("automationCost.9f42db020f", { value1: hours })
 }
 
 export const formatPercent = (fraction: number | null | undefined) =>
@@ -185,8 +187,8 @@ export function cacheHit(
 
 /** The cell's tooltip: the two exact figures the rounded percentage came from. */
 export const cacheHitDetail = (hit: CacheHit | null) =>
-  hit ? `${integer.format(hit.cached)} of ${integer.format(hit.prompt)} prompt tokens served from cache`
-      : 'no billed prompt tokens in this window'
+  hit ? t("automationCost.b0fe6c5a99", { value1: integer.format(hit.cached), value2: integer.format(hit.prompt) })
+      : t("automationCost.25f6511ac3")
 
 /** What caching did to the bill, as opposed to how often it hit. */
 export type CacheEconomics = {
@@ -244,16 +246,16 @@ export function cacheEconomics(
 
 /** The tile's second line: what the cache cost or saved, and how much it wrote. */
 export const cacheEconomicsDetail = (economics: CacheEconomics | null) => {
-  if (!economics) return 'this provider reports no cache figures'
-  const counts = `${integer.format(economics.written)} tokens written, `
+  if (!economics) return t("automationCost.e8db52698b")
+  const counts = t("automationCost.17bb1c530e", { value1: integer.format(economics.written) })
     + `${integer.format(economics.cached)} read`
-  if (economics.discount === null) return `${counts} · no published price for these models`
+  if (economics.discount === null) return t("automationCost.6cccd93223", { value1: counts })
   const money = economics.discount >= 0
     ? `${formatMoney(economics.discount)} saved`
-    : `${formatMoney(Math.abs(economics.discount))} of write premium not read back`
+    : t("automationCost.12c9d71bbd", { value1: formatMoney(Math.abs(economics.discount)) })
   const source = economics.source === 'derived'
-    ? ' (priced from the model catalog; providers report no discount on a completion)'
-    : ' (reported by the provider)'
+    ? t("automationCost.b1bec1cfa0")
+    : t("automationCost.8fda8b615b")
   return `${money}${source} · ${counts}`
 }
 

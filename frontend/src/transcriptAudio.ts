@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // Per-message read-aloud in the transcript reader: which reply has audio, in which
 // kind, and what a request for one more would cost.
 //
@@ -96,17 +97,17 @@ export function transcriptAudioClip(
  */
 export function transcriptAudioHint(state: TranscriptAudioState, kind: VoiceContent): string {
   const cost = kind === 'summary'
-    ? 'a spoken summary (one model call, against the daily read-aloud budget)'
-    : 'the reply read out verbatim (no model call)'
+    ? t("transcriptAudio.be888998ae")
+    : t("transcriptAudio.843ad6df8a")
   switch (state) {
     case 'ready':
-      return `Play ${kind === 'summary' ? 'the spoken summary' : 'the verbatim reading'} of this reply`
+      return t("transcriptAudio.1329a7471e", { value1: (kind === 'summary') ? 'yes' : 'no' })
     case 'generating':
-      return `Making ${cost}…`
+      return t("transcriptAudio.b259fdc5d0", { cost: cost })
     case 'failed':
-      return `Making ${cost} failed. Click to try again.`
+      return t("transcriptAudio.997dc60aaf", { cost: cost })
     case 'none':
-      return `Speak this reply as ${cost}`
+      return t("transcriptAudio.a7942a9c3c", { cost: cost })
   }
 }
 

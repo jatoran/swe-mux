@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { useRef, useState } from 'preact/hooks'
 import { useModalFocus } from './modalFocus'
 import { NetworkUsageView } from './NetworkUsageModal'
@@ -12,9 +13,9 @@ import { sessionDisplayName } from './sessionNames'
 export type ResourceSegment = 'processes' | 'network' | 'storage'
 
 const SEGMENTS: Array<{ id: ResourceSegment; label: string; title: string; heading: string }> = [
-  { id: 'processes', label: 'Processes', title: 'Every session, listener, and process tree swe-mux can see', heading: 'PROCESS::FLEET' },
-  { id: 'network', label: 'Network', title: 'Bandwidth for this daemon measurement window', heading: 'NETWORK::USAGE' },
-  { id: 'storage', label: 'Storage', title: 'Disk swe-mux uses, by area and by project', heading: 'STORAGE::USAGE' },
+  { id: 'processes', get label() { return t("ResourcesModal.4a81a7ba53") }, get title() { return t("ResourcesModal.622012a2e2") }, get heading() { return t("ResourcesModal.53a8531f6c") } },
+  { id: 'network', get label() { return t("ResourcesModal.1744b96470") }, get title() { return t("ResourcesModal.22e6c67239") }, get heading() { return t("ResourcesModal.d1fe5ce2d7") } },
+  { id: 'storage', get label() { return t("ResourcesModal.a69c4dece1") }, get title() { return t("ResourcesModal.364f41018a") }, get heading() { return t("ResourcesModal.8fe09b390c") } },
 ]
 
 type Props = {
@@ -48,26 +49,26 @@ export function ResourcesModal({
     : selectedSession
       ? `${projects.find(item => item.id === selectedSession.project_id)?.name || 'project'} :: ${sessionDisplayName(selectedSession)} · PID ${selectedSession.pid}`
       : scopedProject
-        ? `${scopedProject.name} - every session, listener, and process tree`
-        : 'All projects, sessions, and swe-mux infrastructure'
+        ? t("ResourcesModal.1d30a5997e", { value1: scopedProject.name })
+        : t("ResourcesModal.5c529ac006")
 
   return <div
     class={`usage-layer resources-layer resources-${segment}`}
     role="dialog"
     aria-modal="true"
-    aria-label="System"
+    aria-label={t("ResourcesModal.6725e7bbcd")}
     onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}
   >
     <section class="usage-panel resources-panel" ref={panel}>
       <header>
         <div>
-          {segment === 'processes' && selectedSessionId && <button class="process-back" onClick={() => setSelectedSessionId(null)}>← all processes</button>}
-          <span>{segment === 'processes' && selectedSessionId ? 'Session processes' : 'System'}</span>
+          {segment === 'processes' && selectedSessionId && <button class="process-back" onClick={() => setSelectedSessionId(null)}>{t("ResourcesModal.c5627818d2")}</button>}
+          <span>{segment === 'processes' && selectedSessionId ? t("ResourcesModal.5699139798") : t("ResourcesModal.6725e7bbcd")}</span>
           <strong>{subtitle}</strong>
         </div>
-        <div class="usage-header-actions"><button aria-label="Close system" onClick={onClose}>×</button></div>
+        <div class="usage-header-actions"><button aria-label={t("ResourcesModal.6a0b9d4290")} onClick={onClose}>×</button></div>
       </header>
-      <div class="segmented-tabs resources-segmented" role="tablist" aria-label="System sections">
+      <div class="segmented-tabs resources-segmented" role="tablist" aria-label={t("ResourcesModal.aea0b39532")}>
         {SEGMENTS.map(item => <button
           key={item.id}
           role="tab"

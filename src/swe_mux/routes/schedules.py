@@ -21,6 +21,7 @@ from ..schedule_store import ScheduleStore
 from ..scheduler import ScheduleService, spec_from_row
 from ..schedules import first_occurrence, next_occurrence, parse_spec
 from ..session_resume import resolve_latest_run
+from ..ui_messages import ui_message
 from .support import _observations_project
 
 log = logging.getLogger(__name__)
@@ -126,7 +127,7 @@ async def list_schedules(request: web.Request) -> web.Response:
     store: ScheduleStore = request.app[keys.SCHEDULE_STORE]
     project_id = request.query.get("project_id") or None
     if project_id and project_id not in request.app[keys.PROJECTS].projects:
-        raise ValueError(f"unknown project: {project_id}")
+        raise ValueError(ui_message("schedules.5b235e325f", value1=project_id))
     rows = await store.list_schedules(project_id)
     service = _schedule_service(request)
     return json_response(
@@ -197,7 +198,7 @@ async def patch_schedule(request: web.Request) -> web.Response:
     body = await request.json()
     revision = body.get("revision")
     if revision is not None and not isinstance(revision, int):
-        raise ValueError("revision must be an integer")
+        raise ValueError(ui_message("schedules.00d3952d5c"))
     now = time.time()
     if set(body) <= {"enabled", "revision"} and "enabled" in body:
         spec = spec_from_row(current)
@@ -221,7 +222,7 @@ async def patch_schedule(request: web.Request) -> web.Response:
         if updated is None:
             return json_response(
                 {
-                    "error": "this schedule changed elsewhere; re-read it and try again",
+                    "error": ui_message("schedules.de784dcebc"),
                     "code": "revision_conflict",
                 },
                 409,

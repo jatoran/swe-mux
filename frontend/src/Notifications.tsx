@@ -1,3 +1,5 @@
+import { locale as uiLocale } from './localization/index.ts'
+import { rich, t } from './localization/index.ts'
 // Notifications live in the utility drawer, not a modal: they are something you
 // glance at while working, and the modal made "check what fired" a full-screen
 // interruption. The list is unchanged; only its host moved.
@@ -79,11 +81,11 @@ function AwayReport() {
     finally{setBusy(false)}
   }
   return <details class="attention-away">
-    <summary>What happened while I was away?</summary>
-    <p>Summarizes attention items and run notes since your last terminal attach or input.</p>
-    <button disabled={busy} onClick={()=>void generate()}>{busy?'generating…':'generate away report'}</button>
-    {error&&<p class="usage-error">{error}</p>}
-    {report!==null&&<pre>{JSON.stringify(report,null,2)}</pre>}
+    <summary>{t("Notifications.115d86683f")}</summary>
+    <p>{t("Notifications.3c389905a7")}</p>
+    <button disabled={busy} onClick={()=>void generate()}>{busy ? t("Notifications.3b4317765a") : t("Notifications.9eabcfb2d6")}</button>
+    {error && <p class="usage-error">{error}</p>}
+    {report!==null && <pre>{JSON.stringify(report,null,2)}</pre>}
   </details>
 }
 
@@ -126,48 +128,46 @@ export function NotificationsTab({data,onOpenSession,onChanged,project}:{
         delivery channel — so the mute is stated here rather than silently explaining why
         nothing made a sound. The bell in the sidebar footer is the same switch; this link
         is for the device-class settings behind it. */}
-    {alertsMuted&&<CompactGrantFlag id="alerts.master"
-      heading="Notifications are off on this device."
-      consequence="Alerts are still recorded."
-      confirmLabel="Unmute alerts on this device"
+    {alertsMuted && <CompactGrantFlag id="alerts.master"
+      heading={t("Notifications.df2e86b570")}
+      consequence={t("Notifications.8713d6570d")}
+      confirmLabel={t("Notifications.3671c54cf8")}
       applyDevice={unmuteAlerts}
       onGranted={()=>setAlertsMuted(!alertPreferences().enabled)}/>}
-    <div class="alerts-view-tabs" role="tablist" aria-label="Alert urgency">
+    <div class="alerts-view-tabs" role="tablist" aria-label={t("Notifications.87b908c1bd")}>
       <button role="tab" aria-selected={view==='now'} class={view==='now'?'active':''}
-        title="Interrupt-worthy: actionable, worsening, and confident enough to spend attention budget"
-        onClick={()=>setView('now')}>Now</button>
+        title={t("Notifications.748d5d97d4")}
+        onClick={()=>setView('now')}>{t("Notifications.fe18013d93")}</button>
       <button role="tab" aria-selected={view==='review'} class={view==='review'?'active':''}
-        title="Relevant but not urgent: wait until the next natural pause or task change"
-        onClick={()=>setView('review')}>Review next</button>
+        title={t("Notifications.74a7d5078f")}
+        onClick={()=>setView('review')}>{t("Notifications.65e3a57008")}</button>
       <button role="tab" aria-selected={view==='history'} class={view==='history'?'active':''}
-        onClick={()=>setView('history')}>History</button>
+        onClick={()=>setView('history')}>{t("Notifications.0e76960093")}</button>
     </div>
-    {view==='now'&&<AttentionInbox onOpenSession={onOpenSession} project={project} visibleChannels={['interrupt_now']} />}
-    {view==='review'&&<AttentionInbox onOpenSession={onOpenSession} project={project} visibleChannels={['next_breakpoint','inbox','digest']} />}
-    {view==='history'&&<><AwayReport />
-    <h4 class="attention-raw-heading">Every record</h4>
-    <p class="drawer-status">{error||`${open.length} open · ${records.length-open.length} dismissed · ${items.length} delivered`}</p>
+    {view==='now' && <AttentionInbox onOpenSession={onOpenSession} project={project} visibleChannels={['interrupt_now']} />}
+    {view==='review' && <AttentionInbox onOpenSession={onOpenSession} project={project} visibleChannels={['next_breakpoint','inbox','digest']} />}
+    {view==='history' && <><AwayReport />
+    <h4 class="attention-raw-heading" data-heading-message="Notifications.f9ed7dc956">{t("Notifications.f9ed7dc956")}</h4>
+    <p class="drawer-status">{error || t("Notifications.609aac927b", { length: open.length, value2: records.length-open.length, value3: items.length })}</p>
     <div class="notification-list">
-      {automation.length===0&&items.length===0&&<p class="notification-empty">{showRead||!records.length
-        ?'No UI notifications yet. Universal hook notifications and attention records appear here.'
-        :'No open attention records. Show dismissed to review what fired earlier.'}</p>}
+      {automation.length===0&&items.length===0 && <p class="notification-empty">{showRead||!records.length ? t("Notifications.07334922dc") : t("Notifications.8c87f59936")}</p>}
       {automation.map(item=><article class={item.read_at?'dismissed':undefined}>
         <span class={`state-dot ${item.severity==='warning'?'awaiting':'idle'}`}/>
-        <div><strong>{item.title}</strong><span>{item.message}</span><small>{new Date(item.created_at*1000).toLocaleString()} · automation::{item.kind}</small></div>
+        <div><strong>{item.title}</strong><span>{item.message}</span><small>{rich("Notifications.1098e7cfd6", { value1: new Date(item.created_at*1000).toLocaleString(uiLocale.value), kind: item.kind })}</small></div>
         <div class="notification-row-actions">
-          {item.session_id&&<button onClick={()=>onOpenSession(item.session_id!)}>Open session</button>}
-          <button disabled={busy} onClick={()=>mark(item)}>{item.read_at?'Restore':'Dismiss'}</button>
+          {item.session_id && <button onClick={()=>onOpenSession(item.session_id!)}>{t("Notifications.b205bb47f8")}</button>}
+          <button disabled={busy} onClick={()=>mark(item)}>{item.read_at ? t("Notifications.a76e13b983") : t("Notifications.48845bff33")}</button>
         </div>
       </article>)}
       {items.map(item=>{const delivery=deliveries.get(item.delivery_id);return <article>
         <span class="state-dot idle" />
-        <div><strong>{item.session_name||'daemon'} · {item.type.replaceAll('_',' ')}</strong><span>{new Date(item.ts*1000).toLocaleString()} · {item.channel}</span><small>delivery::{delivery?.status||'delivered'} · attempts::{delivery?.attempts??1} · correlation::{delivery?.correlation_id||item.seq||'—'}</small></div>
-        {item.session_id&&<div class="notification-row-actions"><button onClick={()=>onOpenSession(item.session_id!)}>Open session</button></div>}
+        <div><strong>{item.session_name || t("Notifications.f77b12a53e")} · {item.type.replaceAll('_',' ')}</strong><span>{new Date(item.ts*1000).toLocaleString(uiLocale.value)} · {item.channel}</span><small>{rich("Notifications.c2c1603a3d", { value1: delivery?.status || t("Notifications.373e0712c8"), value2: delivery?.attempts ?? 1, value3: delivery?.correlation_id||item.seq || '—' })}</small></div>
+        {item.session_id && <div class="notification-row-actions"><button onClick={()=>onOpenSession(item.session_id!)}>{t("Notifications.b205bb47f8")}</button></div>}
       </article>})}
     </div>
     <div class="drawer-actions">
-      <button disabled={busy||!open.length} onClick={dismissAll}>dismiss all</button>
-      <button aria-pressed={showRead} onClick={()=>setShowRead(value=>!value)}>{showRead?'hide dismissed':'show dismissed'}</button>
+      <button disabled={busy||!open.length} onClick={dismissAll}>{t("Notifications.c4cb63656d")}</button>
+      <button aria-pressed={showRead} onClick={()=>setShowRead(value=>!value)}>{showRead ? t("Notifications.f10ed6e758") : t("Notifications.a76ea9d2af")}</button>
     </div></>}
   </>
 }

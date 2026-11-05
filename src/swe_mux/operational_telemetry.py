@@ -38,6 +38,7 @@ from .sqlite_store import (
     write_schema_version,
 )
 from .telemetry_cursor import AppendedRecords, ScanCursor, read_appended, resumed_cursor
+from .ui_messages import ui_message
 
 T = TypeVar("T")
 
@@ -592,13 +593,9 @@ class OperationalTelemetryStore(QuotaUsageMixin):
                 "attribution_source TEXT NOT NULL DEFAULT 'legacy'"
             )
         if "last_attributed_at" not in process_columns:
-            self._db.execute(
-                "ALTER TABLE process_evidence ADD COLUMN last_attributed_at REAL"
-            )
+            self._db.execute("ALTER TABLE process_evidence ADD COLUMN last_attributed_at REAL")
         if "last_job_confirmed_at" not in process_columns:
-            self._db.execute(
-                "ALTER TABLE process_evidence ADD COLUMN last_job_confirmed_at REAL"
-            )
+            self._db.execute("ALTER TABLE process_evidence ADD COLUMN last_job_confirmed_at REAL")
         # Schema 9: where the last transcript pass stopped, so the next one reads only
         # what was appended (`telemetry_cursor.py`). Existing rows have no cursor and
         # resume from the size their last whole-file read recorded.
@@ -1097,9 +1094,7 @@ class OperationalTelemetryStore(QuotaUsageMixin):
                     # rows to that stable identity and removes only siblings in
                     # the measured hook-to-append window. This repairs duplicate
                     # counts without discarding unrelated hook-only evidence.
-                    identity = (
-                        f"{row['id']}\0{row['backend']}\0{native_id}\0compaction"
-                    )
+                    identity = f"{row['id']}\0{row['backend']}\0{native_id}\0compaction"
                     event_id = hashlib.sha256(identity.encode()).hexdigest()
                     observed_at = float(item["observed_at"])
                     self._db.execute(
@@ -1194,9 +1189,7 @@ class OperationalTelemetryStore(QuotaUsageMixin):
                 session.record.compaction_capability = (
                     "explicit_native" if totals["compactions"] else None
                 )
-                session.record.compaction_confidence = (
-                    "high" if totals["compactions"] else None
-                )
+                session.record.compaction_confidence = "high" if totals["compactions"] else None
                 session.publish_update()
 
     def _name_results_from_earlier_passes(self, tool_items: list[dict[str, Any]]) -> None:
@@ -1877,9 +1870,9 @@ class OperationalTelemetryStore(QuotaUsageMixin):
         account slot changes owner.
         """
         if resolution not in {"raw", "daily"}:
-            raise ValueError("resolution must be raw or daily")
+            raise ValueError(ui_message("operational_telemetry.603459a9c6"))
         if until is not None and since is not None and until < since:
-            raise ValueError("until must not precede since")
+            raise ValueError(ui_message("operational_telemetry.39293d4704"))
         limit = max(1, min(limit, 3650 if resolution == "daily" else 2000))
         if resolution == "raw" and since is None:
             since = time.time() - 7 * 86400
@@ -1927,9 +1920,7 @@ class OperationalTelemetryStore(QuotaUsageMixin):
                 if until is not None:
                     rollup_filters.append("day<=?")
                     rollup_args.append(time.strftime("%Y-%m-%d", time.gmtime(until)))
-                rollup_where = (
-                    " WHERE " + " AND ".join(rollup_filters) if rollup_filters else ""
-                )
+                rollup_where = " WHERE " + " AND ".join(rollup_filters) if rollup_filters else ""
                 points: dict[tuple[str, str, str, str], dict[str, Any]] = {}
                 for row in self._db.execute(
                     f"SELECT * FROM quota_sample_rollups{rollup_where}",  # noqa: S608
@@ -2164,9 +2155,9 @@ class OperationalTelemetryStore(QuotaUsageMixin):
         fact, so dismissing it at the desk has to silence the phone too.
         """
         if resolution not in {"seen", "manual_usage", "discarded"}:
-            raise ValueError("resolution must be seen, manual_usage or discarded")
+            raise ValueError(ui_message("operational_telemetry.df0e3541f5"))
         if not reset_ids:
-            raise ValueError("at least one reset id is required")
+            raise ValueError(ui_message("operational_telemetry.3a955282af"))
 
         def op() -> list[dict[str, Any]]:
             # Validate the whole group first: a half-applied review would leave the
@@ -2178,7 +2169,7 @@ class OperationalTelemetryStore(QuotaUsageMixin):
                 if row is None:
                     raise NotFound(reset_id, kind="quota reset")
                 if resolution == "manual_usage" and row["provider"] != "codex":
-                    raise ValueError("manual_usage is only valid for Codex quota evidence")
+                    raise ValueError(ui_message("operational_telemetry.a67716b810"))
             reviewed_at = time.time()
             self._db.executemany(
                 "UPDATE quota_reset_events SET review_status=?,reviewed_at=? WHERE id=?",
@@ -2224,11 +2215,13 @@ class OperationalTelemetryStore(QuotaUsageMixin):
         }
         for name, (value, limit) in bounded.items():
             if not value or len(value) > limit:
-                raise ValueError(f"{name} must contain 1-{limit} characters")
+                raise ValueError(
+                    ui_message("operational_telemetry.605adb3d45", value1=name, value2=limit)
+                )
         if profile not in {None, "desktop", "mobile"}:
-            raise ValueError("profile must be desktop, mobile, or null")
+            raise ValueError(ui_message("operational_telemetry.e6c9988421"))
         if reason is not None and (not reason or len(reason) > 64):
-            raise ValueError("reason must contain 1-64 characters when present")
+            raise ValueError(ui_message("operational_telemetry.b78c7c649e"))
         recorded_at = time.time() if decided_at is None else decided_at
 
         def op() -> None:
@@ -2265,7 +2258,7 @@ class OperationalTelemetryStore(QuotaUsageMixin):
 
         end = time.time() if until is None else until
         if not math.isfinite(since) or not math.isfinite(end) or since >= end:
-            raise ValueError("notification summary requires a finite, increasing time range")
+            raise ValueError(ui_message("operational_telemetry.254bce1a9a"))
 
         def op() -> dict[str, Any]:
             totals = self._db.execute(
@@ -2420,7 +2413,7 @@ class OperationalTelemetryStore(QuotaUsageMixin):
         started_at = float(record.get("started_at") or time.time())
         duration = float(record.get("duration_seconds") or 0.0)
         if duration <= 0:
-            raise ValueError("duration_seconds must be positive")
+            raise ValueError(ui_message("operational_telemetry.8642daaa34"))
         main_frames = [str(frame) for frame in list(record.get("main_thread") or [])[:40]]
         busy = [
             {
@@ -2818,9 +2811,7 @@ def reduce_native_records(
                 compaction_id = str(record.get("id") or f"line-{index}")
                 compactions.append(
                     {
-                        "source_identity": (
-                            f"native:{session_id}:compaction:{compaction_id}"
-                        ),
+                        "source_identity": (f"native:{session_id}:compaction:{compaction_id}"),
                         "compaction_id": compaction_id,
                         "observed_at": when,
                     }
@@ -2841,9 +2832,7 @@ def reduce_native_records(
                     if not isinstance(block, dict) or block.get("type") != "toolCall":
                         continue
                     call_id = str(
-                        block.get("id")
-                        or block.get("toolCallId")
-                        or f"line-{index}-{block_index}"
+                        block.get("id") or block.get("toolCallId") or f"line-{index}-{block_index}"
                     )
                     name = str(block.get("name") or "tool")
                     names[call_id] = name
@@ -2857,9 +2846,7 @@ def reduce_native_records(
                     )
                     tools.append(
                         {
-                            "source_identity": (
-                                f"native:{session_id}:tool_use:{call_id}"
-                            ),
+                            "source_identity": (f"native:{session_id}:tool_use:{call_id}"),
                             "observed_at": when,
                             "kind": "tool_use",
                             "raw_tool": name,
@@ -2871,9 +2858,7 @@ def reduce_native_records(
                 name = names.get(call_id, str(omp_message.get("toolName") or "tool"))
                 tools.append(
                     {
-                        "source_identity": (
-                            f"native:{session_id}:tool_result:{call_id}"
-                        ),
+                        "source_identity": (f"native:{session_id}:tool_result:{call_id}"),
                         "observed_at": when,
                         "kind": "tool_result",
                         "raw_tool": name,

@@ -22,6 +22,8 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from .ui_messages import ui_message
+
 #: How long to wait for pywebview to build its WebView2 control. It is created inside
 #: `webview.start()`, and a cold runtime on a loaded machine has taken several seconds.
 CONTROL_WAIT_SECONDS = 60.0
@@ -48,7 +50,7 @@ def await_webview_control(
 def on_ui_thread(form: Any, work: Callable[[], None], *, wait: bool) -> None:
     """Run `work` on the WinForms message loop, or raise if there is no loop yet."""
     if not getattr(form, "IsHandleCreated", True):
-        raise RuntimeError("the WebView2 host window has no handle yet")
+        raise RuntimeError(ui_message("desktop_webview.b8f0f9e2ef"))
     if not getattr(form, "InvokeRequired", False):
         work()
         return

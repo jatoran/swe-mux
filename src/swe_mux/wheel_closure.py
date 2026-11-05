@@ -53,6 +53,7 @@ from typing import Any, Protocol
 import aiohttp
 
 from .tls_trust import trusting_connector
+from .ui_messages import ui_message
 from .voice_models import ProgressCallback, report_progress
 
 log = logging.getLogger(__name__)
@@ -257,9 +258,7 @@ class WheelClosureStore:
                 state = {"status": "not_downloaded"}
             else:
                 status = "error"
-                state.setdefault(
-                    "error", self._interrupted_reason(str(state.get("status") or ""))
-                )
+                state.setdefault("error", self._interrupted_reason(str(state.get("status") or "")))
         return {
             "status": status,
             "source": None,
@@ -293,10 +292,7 @@ class WheelClosureStore:
             )
         if recorded == "ready":
             return "the unpacked closure is gone; press Download again"
-        return (
-            "the daemon restarted while the download was running; press Download "
-            "again"
-        )
+        return "the daemon restarted while the download was running; press Download again"
 
     # ---- download ----------------------------------------------------------
 
@@ -372,15 +368,13 @@ class WheelClosureStore:
                 {
                     "status": "error",
                     "closure": self.spec.digest,
-                    "error": "the download was cancelled",
+                    "error": ui_message("wheel_closure.b1279fd2e6"),
                 }
             )
             raise
         except (ClosureAcquisitionError, aiohttp.ClientError, OSError, TimeoutError) as exc:
             message = str(exc)[:400] or exc.__class__.__name__
-            self._write_state(
-                {"status": "error", "closure": self.spec.digest, "error": message}
-            )
+            self._write_state({"status": "error", "closure": self.spec.digest, "error": message})
             log.warning("%s download failed: %s", self.spec.label, message)
         except Exception as exc:  # noqa: BLE001 - a defect here must not read as a transfer failure
             # The clause above names what goes wrong when fetching a closure over
@@ -392,7 +386,7 @@ class WheelClosureStore:
                 {
                     "status": "error",
                     "closure": self.spec.digest,
-                    "error": f"the acquisition failed unexpectedly ({message})",
+                    "error": ui_message("wheel_closure.4ec60df686", value1=message),
                     "crashed": True,
                 }
             )
@@ -415,8 +409,7 @@ class WheelClosureStore:
             async with session.get(item.url, allow_redirects=True) as response:
                 if response.status != 200:
                     raise ClosureAcquisitionError(
-                        f"the package index returned HTTP {response.status} for "
-                        f"{item.filename}"
+                        f"the package index returned HTTP {response.status} for {item.filename}"
                     )
                 with temporary.open("wb") as sink:
                     async for chunk in response.content.iter_chunked(DOWNLOAD_CHUNK):
@@ -461,9 +454,7 @@ class WheelClosureStore:
                 _extract_wheel(cache / item.filename, staging)
         verify_relinkable(staging, self.spec.relinkable_lgpl)
         missing = [
-            name
-            for name in self.spec.required_modules
-            if not _package_present(staging, name)
+            name for name in self.spec.required_modules if not _package_present(staging, name)
         ]
         if missing:
             raise ClosureAcquisitionError(
@@ -573,11 +564,7 @@ def _extract_sdist(archive_path: Path, staging: Path, distribution: str) -> None
                 "extract; an sdist that needs building is refused - pin a wheel "
                 "for this distribution or drop it from the closure"
             )
-        built = [
-            member.name
-            for member in wanted
-            if member.name.endswith(_BUILD_REQUIRED_SUFFIXES)
-        ]
+        built = [member.name for member in wanted if member.name.endswith(_BUILD_REQUIRED_SUFFIXES)]
         if built:
             raise ClosureAcquisitionError(
                 f"{archive_path.name} contains sources that need building "

@@ -6,6 +6,13 @@ The Project-first browser shell around the mixed-view workspace: persistent app 
 active-Project navigation, provider/resource status, viewport overlays, settings, focus, and
 responsive controls.
 
+## Language
+
+Application text comes from the English and Simplified Chinese catalogs.
+Settings → General and the setup flow share a saved language preference.
+Changing language updates mounted UI while retaining terminal and editor state.
+See [UI localization](localization.md) for the rendering and identity boundaries.
+
 ## Desktop chrome and sidebar
 
 - Scrollable surfaces share one compact scrollbar treatment: a 7 px interaction gutter with

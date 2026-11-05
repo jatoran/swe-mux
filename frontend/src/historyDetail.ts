@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // The single-session History view's section model: which sections start open, what each
 // one says while it is closed, and how the behavioural timeline is cut down to a preview.
 //
@@ -74,7 +75,7 @@ export function splitRecentScans<T extends { t0?: number | null }>(
 
 /** `n items` with the singular spelled out, for a closed section's summary line. */
 export function countLabel(count: number, noun: string, plural = `${noun}s`): string {
-  return `${count} ${count === 1 ? noun : plural}`
+  return t("historyDetail.de79ddabe3", { count: count, value2: count === 1 ? noun : plural })
 }
 
 export type HistoryCommitLike = { commitOid: string; subject?: string; observedAt?: number }
@@ -91,10 +92,10 @@ export function commitsSummary(
   commits: readonly HistoryCommitLike[],
   shortSha: (oid: string) => string,
 ): string {
-  if (!commits.length) return 'no commits'
+  if (!commits.length) return t("historyDetail.45f8b47dd1")
   const newest = commits.reduce((best, item) => ((item.observedAt || 0) > (best.observedAt || 0) ? item : best))
   const subject = (newest.subject || '').trim()
-  return `${countLabel(commits.length, 'commit')} · latest ${shortSha(newest.commitOid)}${subject ? ` ${subject}` : ''}`
+  return t("historyDetail.74049ea4c8", { value1: countLabel(commits.length, 'commit'), value2: shortSha(newest.commitOid), value3: subject ? ` ${subject}` : '' })
 }
 
 export type HistoryStatSource = {
@@ -104,7 +105,7 @@ export type HistoryStatSource = {
 
 /** How the final conversational message is attributed, in the app's own words. */
 export function speakerLabel(role?: 'user' | 'assistant' | null): string {
-  return role === 'assistant' ? 'agent' : role === 'user' ? 'you' : 'message'
+  return role === 'assistant' ? t("historyDetail.d4f0bc5a29") : role === 'user' ? t("historyDetail.bb0347a468") : t("historyDetail.ab530a13e4")
 }
 
 /**
@@ -125,9 +126,9 @@ export function historyKeyStats(
   format: { timestamp: (value?: number | null) => string; money: (value: number) => string },
 ): { label: string; value: string; model?: boolean }[] {
   return [
-    { label: 'state', value: entry.exit_reason || entry.final_state || 'indexed' },
-    { label: 'model', value: entry.model || '', model: true },
-    { label: `last ${speakerLabel(entry.last_message_role)}`, value: format.timestamp(entry.last_message_at) },
-    { label: 'cost', value: format.money(entry.cost_usd || 0) },
+    { get label() { return t("historyDetail.4ba69735ca") }, value: entry.exit_reason || entry.final_state || 'indexed' },
+    { get label() { return t("historyDetail.9372c470ee") }, value: entry.model || '', model: true },
+    { get label() { return t("historyDetail.79991af244", { value1: speakerLabel(entry.last_message_role) }) }, value: format.timestamp(entry.last_message_at) },
+    { get label() { return t("historyDetail.9f82f7b375") }, value: format.money(entry.cost_usd || 0) },
   ]
 }

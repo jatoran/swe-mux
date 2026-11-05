@@ -63,6 +63,7 @@ from .terminal_gateway import (
     read_discovery,
 )
 from .terminal_placement import TerminalPlacement
+from .ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -360,14 +361,12 @@ class GatewayHost:
         if quit:
             identity = _identity(gateway) if gateway is not None else None
             if identity is not None:
-                await self._end(identity, reason="the daemon is quitting")
+                await self._end(identity, reason=ui_message("gateway_host.98a035b07f"))
             elif process is not None and process.poll() is None:
                 # Started and cancelled before it announced itself: nothing else
                 # knows it exists.
                 await asyncio.to_thread(_kill_process, process)
-            await asyncio.to_thread(
-                ledger, self.data_dir, f"terminal_gateway quit pid={self.pid}"
-            )
+            await asyncio.to_thread(ledger, self.data_dir, f"terminal_gateway quit pid={self.pid}")
         else:
             log.info(
                 "detached from terminal gateway pid %s; it keeps carrying terminals",
@@ -648,8 +647,7 @@ class GatewayHost:
             return None
         if record["protocol"] != GATEWAY_PROTOCOL_VERSION:
             return (
-                f"it speaks protocol {record['protocol']}, this daemon "
-                f"{GATEWAY_PROTOCOL_VERSION}"
+                f"it speaks protocol {record['protocol']}, this daemon {GATEWAY_PROTOCOL_VERSION}"
             )
         if record["build_id"] != self.build_id:
             return f"it runs build {record['build_id']}, this daemon {self.build_id}"
@@ -675,7 +673,7 @@ class GatewayHost:
         await _ask_to_quit(record, record)
         identity = _identity(record)
         if identity is None:
-            raise RuntimeError(f"terminal gateway pid {record['pid']} has no process identity")
+            raise RuntimeError(ui_message("gateway_host.c591563921", value1=record["pid"]))
         await self._end(identity, reason=reason)
         if self.holder is not None and _holder(record) == self.holder:
             self._take_back_all(f"terminal gateway pid {record['pid']} was replaced: {reason}")
@@ -693,7 +691,7 @@ class GatewayHost:
         )
         await asyncio.to_thread(_terminate, identity)
         if not await _wait_gone(identity, TERMINATE_GRACE_SECONDS):
-            raise RuntimeError(f"terminal gateway pid {identity[0]} could not be stopped")
+            raise RuntimeError(ui_message("gateway_host.a65b44e43c", value1=identity[0]))
 
     async def _spawn_and_wait(self) -> dict[str, Any]:
         hosts = list(await self._hosts())
@@ -726,15 +724,11 @@ class GatewayHost:
                         if reason is None:
                             return found
                         await self._replace(found, reason)
-                    raise RuntimeError("another terminal gateway holds this data directory")
+                    raise RuntimeError(ui_message("gateway_host.dd90c93c1a"))
                 if code == EXIT_BIND:
-                    raise RuntimeError(
-                        f"the terminal gateway could not listen on port {self.port} "
-                        "(see terminal-gateway.log)"
-                    )
+                    raise RuntimeError(ui_message("gateway_host.715e219d82", value1=self.port))
                 raise RuntimeError(
-                    f"the terminal gateway exited with code {code} before announcing itself "
-                    f"(see {CONSOLE_LOG_NAME})"
+                    ui_message("gateway_host.2cbac10f3c", value1=code, value2=CONSOLE_LOG_NAME)
                 )
             if time.monotonic() >= deadline:
                 await asyncio.to_thread(_kill_process, process)

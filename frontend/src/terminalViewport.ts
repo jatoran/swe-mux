@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { appTailReset, appliesWidthEnvelope, composerNewline, minDesktopColumns, ownsScrollViewport, pasteLeadingNewlineSubmits } from './harnessRegistry.ts'
 
 type TerminalDimensions = { cols: number; rows: number; refresh: (start: number, end: number) => void }
@@ -44,7 +45,7 @@ export type ClaudeMaxColumns = (typeof CLAUDE_MAX_COLUMN_STEPS)[number]
 export const DEFAULT_CLAUDE_MAX_COLUMNS: ClaudeMaxColumns = 120
 
 export const claudeMaxColumnsLabel = (columns: ClaudeMaxColumns): string =>
-  columns === CLAUDE_MAX_COLUMNS_OFF ? 'No limit' : `${columns} columns`
+  columns === CLAUDE_MAX_COLUMNS_OFF ? t("terminalViewport.f7fcff0d8f") : t("terminalViewport.e39734b735", { value1: columns })
 
 /**
  * A config value as a known step, falling back to the default for anything else -

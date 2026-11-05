@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 /**
  * One shared, self-refreshing copy of a Project's `.swe-mux/config.toml`.
  *
@@ -94,7 +95,7 @@ export function useProjectConfig(project: ConfigProject | null): ProjectConfigSt
 
   const commit = useCallback(async (changes: ProjectConfigChanges) => {
     const current = held.current
-    if (!current) throw new Error('This Project’s .swe-mux/config.toml has not been read yet.')
+    if (!current) throw new Error(t("projectConfigState.5bdb9c7aa1"))
     const ticket = ++issued.current
     // `undefined` is not a JSON value, so a removal expressed that way would
     // serialize to nothing at all and read as "change no fields".

@@ -1,3 +1,4 @@
+import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
 import { Editor, type ContinuityEditorElement, type ContinuityViewportDetail, type RailAction } from '@continuity-editor/editor'
@@ -315,7 +316,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   const loadText=async(staleReads=0):Promise<boolean>=>{
     if(resource.kind==='files')return true
     const requestGeneration=isNote?++noteLoadGeneration.current:0
-    setStatus('loading');setError('')
+    setStatus(t("ProjectResource.b4a070a2d3"));setError('')
     const path=isNote
       ?noteEndpoint
       :`/api/projects/${project.id}/file?${fileQuery()}`
@@ -364,7 +365,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       return true
     }catch(cause){
       if(isNote&&requestGeneration!==noteLoadGeneration.current)return true
-      setError(cause instanceof Error?cause.message:String(cause));setStatus('error')
+      setError(cause instanceof Error?cause.message:String(cause));setStatus(t("ProjectResource.ca00fccfb4"))
       return false
     }
   }
@@ -503,7 +504,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     }catch(cause){
       if(generation!==recentGeneration.current)return
       setError(cause instanceof Error?cause.message:String(cause))
-      setRecent({items:[],available:false,reason:'Recent files could not be read.'})
+      setRecent({items:[],available:false,get reason() { return t("ProjectResource.d365afc178") }})
     }finally{
       if(generation===recentGeneration.current)setRecentLoading(false)
     }
@@ -631,7 +632,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
         // out-of-band edit surfaces as a 409 conflict banner on the next save.
         if(isMarkdownFile)return
         if(textRef.current===baselineRef.current)void loadText()
-        else setError('File changed externally while this tab has unsaved edits.')
+        else setError(t("ProjectResource.4064e34a17"))
       }
     }
     window.addEventListener('mux:project-files-changed',changed)
@@ -649,7 +650,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       if(!sameScope||detail.kind!==resource.kind||detail.noteId!==resource.id)return
       if(detail.revision==='missing'&&noteSaveQueue.canFollowRemote(noteKey,detail.revision)){
         noteLoadGeneration.current++
-        setRevision('missing');setText('');setBaseline('');setStatus('deleted');setSaveState('idle');setError('')
+        setRevision('missing');setText('');setBaseline('');setStatus(t("ProjectResource.1185f37d33"));setSaveState('idle');setError('')
         noteSaveQueue.reset(noteKey,saveTarget(),'missing','')
         setLoadGeneration(generation=>generation+1)
         loadedOnce.current=true
@@ -681,7 +682,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   // touch the same action is registered on Continuity's own rail, where a tap keeps the soft
   // keyboard and the selection where they are.
   const editorElement=useRef<ContinuityEditorElement|null>(null)
-  const sourceLabel=isGlobalNote?`global note (${noteTitle})`:resource.kind==='note'?`note (${noteTitle}, ${project.name})`:resource.id
+  const sourceLabel=isGlobalNote?t("ProjectResource.05dc8e2267", { value1: noteTitle }):resource.kind==='note'?`note (${noteTitle}, ${project.name})`:resource.id
   const requestSendToAgent=()=>{
     if(!onSendToAgent)return
     let snapshot:EditorSnapshot|null=null
@@ -690,7 +691,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     // An empty selection is not an error: the whole document is the useful fallback, and the
     // dialog says which of the two it is about to send.
     const body=selected||snapshot?.text||textRef.current
-    if(!body.trim()){setError('There is nothing to send yet.');return}
+    if(!body.trim()){setError(t("ProjectResource.86650d62f9"));return}
     const scope=selected?'selection':'document'
     const slice=truncateForClipboard(body,sourceLabel)
     // Only an actual note selection can be consumed. Whole documents and file selections stay
@@ -700,13 +701,13 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       if(element){
         try{
           if(element.snapshot().text!==snapshot.text){
-            setError('The selection was sent, but the note changed before it could be removed.')
+            setError(t("ProjectResource.c8558a4daf"))
             return
           }
           element.setSelections(snapshot.selections)
-          if(!element.insertText(''))setError('The selection was sent, but it could not be removed from the note.')
+          if(!element.insertText(''))setError(t("ProjectResource.5191cd22a9"))
         }catch{
-          setError('The selection was sent, but it could not be removed from the note.')
+          setError(t("ProjectResource.5191cd22a9"))
         }
         return
       }
@@ -849,7 +850,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   const [outline,setOutline]=useState<readonly OutlineHeading[]>([])
   const outlinePanel=useRef<HTMLDivElement>(null)
   const outlineTrigger=useRef<HTMLButtonElement>(null)
-  const outlineDepthList=useMemo(()=>outlineDepths(outline),[outline])
+  const outlineDepthList=useMemo(()=>outlineDepths(outline), [outline, uiLocale.value, catalogRevision.value])
   /** First visible source line, from Continuity 0.2.20's viewport window. */
   const [viewportLine,setViewportLine]=useState(0)
 
@@ -882,8 +883,8 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   },[])
   const outlineChord=chordHint('note.outline',keymap)
   const peekChord=chordHint('note.outlinePeek',keymap)
-  const outlineTitle=`Jump to a heading${outlineChord?` (${outlineChord})`:''}`
-    +` · ${peekMode?'pinned':'click to open'}, Ctrl+click to ${peekMode?'unpin':'pin'} as an overlay`
+  const outlineTitle=t("ProjectResource.1f82bebacd", { value1: outlineChord?` (${outlineChord})`:'' })
+    +t("ProjectResource.1b8d4f0e8a", { value1: (peekMode) ? 'yes' : 'no', value2: (peekMode) ? 'yes' : 'no' })
     +(peekChord?` (${peekChord})`:'')
 
   /** Re-read the note and rebuild the list. Cheap enough to redo on every change while open. */
@@ -939,9 +940,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
    * means for a reader, and it is what the trail below already reads.
    */
   const outlineAt=useMemo(
-    ()=>headingIndexAt(outline,{line:viewportLine,byteInLine:0}),
-    [outline,viewportLine],
-  )
+    ()=>headingIndexAt(outline,{line:viewportLine,byteInLine:0}), [outline, viewportLine, uiLocale.value, catalogRevision.value])
   /**
    * The heading chain over the reading position, outermost first.
    *
@@ -953,7 +952,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   const trail=useMemo(()=>{
     if(outlineAt<0)return []
     return headingTrail(outline,outlineAt).filter(heading=>heading.line<viewportLine)
-  },[outline,outlineAt,viewportLine])
+  }, [outline, outlineAt, viewportLine, uiLocale.value, catalogRevision.value])
   /** The four editor calls `scrollLineIntoView` drives, over the live element. */
   const editorScroller=(element:ContinuityEditorElement):ViewportScroller=>({
     window:()=>element.visibleLineRange(),
@@ -1010,8 +1009,8 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       class={index===outlineAt?'current':''}
       style={{paddingLeft:`${8+outlineDepthList[index]*13}px`}}
       onClick={()=>jumpToHeading(heading)}>
-      <span>H{heading.level}</span>
-      <strong>{heading.text||'(untitled)'}</strong>
+      <span>{rich("ProjectResource.d9d44f27b1", { level: heading.level })}</span>
+      <strong>{heading.text || t("ProjectResource.3bc7cc17b7")}</strong>
     </button>
 
   // Keep the list honest while the panel is open, and dismiss it the way the tree menu does.
@@ -1172,17 +1171,17 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     const actions:RailAction[]=[]
     if(onSendToAgent)actions.push({
       id:'mux:send-to-agent',
-      label:'Send to an agent session',
+      get label() { return t("ProjectResource.1909a1d3b2") },
       glyph:'→',
       run:()=>sendRef.current(),
     })
     // On touch there is no Ctrl+F and no menu bar, so the rail is the only way in.
-    actions.push({id:'mux:find',label:'Find in this note',glyph:'⌕',run:()=>findRef.current()})
+    actions.push({id:'mux:find',get label() { return t("ProjectResource.4bff5483c6") },glyph:'⌕',run:()=>findRef.current()})
     // Long notes are mostly read on the phone, where the header is too cramped to spare a
     // second button; the rail puts the outline under the thumb instead.
-    actions.push({id:'mux:outline',label:'Jump to a heading',glyph:'☰',run:()=>outlineRef.current()})
+    actions.push({id:'mux:outline',get label() { return t("ProjectResource.5322c1e3ef") },glyph:'☰',run:()=>outlineRef.current()})
     return actions
-  },[!!onSendToAgent])
+  }, [!!onSendToAgent, uiLocale.value, catalogRevision.value])
 
   const editable=status==='ready'||status==='missing'
   const isDelimitedFile=isFile&&presentation?.kind==='delimited'
@@ -1305,7 +1304,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
    */
   const openRow=(path:string,event:JSX.TargetedMouseEvent<HTMLElement>)=>
     runTreeClick(()=>onOpenFile(path,event.ctrlKey||event.metaKey?'pane':'default'))
-  const ROW_HINT='ctrl/cmd-click for a pane · right-click or long-press for actions'
+  const ROW_HINT=t("ProjectResource.2628aa5f5c")
 
   useEffect(()=>()=>cancelTreeLongPress(),[])
 
@@ -1355,7 +1354,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       await loadDirectory(created.parent)
       if(created.kind==='directory'&&!created.hidden)await loadDirectory(created.path)
       setCreatePrompt(null);setCreateError('')
-      if(created.hidden)setError(`${created.path} was created, but it is hidden by the current ignore rules.`)
+      if(created.hidden)setError(t("ProjectResource.1f89a5703f", { path: created.path }))
       else showNotice(`Created ${created.kind==='directory'?'folder':'file'} ${created.path}`)
       if(created.kind==='file')onOpenFile(created.path)
     }catch(cause){setCreateError(cause instanceof Error?cause.message:String(cause))}
@@ -1371,14 +1370,14 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       setPendingCopy(null);setError('');showNotice(summary);return true
     }
     setPendingCopy(text)
-    setError('Clipboard write was blocked. Copy the prepared text below.')
+    setError(t("ProjectResource.7019a1b999"))
     return false
   }
 
   const copyPath=async(item:DirectoryItem,form:'absolute'|'relative')=>{
     setTreeMenu(null)
     const path=form==='absolute'?absoluteProjectPath(project.root,item.path):item.path
-    await writeClipboard(path,`Copied ${form} path`)
+    await writeClipboard(path,t("ProjectResource.e120d687da", { value1: form }))
   }
 
   // Contents are fetched rather than read from any open editor draft: the tree menu can target
@@ -1387,8 +1386,8 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     setTreeMenu(null)
     try{
       const payload=await api<FilePayload>('GET',`/api/projects/${project.id}/file?path=${encodeURIComponent(item.path)}`)
-      if(payload.status==='too-large'){setError(`${item.name} is above the 2 MiB read limit and cannot be copied.`);return}
-      if(payload.status==='binary'||payload.text===undefined){setError(`${item.name} is not text, so there is nothing to copy.`);return}
+      if(payload.status==='too-large'){setError(t("ProjectResource.36879e4a43", { name: item.name }));return}
+      if(payload.status==='binary'||payload.text===undefined){setError(t("ProjectResource.5d07f94607", { name: item.name }));return}
       const slice=truncateForClipboard(payload.text,item.path)
       await writeClipboard(slice.text,copySummary(slice))
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
@@ -1401,8 +1400,8 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     if(!onSendToAgent)return
     try{
       const payload=await api<FilePayload>('GET',`/api/projects/${project.id}/file?path=${encodeURIComponent(item.path)}`)
-      if(payload.status==='too-large'){setError(`${item.name} is above the 2 MiB read limit and cannot be sent.`);return}
-      if(payload.status==='binary'||payload.text===undefined){setError(`${item.name} is not text, so there is nothing to send.`);return}
+      if(payload.status==='too-large'){setError(t("ProjectResource.e906e53eb7", { name: item.name }));return}
+      if(payload.status==='binary'||payload.text===undefined){setError(t("ProjectResource.9444f1a6bb", { name: item.name }));return}
       const slice=truncateForClipboard(payload.text,item.path)
       onSendToAgent({
         projectId:project.id,
@@ -1429,16 +1428,16 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   // break by silently matching nothing.
   const tree=(folder:string,depth=0)=>{
     const directory=directories[folder]
-    if(!directory)return expanded.has(folder)?<p class="file-tree-loading" style={{paddingLeft:`${12+depth*15}px`}}>loading…</p>:null
+    if(!directory)return expanded.has(folder)?<p class="file-tree-loading" style={{paddingLeft:`${12+depth*15}px`}}>{t("ProjectResource.fbc6d752fe")}</p>:null
     return <>{directory.items.map(item=>item.kind==='directory'?<div class="file-tree-branch" key={item.path}>
-      <button class="file-tree-row directory" data-file-path={item.path} style={{paddingLeft:`${9+depth*15}px`}} title="Open folder · right-click or long-press for actions" onPointerDown={event=>beginTreePress(item,event)} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onClick={()=>runTreeClick(()=>toggleDirectory(item.path))} onContextMenu={event=>openTreeMenu(item,event)} aria-expanded={expanded.has(item.path)}><span>{expanded.has(item.path)?'▾':'▸'}</span><strong>{item.name}/</strong></button>
-      {expanded.has(item.path)&&tree(item.path,depth+1)}
-    </div>:<button class="file-tree-row file" key={item.path} data-file-path={item.path} style={{paddingLeft:`${9+depth*15}px`}} title={`Open file · ${ROW_HINT}`} onPointerDown={event=>beginTreePress(item,event)} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onClick={event=>openRow(item.path,event)} onContextMenu={event=>openTreeMenu(item,event)}><span>·</span><strong>{item.name}</strong></button>)}{directory.truncated&&<p class="file-tree-loading" style={{paddingLeft:`${12+depth*15}px`}}>Showing the first 2,000 entries.</p>}</>
+      <button class="file-tree-row directory" data-file-path={item.path} style={{paddingLeft:`${9+depth*15}px`}} title={t("ProjectResource.573559e862")} onPointerDown={event=>beginTreePress(item,event)} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onClick={()=>runTreeClick(()=>toggleDirectory(item.path))} onContextMenu={event=>openTreeMenu(item,event)} aria-expanded={expanded.has(item.path)}><span>{expanded.has(item.path) ? '▾' : '▸'}</span><strong>{item.name}/</strong></button>
+      {expanded.has(item.path) && tree(item.path,depth+1)}
+    </div>:<button class="file-tree-row file" key={item.path} data-file-path={item.path} style={{paddingLeft:`${9+depth*15}px`}} title={t("ProjectResource.a11cb34f46", { ROW_HINT: ROW_HINT })} onPointerDown={event=>beginTreePress(item,event)} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onClick={event=>openRow(item.path,event)} onContextMenu={event=>openTreeMenu(item,event)}><span>·</span><strong>{item.name}</strong></button>)}{directory.truncated && <p class="file-tree-loading" style={{paddingLeft:`${12+depth*15}px`}}>{t("ProjectResource.2cbec64b88")}</p>}</>
   }
 
   const searchModes:SearchMode[]=['names','contents','both']
   const searchModeLabel:Record<SearchMode,string>={names:'Names',contents:'Contents',both:'Both'}
-  const projectRootItem:DirectoryItem={name:'Project root',path:'',kind:'directory',size:null}
+  const projectRootItem:DirectoryItem={name: t("ProjectResource.f85c5ef53f"),path:'',kind:'directory',size:null}
   const backgroundTreePress=(event:JSX.TargetedPointerEvent<HTMLElement>)=>{
     if(event.target instanceof Element&&event.target.closest('.file-tree-row'))return
     beginTreePress(projectRootItem,event)
@@ -1449,7 +1448,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   }
   // Any error with a retry queued behind it says so, and offers to skip the wait.
   const searchNotice=searchTruncationNotice(searchLimit,results?.length??0)
-  const errorLine=error?<p class="resource-error">{error}{pendingRetry&&<> <button class="resource-retry" onClick={()=>retryNowRef.current()}>Retry now</button></>}</p>:null
+  const errorLine=error?<p class="resource-error">{error}{pendingRetry && <> <button class="resource-retry" onClick={()=>retryNowRef.current()}>{t("ProjectResource.5148c3e205")}</button></>}</p>:null
   if(resource.kind==='files')return <section class="project-resource file-browser">
     {/* The header names the checkout, and now carries the one control that changes what
         this tree contains. A reader who notices `node_modules` in here is standing on the
@@ -1459,92 +1458,80 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     <header>
       <div><strong>{project.root}</strong></div>
       <SettingLink target="projects.ignorePatterns" class="file-browser-ignores"
-        title="Ignore patterns — what the file tree and resource watchers skip · Settings → Projects, where this Project’s own additions are named too">
+        title={t("ProjectResource.3b32e2591b")}>
         <svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-6.5 10-6.5c1.7 0 3.2.5 4.5 1.2"/><path d="M20.4 9.1c.9 1.1 1.6 2.2 1.6 2.9 0 0-3.6 6.5-10 6.5-1.4 0-2.7-.3-3.8-.8"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/><line x1="3" y1="21" x2="21" y2="3"/></svg>
-        <span>ignores</span>
+        <span>{t("ProjectResource.045ee94b70")}</span>
       </SettingLink>
     </header>
     <div class="file-browser-body">
       <div class="file-search">
         <div class="file-search-field">
           <div class="file-search-inputwrap">
-            <input class="file-search-input" value={query} onInput={event=>setQuery(event.currentTarget.value)} placeholder="Search files…" aria-label="Search files" spellcheck={false} autoCapitalize="off" autoCorrect="off"/>
-            {query&&<button class="file-search-clear" aria-label="Clear search" title="Clear search" onClick={()=>setQuery('')}>×</button>}
+            <input class="file-search-input" value={query} onInput={event=>setQuery(event.currentTarget.value)} placeholder={t("ProjectResource.149a9d15d1")} aria-label={t("ProjectResource.179fed85ec")} spellcheck={false} autoCapitalize="off" autoCorrect="off"/>
+            {query && <button class="file-search-clear" aria-label={t("ProjectResource.3b7ea51793")} title={t("ProjectResource.3b7ea51793")} onClick={()=>setQuery('')}>×</button>}
           </div>
-          <button class={`file-search-filter${filtersOpen?' active':''}`} aria-label="Search scope" aria-expanded={filtersOpen} title={`Search scope: ${searchModeLabel[searchMode]}`} onClick={()=>setFiltersOpen(open=>!open)}>
+          <button class={`file-search-filter${filtersOpen?' active':''}`} aria-label={t("ProjectResource.82ebdb2da5")} aria-expanded={filtersOpen} title={t("ProjectResource.6d7a968881", { value1: searchModeLabel[searchMode] })} onClick={()=>setFiltersOpen(open=>!open)}>
             <svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></svg>
           </button>
           {/* Recent used to be a pressed clock icon here. It is the `files` tab's second
               subtab now (`drawerSegments.ts`): the same two readings, named in the chrome
               rather than encoded in a toggle's pressed state. Search still wins over both. */}
         </div>
-        {filtersOpen&&<div class="file-search-modes" role="group" aria-label="Search scope">
-          {searchModes.map(mode=><button key={mode} class={searchMode===mode?'active':''} aria-pressed={searchMode===mode} title={`Match file ${searchModeLabel[mode].toLowerCase()}`} onClick={()=>setSearchMode(mode)}>{searchModeLabel[mode]}</button>)}
+        {filtersOpen && <div class="file-search-modes" role="group" aria-label={t("ProjectResource.82ebdb2da5")}>
+          {searchModes.map(mode=><button key={mode} class={searchMode===mode?'active':''} aria-pressed={searchMode===mode} title={t("ProjectResource.336d3ee010", { value1: searchModeLabel[mode].toLowerCase() })} onClick={()=>setSearchMode(mode)}>{searchModeLabel[mode]}</button>)}
         </div>}
       </div>
       {errorLine}
-      {notice&&<p class="resource-notice" role="status" aria-live="polite">{notice}</p>}
-      {results!==null
-        ?<div class="file-results" role="list" aria-busy={searching} onPointerDown={backgroundTreePress} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onContextMenu={backgroundTreeMenu}>
-          {searching&&!results.length?<p class="file-tree-loading" role="status" aria-live="polite">Searching for “{query.trim()}”…</p>
-            :!results.length?<p class="file-tree-loading">No matches.</p>
-            :<>{results.map(hit=>{const item:DirectoryItem={name:hit.name,path:hit.path,kind:'file',size:null};return <button class="file-tree-row file file-result-row" key={hit.path} title={`Open file · ${ROW_HINT}`} onPointerDown={event=>beginTreePress(item,event)} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onClick={event=>openRow(hit.path,event)} onContextMenu={event=>openTreeMenu(item,event)}>
+      {notice && <p class="resource-notice" role="status" aria-live="polite">{notice}</p>}
+      {results!==null ? <div class="file-results" role="list" aria-busy={searching} onPointerDown={backgroundTreePress} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onContextMenu={backgroundTreeMenu}>
+          {searching&&!results.length ? <p class="file-tree-loading" role="status" aria-live="polite">{rich("ProjectResource.41f46aea81", { value1: query.trim() })}</p> : !results.length ? <p class="file-tree-loading">{t("ProjectResource.d6572bd2e7")}</p> : <>{results.map(hit=>{const item:DirectoryItem={name:hit.name,path:hit.path,kind:'file',size:null};return <button class="file-tree-row file file-result-row" key={hit.path} title={t("ProjectResource.a11cb34f46", { ROW_HINT: ROW_HINT })} onPointerDown={event=>beginTreePress(item,event)} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onClick={event=>openRow(hit.path,event)} onContextMenu={event=>openTreeMenu(item,event)}>
                 <span class="file-result-line"><span>·</span><strong>{hit.name}</strong><small>{hit.path}</small></span>
-                {hit.match==='content'&&hit.snippet&&<em class="file-result-snippet">{hit.line!=null?`${hit.line}: `:''}{hit.snippet}</em>}
+                {hit.match==='content'&&hit.snippet && <em class="file-result-snippet">{hit.line!=null ? t("ProjectResource.a8e67e32f4", { line: hit.line }) : ''}{hit.snippet}</em>}
               </button>})}
-              {searchNotice&&<p class="file-tree-loading">{searchNotice}</p>}</>}
-        </div>
-        :recentOpen
-        ?<div class="file-results file-recent" role="list" aria-busy={recentLoading} onPointerDown={backgroundTreePress} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onContextMenu={backgroundTreeMenu}>
-          {!recent&&recentLoading?<p class="file-tree-loading">Reading recent changes…</p>
-            // Unavailable and empty are different answers: no repository is a fact about the
-            // Project, while an empty list is a fact about the work. Saying "nothing recent"
-            // for the first would be a lie the reader cannot see through.
-            :recent&&!recent.available?<p class="file-tree-loading">{recent.reason||'Recent files are unavailable here.'}</p>
-            :recent&&!recent.items.length?<p class="file-tree-loading">Nothing changed recently in this Project.</p>
-            :<>{(recent?.items||[]).map(entry=>{const item:DirectoryItem={name:entry.name,path:entry.path,kind:'file',size:null};return <button class="file-tree-row file file-result-row" key={entry.path} title={`${entry.path} · ${recentEntryTitle(entry)} · ${ROW_HINT}`} onPointerDown={event=>beginTreePress(item,event)} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onClick={event=>openRow(entry.path,event)} onContextMenu={event=>openTreeMenu(item,event)}>
-                <span class="file-result-line"><span class={`file-recent-mark file-recent-${entry.origin}`} aria-hidden="true">{entry.origin==='working'?'●':'·'}</span><strong>{entry.name}</strong><small>{entry.path}</small></span>
+              {searchNotice && <p class="file-tree-loading">{searchNotice}</p>}</>}
+        </div> : recentOpen ? <div class="file-results file-recent" role="list" aria-busy={recentLoading} onPointerDown={backgroundTreePress} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onContextMenu={backgroundTreeMenu}>
+          {!recent&&recentLoading ? <p class="file-tree-loading">{t("ProjectResource.9f2e469d2f")}</p> : recent&&!recent.available ? <p class="file-tree-loading">{recent.reason || t("ProjectResource.5fa1d9d384")}</p> : recent&&!recent.items.length ? <p class="file-tree-loading">{t("ProjectResource.8eb579f1f0")}</p> : <>{(recent?.items||[]).map(entry=>{const item:DirectoryItem={name:entry.name,path:entry.path,kind:'file',size:null};return <button class="file-tree-row file file-result-row" key={entry.path} title={t("ProjectResource.6d22ac1aa0", { path: entry.path, value2: recentEntryTitle(entry), ROW_HINT: ROW_HINT })} onPointerDown={event=>beginTreePress(item,event)} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onClick={event=>openRow(entry.path,event)} onContextMenu={event=>openTreeMenu(item,event)}>
+                <span class="file-result-line"><span class={`file-recent-mark file-recent-${entry.origin}`} aria-hidden="true">{entry.origin==='working' ? '●' : '·'}</span><strong>{entry.name}</strong><small>{entry.path}</small></span>
                 <em class="file-recent-when">{recentEntryTitle(entry)}</em>
               </button>})}</>}
-        </div>
-        :<div class="file-tree" role="tree" onPointerDown={backgroundTreePress} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onContextMenu={backgroundTreeMenu}>{tree('')}</div>}
+        </div> : <div class="file-tree" role="tree" onPointerDown={backgroundTreePress} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onContextMenu={backgroundTreeMenu}>{tree('')}</div>}
     </div>
-    {treeMenu&&<div class="context-menu project-file-menu" ref={el=>{treeMenuPanel.current=el;fitMenuInViewport(el)}} role="menu" aria-label={`File actions for ${treeMenu.item.name}`} style={{left:clampContextMenuLeft(treeMenu.x,window.innerWidth),top:Math.max(4,Math.min(treeMenu.y,window.innerHeight-(treeMenu.item.kind==='file'?350:290)))}} onMouseDown={event=>event.stopPropagation()} onClickCapture={event=>{if(treeMenuOpenedByTouch.current&&performance.now()-treeMenuOpenedAt.current<250){event.preventDefault();event.stopPropagation()}}}>
+    {treeMenu && <div class="context-menu project-file-menu" ref={el=>{treeMenuPanel.current=el;fitMenuInViewport(el)}} role="menu" aria-label={t("ProjectResource.6345a4ab27", { name: treeMenu.item.name })} style={{left:clampContextMenuLeft(treeMenu.x,window.innerWidth),top:Math.max(4,Math.min(treeMenu.y,window.innerHeight-(treeMenu.item.kind==='file'?350:290)))}} onMouseDown={event=>event.stopPropagation()} onClickCapture={event=>{if(treeMenuOpenedByTouch.current&&performance.now()-treeMenuOpenedAt.current<250){event.preventDefault();event.stopPropagation()}}}>
       <div class="context-title"><strong>{treeMenu.item.name}</strong></div>
       {/* First, and named rather than implied: a plain click now opens into whichever host asked
           (the drawer's own rail, in the Files tab), so the pane placement needs somewhere it is
           spelled out. Mod-click and the row drag do the same thing without opening this menu. */}
-      {treeMenu.item.kind==='file'&&<button role="menuitem" title="Open this file as a workspace pane tab" onClick={()=>{const path=treeMenu.item.path;setTreeMenu(null);onOpenFile(path,'pane')}}>Open in a pane</button>}
-      <button role="menuitem" onClick={()=>beginCreateResource('file')}>New file…</button>
-      <button role="menuitem" onClick={()=>beginCreateResource('directory')}>New folder…</button>
+      {treeMenu.item.kind==='file' && <button role="menuitem" title={t("ProjectResource.10effd1f12")} onClick={()=>{const path=treeMenu.item.path;setTreeMenu(null);onOpenFile(path,'pane')}}>{t("ProjectResource.45f90ec535")}</button>}
+      <button role="menuitem" onClick={()=>beginCreateResource('file')}>{t("ProjectResource.6b2727f94e")}</button>
+      <button role="menuitem" onClick={()=>beginCreateResource('directory')}>{t("ProjectResource.6cca52922d")}</button>
       <div class="context-rule"/>
-      <button role="menuitem" onClick={()=>void revealResource(treeMenu.item)}>Open in default explorer</button>
+      <button role="menuitem" onClick={()=>void revealResource(treeMenu.item)}>{t("ProjectResource.4bbc7fc723")}</button>
       <div class="context-rule"/>
-      <button role="menuitem" title={absoluteProjectPath(project.root,treeMenu.item.path)} onClick={()=>void copyPath(treeMenu.item,'absolute')}>Copy full path</button>
-      {treeMenu.item.path&&<button role="menuitem" title={treeMenu.item.path} onClick={()=>void copyPath(treeMenu.item,'relative')}>Copy path from project root</button>}
-      {treeMenu.item.kind==='file'&&<button role="menuitem" title={`Copy the file's text, capped at ${FILE_COPY_MAX_LINES.toLocaleString()} lines`} onClick={()=>void copyContents(treeMenu.item)}>Copy file contents</button>}
-      {treeMenu.item.kind==='file'&&onSendToAgent&&<button role="menuitem" title="Open the send-to-agent dialog with this file's contents" onClick={()=>void sendFileToAgent(treeMenu.item)}>Send to an agent session</button>}
-      {treeMenu.item.kind==='file'&&onPreviewFile&&isPreviewableDocument(treeMenu.item.path)&&<button role="menuitem" title="Serve this page from its own folder and open it in a Preview pane" onClick={()=>{const path=treeMenu.item.path;setTreeMenu(null);onPreviewFile(path)}}>Preview in a pane</button>}
-      {treeMenu.item.path&&<><div class="context-rule"/>
-        <button role="menuitem" onClick={()=>void ignoreResource(treeMenu.item,'global')}>Add pattern to global ignores</button>
-        <button role="menuitem" onClick={()=>void ignoreResource(treeMenu.item,'project')}>Add pattern to project ignores</button>
+      <button role="menuitem" title={absoluteProjectPath(project.root,treeMenu.item.path)} onClick={()=>void copyPath(treeMenu.item,'absolute')}>{t("ProjectResource.efad9ee56e")}</button>
+      {treeMenu.item.path && <button role="menuitem" title={treeMenu.item.path} onClick={()=>void copyPath(treeMenu.item,'relative')}>{t("ProjectResource.e8ed258811")}</button>}
+      {treeMenu.item.kind==='file' && <button role="menuitem" title={t("ProjectResource.2840304dfe", { value1: FILE_COPY_MAX_LINES.toLocaleString(uiLocale.value) })} onClick={()=>void copyContents(treeMenu.item)}>{t("ProjectResource.b3278e5f53")}</button>}
+      {treeMenu.item.kind==='file'&&onSendToAgent && <button role="menuitem" title={t("ProjectResource.f07cc40bfd")} onClick={()=>void sendFileToAgent(treeMenu.item)}>{t("ProjectResource.1909a1d3b2")}</button>}
+      {treeMenu.item.kind==='file'&&onPreviewFile&&isPreviewableDocument(treeMenu.item.path) && <button role="menuitem" title={t("ProjectResource.4a2f02b990")} onClick={()=>{const path=treeMenu.item.path;setTreeMenu(null);onPreviewFile(path)}}>{t("ProjectResource.f60e9a8774")}</button>}
+      {treeMenu.item.path && <><div class="context-rule"/>
+        <button role="menuitem" onClick={()=>void ignoreResource(treeMenu.item,'global')}>{t("ProjectResource.308c9ff525")}</button>
+        <button role="menuitem" onClick={()=>void ignoreResource(treeMenu.item,'project')}>{t("ProjectResource.da0a19aff3")}</button>
       </>}
     </div>}
-    {createPrompt&&<div class="modal-layer resource-create-layer" onPointerDown={event=>{if(event.target===event.currentTarget&&!creating){setCreatePrompt(null);setCreateError('')}}}>
-      <form ref={createPanel} class="modal resource-create-modal" role="dialog" aria-modal="true" aria-label={`Create ${createPrompt.kind==='directory'?'folder':'file'}`} onPointerDown={event=>event.stopPropagation()} onSubmit={event=>void submitCreateResource(event)}>
-        <div class="modal-heading"><div><span>FILES::{createPrompt.kind==='directory'?'NEW_FOLDER':'NEW_FILE'}</span><h2>New {createPrompt.kind==='directory'?'folder':'file'}</h2></div><button type="button" disabled={creating} aria-label="Cancel creation" onClick={()=>{setCreatePrompt(null);setCreateError('')}}>×</button></div>
-        <label>Name<input ref={createNameInput} value={createPrompt.name} disabled={creating} autoComplete="off" spellcheck={false} onInput={event=>setCreatePrompt(current=>current?{...current,name:event.currentTarget.value}:current)}/></label>
-        <p class="resource-create-parent" title={createPrompt.parent||project.root}>Create in <strong>{createPrompt.parent||'Project root'}</strong></p>
-        {createError&&<p class="resource-create-error" role="alert">{createError}</p>}
-        <div class="modal-footer"><button type="button" disabled={creating} onClick={()=>{setCreatePrompt(null);setCreateError('')}}>Cancel</button><button class="primary" disabled={creating||!createPrompt.name} type="submit">{creating?'Creating…':'Create'}</button></div>
+    {createPrompt && <div class="modal-layer resource-create-layer" onPointerDown={event=>{if(event.target===event.currentTarget&&!creating){setCreatePrompt(null);setCreateError('')}}}>
+      <form ref={createPanel} class="modal resource-create-modal" role="dialog" aria-modal="true" aria-label={t("ProjectResource.92973b3d7a", { value1: (createPrompt.kind==='directory') ? 'yes' : 'no' })} onPointerDown={event=>event.stopPropagation()} onSubmit={event=>void submitCreateResource(event)}>
+        <div class="modal-heading"><div><span>{t("ProjectResource.22ed9bc7d7", { value1: (createPrompt.kind==='directory') ? 'yes' : 'no' })}</span><h2>{t("ProjectResource.910ef2bffc", { value1: (createPrompt.kind==='directory') ? 'yes' : 'no' })}</h2></div><button type="button" disabled={creating} aria-label={t("ProjectResource.5cfd613d27")} onClick={()=>{setCreatePrompt(null);setCreateError('')}}>×</button></div>
+        <label>{rich("ProjectResource.5b326d4444", { value1: <input ref={createNameInput} value={createPrompt.name} disabled={creating} autoComplete="off" spellcheck={false} onInput={event=>setCreatePrompt(current=>current?{...current,name:event.currentTarget.value}:current)}/> })}</label>
+        <p class="resource-create-parent" title={createPrompt.parent || project.root}>{rich("ProjectResource.d657d7e868", { value1: <strong>{createPrompt.parent || t("ProjectResource.f85c5ef53f")}</strong> })}</p>
+        {createError && <p class="resource-create-error" role="alert">{createError}</p>}
+        <div class="modal-footer"><button type="button" disabled={creating} onClick={()=>{setCreatePrompt(null);setCreateError('')}}>{t("ProjectResource.19766ed6cc")}</button><button class="primary" disabled={creating||!createPrompt.name} type="submit">{creating ? t("ProjectResource.c79ed9492e") : t("ProjectResource.4759498ac2")}</button></div>
       </form>
     </div>}
     <textarea ref={copyFallback} class="resource-copy-relay" tabIndex={-1} aria-hidden="true" readOnly/>
-    {pendingCopy!==null&&<div class="resource-copy-fallback" role="dialog" aria-label="Copy blocked text">
-      <span>Your browser blocked the write. Copy it once from here.</span>
-      <button onClick={()=>void writeClipboard(pendingCopy,'Copied')}>Copy</button>
-      <button aria-label="Dismiss blocked copy" onClick={()=>{setPendingCopy(null);setError('')}}>×</button>
-      <textarea readOnly value={pendingCopy} aria-label="Text waiting to be copied" onFocus={event=>event.currentTarget.select()}/>
+    {pendingCopy!==null && <div class="resource-copy-fallback" role="dialog" aria-label={t("ProjectResource.34baa39883")}>
+      <span>{t("ProjectResource.ea1124c6bc")}</span>
+      <button onClick={()=>void writeClipboard(pendingCopy,'Copied')}>{t("ProjectResource.e21f935f11")}</button>
+      <button aria-label={t("ProjectResource.77759f3920")} onClick={()=>{setPendingCopy(null);setError('')}}>×</button>
+      <textarea readOnly value={pendingCopy} aria-label={t("ProjectResource.93be3f7b41")} onFocus={event=>event.currentTarget.select()}/>
     </div>}
   </section>
 
@@ -1558,22 +1545,22 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   }
   const stateLabel=autosaved?(noteSave.status==='idle'?status:noteSave.status):(saveState==='idle'?status:saveState)
   const saveIndicator=resourceSaveIndicator(stateLabel)
-  const unavailableMessage=status==='binary'?'This file is not UTF-8 text and has no safe viewer.'
-    :status==='too-large'&&presentation?.kind==='image'?'This image exceeds the 16 MiB viewer limit.'
-    :status==='too-large'?'This file exceeds the 2 MiB text and table limit.'
-    :status==='unsupported'?'This file is not a valid allowlisted PNG, JPEG, GIF, or WebP image.'
-    :status==='deleted'?'This note was deleted. Close this tab or open another note.'
+  const unavailableMessage=status==='binary'?t("ProjectResource.7013e9b603")
+    :status==='too-large'&&presentation?.kind==='image'?t("ProjectResource.5cd128fd0a")
+    :status==='too-large'?t("ProjectResource.d2cb6622c9")
+    :status==='unsupported'?t("ProjectResource.b771699f4c")
+    :status==='deleted'?t("ProjectResource.c2a44d7281")
     :status==='loading'?'Loading…'
     :status==='error'?null
-    :'This resource is read-only.'
+    :t("ProjectResource.ef6c946556")
   return <section class="project-resource file-editor" data-resource-kind={resource.kind} onKeyDown={handleFindKey}>
-    <header><div class={autosaved?'autosave-resource-heading':undefined}><strong>{isNote?noteTitle:resource.id}</strong>{autosaved?<>{isGlobalNote&&<><span class="resource-heading-separator" aria-hidden="true">·</span><span class="resource-heading-scope">Global</span></>}<span class={`resource-save-indicator ${saveIndicator.tone}`} aria-label={`Save status: ${saveIndicator.label}`} title={`Save status: ${saveIndicator.label}`}/></>:<span>{stateLabel}</span>}</div>{autosaved||onSendToAgent||isDelimitedFile||canPreviewDocument||(isFile&&!isMarkdownFile&&presentation?.kind==='text')?<div class="resource-actions">
+    <header><div class={autosaved?'autosave-resource-heading':undefined}><strong>{isNote ? noteTitle : resource.id}</strong>{autosaved ? <>{isGlobalNote && <><span class="resource-heading-separator" aria-hidden="true">·</span><span class="resource-heading-scope">{t("ProjectResource.a258b30f88")}</span></>}<span class={`resource-save-indicator ${saveIndicator.tone}`} aria-label={t("ProjectResource.a9af5da88a", { label: saveIndicator.label })} title={t("ProjectResource.a9af5da88a", { label: saveIndicator.label })}/></> : <span>{stateLabel}</span>}</div>{autosaved||onSendToAgent||isDelimitedFile||canPreviewDocument||(isFile&&!isMarkdownFile&&presentation?.kind==='text') ? <div class="resource-actions">
       {/* Continuity-backed views send the live selection (or the document); a plain-text
           editor owns no selection engine, so its send is always the whole document. */}
-      {canSendText&&<button class="resource-send" title={autosaved?'Send the selection (or the whole document) to an agent session':'Send the whole document to an agent session'} onClick={requestSendToAgent}>→ agent</button>}
-      {canPreviewDocument&&<button class="resource-preview" title="Serve this page from its own folder and open it in a Preview pane" onClick={()=>onPreviewFile?.(resource.id)}>preview</button>}
-      {autosaved&&<button class="resource-find" disabled={!editable} title="Find in this note" aria-label="Find in this note" onClick={openFind}>⌕</button>}
-      {autosaved&&<button ref={outlineTrigger} class={`resource-outline${peekMode?' pinned':''}`} disabled={!editable} title={outlineTitle} aria-label="Jump to a heading" aria-haspopup="menu" aria-expanded={outlineOpen} aria-pressed={peekMode}
+      {canSendText && <button class="resource-send" title={autosaved ? t("ProjectResource.8683047100") : t("ProjectResource.9b93749473")} onClick={requestSendToAgent}>{t("ProjectResource.ecc5b70c5e")}</button>}
+      {canPreviewDocument && <button class="resource-preview" title={t("ProjectResource.4a2f02b990")} onClick={()=>onPreviewFile?.(resource.id)}>{t("ProjectResource.5975cf1bba")}</button>}
+      {autosaved && <button class="resource-find" disabled={!editable} title={t("ProjectResource.4bff5483c6")} aria-label={t("ProjectResource.4bff5483c6")} onClick={openFind}>⌕</button>}
+      {autosaved && <button ref={outlineTrigger} class={`resource-outline${peekMode?' pinned':''}`} disabled={!editable} title={outlineTitle} aria-label={t("ProjectResource.5322c1e3ef")} aria-haspopup="menu" aria-expanded={outlineOpen} aria-pressed={peekMode}
         onMouseDown={event=>event.stopPropagation()}
         onClick={event=>{
           // Ctrl/Cmd+click pins the overlay instead of opening the modal; a plain click is the
@@ -1581,12 +1568,12 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
           if(event.ctrlKey||event.metaKey){event.preventDefault();togglePeek();return}
           outlineOpen?setOutlineOpen(false):openOutline()
         }}>☰</button>}
-      {isDelimitedFile&&<><button class={fileViewMode==='preview'?'active':''} onClick={()=>setFileViewMode('preview')}>Table</button><button class={fileViewMode==='raw'?'active':''} onClick={()=>setFileViewMode('raw')}>Raw</button></>}
-      {isFile&&!isMarkdownFile&&presentation?.kind!=='image'&&presentation?.kind!=='unsupported'&&(!isDelimitedFile||fileViewMode==='raw')&&<button disabled={!editable||text===baseline||saveState==='saving'} onClick={()=>void save()}>Save</button>}
-    </div>:null}</header>
+      {isDelimitedFile && <><button class={fileViewMode==='preview'?'active':''} onClick={()=>setFileViewMode('preview')}>{t("ProjectResource.16d1c9050a")}</button><button class={fileViewMode==='raw'?'active':''} onClick={()=>setFileViewMode('raw')}>{t("ProjectResource.848123d14f")}</button></>}
+      {isFile&&!isMarkdownFile&&presentation?.kind!=='image'&&presentation?.kind!=='unsupported'&&(!isDelimitedFile||fileViewMode==='raw') && <button disabled={!editable||text===baseline||saveState==='saving'} onClick={()=>void save()}>{t("ProjectResource.1509f561f2")}</button>}
+    </div> : null}</header>
     {errorLine}
-    {findOpen&&<div class="note-find" role="search">
-      <input ref={findInput} value={findQuery} spellcheck={false} placeholder="find in note" aria-label="Find in note"
+    {findOpen && <div class="note-find" role="search">
+      <input ref={findInput} value={findQuery} spellcheck={false} placeholder={t("ProjectResource.2d886a5309")} aria-label={t("ProjectResource.2f38ab701e")}
         onInput={event=>setFindQuery(event.currentTarget.value)}
         onKeyDown={event=>{
           // Escape is stopped here rather than left to bubble, so the keypress resolves to
@@ -1594,58 +1581,45 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
           if(event.key==='Escape'){event.preventDefault();event.stopPropagation();dismissStack.pop()}
           if(event.key==='Enter'){event.preventDefault();stepFind(event.shiftKey)}
         }}/>
-      <button title="Previous match" aria-label="Previous match" onClick={()=>stepFind(true)}>↑</button>
-      <button title="Next match" aria-label="Next match" onClick={()=>stepFind(false)}>↓</button>
-      <button class={findCase?'active':''} title="Match case" aria-pressed={findCase} onClick={()=>setFindCase(value=>!value)}>Aa</button>
-      <span class={findQuery&&!findCount?'missing':''} aria-live="polite">{!findQuery?'':findCount?`${findIndex+1}/${findCount}`:'no match'}</span>
-      <button title="Close find" aria-label="Close find" onClick={closeFind}>×</button>
+      <button title={t("ProjectResource.daa2f8c3fc")} aria-label={t("ProjectResource.daa2f8c3fc")} onClick={()=>stepFind(true)}>↑</button>
+      <button title={t("ProjectResource.825e5abd07")} aria-label={t("ProjectResource.825e5abd07")} onClick={()=>stepFind(false)}>↓</button>
+      <button class={findCase?'active':''} title={t("ProjectResource.6198801124")} aria-pressed={findCase} onClick={()=>setFindCase(value=>!value)}>{t("ProjectResource.81acaafba9")}</button>
+      <span class={findQuery&&!findCount?'missing':''} aria-live="polite">{!findQuery ? '' : findCount ? t("ProjectResource.e9ab1f54a9", { value1: findIndex+1, findCount: findCount }) : t("ProjectResource.9bc94ab9b3")}</span>
+      <button title={t("ProjectResource.eb903c9fde")} aria-label={t("ProjectResource.eb903c9fde")} onClick={closeFind}>×</button>
     </div>}
-    {autosaved&&trail.length>0&&<div class="note-trail" role="navigation" aria-label="Heading trail">
+    {autosaved&&trail.length>0 && <div class="note-trail" role="navigation" aria-label={t("ProjectResource.459a1db943")}>
       {trail.map(heading=><button key={heading.line} type="button"
-        title={`Jump to ${heading.text||'this heading'}`}
-        onClick={()=>jumpToHeading(heading)}>{heading.text||'(untitled)'}</button>)}
+        title={t("ProjectResource.4be11794bc", { value1: heading.text||t("ProjectResource.8977261e25") })}
+        onClick={()=>jumpToHeading(heading)}>{heading.text || t("ProjectResource.3bc7cc17b7")}</button>)}
     </div>}
-    {outlineOpen&&<div class="note-outline" ref={outlinePanel} role="menu" aria-label="Note headings"
+    {outlineOpen && <div class="note-outline" ref={outlinePanel} role="menu" aria-label={t("ProjectResource.69de542417")}
       onMouseDown={event=>event.stopPropagation()}
       // Ctrl/Cmd+click anywhere in the open list pins it as the overlay instead of jumping —
       // capture-phase so it pre-empts a row's own jump handler.
       onClickCapture={event=>{if(event.ctrlKey||event.metaKey){event.preventDefault();event.stopPropagation();setOutlineOpen(false);enablePeek()}}}>
-      {outline.length?outline.map((heading,index)=>outlineRow(heading,index,true)):<p>No headings in this note.</p>}
+      {outline.length ? outline.map((heading,index)=>outlineRow(heading,index,true)) : <p>{t("ProjectResource.ddc5a4f14e")}</p>}
     </div>}
     {/* The pinned overlay: the same list held faintly over the note (see PEEK_EVENT). Resting
         state is pointer-events:none so it never blocks the text; the hover class (desktop) or a
         coarse-pointer media query (touch) makes it solid and clickable. Suppressed while the
         modal is open, since they share one anchor. */}
-    {peekMode&&!outlineOpen&&autosaved&&editable&&outline.length>0&&<div
+    {peekMode&&!outlineOpen&&autosaved&&editable&&outline.length>0 && <div
       class={`note-outline peek${peekHovered?' hovered':''}`} ref={peekPanel}
-      role="navigation" aria-label="Pinned note headings">
+      role="navigation" aria-label={t("ProjectResource.19826869ac")}>
       {outline.map((heading,index)=>outlineRow(heading,index,false))}
     </div>}
-    {autosaved&&noteSave.banner&&<p class={`resource-error note-conflict${noteSave.status==='paused'?' note-paused':''}`}><span>{noteSave.banner}</span>{noteSave.status==='conflict'&&<span class="note-conflict-actions"><button onClick={()=>void loadText()}>Reload from disk</button><button onClick={()=>void resolveKeepMine()}>Overwrite disk</button></span>}{noteSave.status==='paused'&&<span class="note-conflict-actions"><button onClick={()=>noteSaveQueue.resume(noteKey)}>Resume autosave</button><button onClick={()=>void loadText()}>Reload from disk</button></span>}</p>}
-    {imageReady?<ImageViewer key={revision} projectId={project.id} path={resource.id} revision={revision} mime={imagePresentation!.mime!} width={imagePresentation!.width!} height={imagePresentation!.height!} frames={imagePresentation!.frames!} size={fileSize} worktree={worktree}/>
-      :isDelimitedFile&&readableFile&&fileViewMode==='preview'?<DelimitedTextViewer text={text} delimiter={presentation.delimiter}/>
-      :editable?(autosaved?<ProjectNoteEditor
+    {autosaved&&noteSave.banner && <p class={`resource-error note-conflict${noteSave.status==='paused'?' note-paused':''}`}><span>{noteSave.banner}</span>{noteSave.status==='conflict' && <span class="note-conflict-actions"><button onClick={()=>void loadText()}>{t("ProjectResource.d428883984")}</button><button onClick={()=>void resolveKeepMine()}>{t("ProjectResource.0faaf337c7")}</button></span>}{noteSave.status==='paused' && <span class="note-conflict-actions"><button onClick={()=>noteSaveQueue.resume(noteKey)}>{t("ProjectResource.c90f591aa6")}</button><button onClick={()=>void loadText()}>{t("ProjectResource.d428883984")}</button></span>}</p>}
+    {imageReady ? <ImageViewer key={revision} projectId={project.id} path={resource.id} revision={revision} mime={imagePresentation!.mime!} width={imagePresentation!.width!} height={imagePresentation!.height!} frames={imagePresentation!.frames!} size={fileSize} worktree={worktree}/> : isDelimitedFile&&readableFile&&fileViewMode==='preview' ? <DelimitedTextViewer text={text} delimiter={presentation.delimiter}/> : editable ? (autosaved ? <ProjectNoteEditor
         key={`${resourceScope}:${resource.kind}:${resource.id}:${loadGeneration}`}
         projectId={resourceScope}
         resourceId={`${resource.kind}:${resource.id}`}
         initialText={text}
-        label={isNote?noteTitle:resource.id}
+        label={isNote ? noteTitle : resource.id}
         railActions={railActions}
         elementRef={editorElement}
-        textSurface={{id:resourceKey,kind:isGlobalNote?'scratchpad':isNote?'note':'file',label:isGlobalNote?'Scratchpad':isNote?`${noteTitle} · ${project.name}`:`${resource.id} · ${project.name}`}}
+        textSurface={{id:resourceKey,kind:isGlobalNote?'scratchpad':isNote?'note':'file',label:isGlobalNote?t("ProjectResource.17bd998ee0"):isNote?`${noteTitle} · ${project.name}`:`${resource.id} · ${project.name}`}}
         claimInsertTargetToken={claimInsertTargetToken}
         onInsertTargetClaimed={onInsertTargetClaimed}
-      />:isDelimitedFile?<textarea value={text} onInput={event=>setText(event.currentTarget.value)} onKeyDown={handleEditorKey} spellcheck={false}/>
-      // A code/text file: the syntax-highlighting editor, keyed per resource so language and undo
-      // history are fresh per file. Delimited files keep the raw textarea (their view is the table).
-      :<LazyCodeEditor key={`code:${resource.kind}:${resource.id}:${loadGeneration}`} value={text} filename={resource.id} onChange={setText} ariaLabel={resource.id}/> )
-      :isDelimitedFile&&readableFile&&fileViewMode==='raw'?<textarea readOnly value={text} spellcheck={false}/>
-      // A read-only text file (previously just "This resource is read-only"): show it, highlighted.
-      :readableFile&&presentation?.kind==='text'?<LazyCodeEditor key={`code-ro:${resource.kind}:${resource.id}:${loadGeneration}`} value={text} filename={resource.id} readOnly ariaLabel={resource.id}/>
-      :<div class="resource-unavailable">{status==='error'?<><span>{isNote?'This note could not be loaded.':'This file could not be loaded.'}</span> <button class="resource-retry" onClick={()=>retryNowRef.current()}>Retry now</button></>
-        :unavailableMessage
-        // Reachable while a retry is still pending, so it says what is happening rather
-        // than claiming the resource is read-only.
-        }</div>}
+      /> : isDelimitedFile ? <textarea value={text} onInput={event=>setText(event.currentTarget.value)} onKeyDown={handleEditorKey} spellcheck={false}/> : <LazyCodeEditor key={`code:${resource.kind}:${resource.id}:${loadGeneration}`} value={text} filename={resource.id} onChange={setText} ariaLabel={resource.id}/>) : isDelimitedFile&&readableFile&&fileViewMode==='raw' ? <textarea readOnly value={text} spellcheck={false}/> : readableFile&&presentation?.kind==='text' ? <LazyCodeEditor key={`code-ro:${resource.kind}:${resource.id}:${loadGeneration}`} value={text} filename={resource.id} readOnly ariaLabel={resource.id}/> : <div class="resource-unavailable">{status==='error' ? <><span>{isNote ? t("ProjectResource.97fc92b6ab") : t("ProjectResource.e854eefb6a")}</span> <button class="resource-retry" onClick={()=>retryNowRef.current()}>{t("ProjectResource.5148c3e205")}</button></> : unavailableMessage}</div>}
   </section>
 }

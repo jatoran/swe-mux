@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // Browser side of Web Push: registers the service worker, manages the push
 // subscription against the daemon, and reports focus "presence" so the server
 // can skip notifying a device that is actively looking at the app.
@@ -50,11 +51,11 @@ export async function currentSubscription(): Promise<PushSubscription | null> {
 export interface EnableResult { ok: boolean; reason?: string }
 
 export async function enablePush(): Promise<EnableResult> {
-  if (!pushSupported()) return { ok: false, reason: 'This browser does not support notifications.' }
+  if (!pushSupported()) return { ok: false, get reason() { return t("push.49e78ab268") } }
   const reg = await registration()
-  if (!reg) return { ok: false, reason: 'Could not register the service worker.' }
+  if (!reg) return { ok: false, get reason() { return t("push.54346811ca") } }
   const permission = await Notification.requestPermission()
-  if (permission !== 'granted') return { ok: false, reason: 'Notification permission was denied. Enable it in the browser site settings.' }
+  if (permission !== 'granted') return { ok: false, get reason() { return t("push.b814163ad4") } }
   try {
     const { key } = await api<{ key: string }>('GET', '/api/push/vapid-public-key')
     let sub = await reg.pushManager.getSubscription()
@@ -65,7 +66,7 @@ export async function enablePush(): Promise<EnableResult> {
     startPresence()
     return { ok: true }
   } catch (cause) {
-    return { ok: false, reason: (cause as Error)?.message || 'Subscription failed.' }
+    return { ok: false, reason: (cause as Error)?.message || t("push.848a34515d") }
   }
 }
 

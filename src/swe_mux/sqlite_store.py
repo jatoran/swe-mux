@@ -15,6 +15,7 @@ from typing import Any
 
 from .executor_accounting import register_wrapper
 from .parked_threads import DB_LOCK_WAIT, parked
+from .ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -119,8 +120,7 @@ PREFETCH_CHUNK_BYTES = 8 * 1024 * 1024
 PREFETCH_MEMORY_FRACTION = 0.5
 
 _SCHEMA_VERSIONS = (
-    "CREATE TABLE IF NOT EXISTS schema_versions("
-    "store TEXT PRIMARY KEY, version INTEGER NOT NULL)"
+    "CREATE TABLE IF NOT EXISTS schema_versions(store TEXT PRIMARY KEY, version INTEGER NOT NULL)"
 )
 
 
@@ -433,9 +433,7 @@ def prepare_database(
     owed, delay, reason = _full_check_plan(
         path, predecessor_died_uncleanly, full_verification_interval_seconds
     )
-    return DatabasePreparation(
-        time.monotonic() - start, "light", reason, problem, owed, delay
-    )
+    return DatabasePreparation(time.monotonic() - start, "light", reason, problem, owed, delay)
 
 
 def reset_integrity_cache() -> None:
@@ -751,7 +749,7 @@ def run_sqlite_operation[T](
             result = operation()
             if db.in_transaction:
                 db.rollback()
-                raise RuntimeError("SQLite store operation returned with an open transaction")
+                raise RuntimeError(ui_message("sqlite_store.3e078e730a"))
             return result
         except BaseException as error:
             if db.in_transaction:

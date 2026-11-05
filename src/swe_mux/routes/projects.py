@@ -36,6 +36,7 @@ from ..project_files import (
     revision as file_revision,
 )
 from ..projects import ProjectManager
+from ..ui_messages import error_text, ui_message
 from .support import _config_identity, _observations_project
 
 log = logging.getLogger(__name__)
@@ -87,7 +88,7 @@ async def put_project_config(request: web.Request) -> web.Response:
         if not isinstance(base, dict):
             # Without it there is nothing to compare against, and defaulting to
             # "no base" would silently turn the guard off for whoever forgot it.
-            raise ValueError("base must accompany changes")
+            raise ValueError(ui_message("projects.d10225c7fc"))
         _validate_project_shell_profile(request, changes, project_cwd)
         # `ProjectConfigConflict` is answered by the error middleware, which carries
         # the colliding field names and the current file back to the caller.
@@ -106,7 +107,7 @@ async def put_project_config(request: web.Request) -> web.Response:
             )
         except ValueError as exc:
             if "changed externally" in str(exc):
-                return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+                return json_response({"error": error_text(exc), "code": "revision_conflict"}, 409)
             raise
     project = await resolve_project(result["project"]["root"])
     await request.app[keys.HISTORY].register_project_scope(project)
@@ -130,9 +131,9 @@ async def put_project_context(request: web.Request) -> web.Response:
     project = _observations_project(request)
     body = await request.json()
     if not isinstance(body.get("markdown"), str):
-        raise ValueError("markdown must be a string")
+        raise ValueError(ui_message("projects.f6e8c80f49"))
     if not isinstance(body.get("revision"), str):
-        raise ValueError("revision must be a string")
+        raise ValueError(ui_message("projects.e209ddea87"))
     service: ProjectContextService = request.app[keys.PROJECT_CONTEXTS]
     try:
         payload = await asyncio.to_thread(
@@ -143,7 +144,7 @@ async def put_project_context(request: web.Request) -> web.Response:
         )
     except ValueError as exc:
         if "changed externally" in str(exc):
-            return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+            return json_response({"error": error_text(exc), "code": "revision_conflict"}, 409)
         raise
     await request.app[keys.EVENTS].emit(
         "project_context_changed",
@@ -160,9 +161,9 @@ async def resolve_project_scope(request: web.Request) -> web.Response:
     try:
         cwd = Path(str(body.get("cwd") or "")).resolve(strict=True)
     except OSError as exc:
-        raise ValueError("cwd must be an existing directory") from exc
+        raise ValueError(ui_message("projects.e094fd1a3f")) from exc
     if not cwd.is_dir():
-        raise ValueError("cwd must be an existing directory")
+        raise ValueError(ui_message("projects.e094fd1a3f"))
     project = await resolve_project(cwd)
     await request.app[keys.HISTORY].register_project_scope(project)
     if sid := body.get("session_id"):
@@ -196,7 +197,7 @@ async def list_git_projects(request: web.Request) -> web.Response:
         offset = max(0, int(request.query.get("offset", "0")))
         limit = max(1, min(500, int(request.query.get("limit", "200"))))
     except ValueError as exc:
-        raise ValueError("project offset and limit must be integers") from exc
+        raise ValueError(ui_message("projects.b456834b4b")) from exc
     total = len(scopes)
     scopes = scopes[offset : offset + limit]
     live = list(request.app[keys.SESSIONS].sessions.values())
@@ -278,26 +279,26 @@ async def transfer_artifact(request: web.Request) -> web.Response:
     target = await history.project_scope(str(body.get("project_scope_id") or ""))
     source = await history.project_scope(artifact["project_scope_id"])
     if not source or not target:
-        raise ValueError("unknown source or target project scope")
+        raise ValueError(ui_message("projects.1245b54ed2"))
     source_path = (Path(source["root"]) / artifact["relative_path"]).resolve()
     target_path = (Path(target["root"]) / artifact["relative_path"]).resolve()
     if not source_path.is_relative_to(
         Path(source["root"]).resolve()
     ) or not target_path.is_relative_to(Path(target["root"]).resolve()):
-        raise ValueError("artifact path escapes project scope")
+        raise ValueError(ui_message("projects.6cfebe87f1"))
     action = str(body.get("action") or "keep")
     if action == "keep":
         await history.acknowledge_artifact_placement(artifact["id"], target["id"])
         artifact = next(item for item in await history.artifacts() if item["id"] == artifact["id"])
         return json_response({"artifact": artifact, "action": action})
     if not source_path.is_file() or target_path.exists():
-        raise ValueError("source missing or destination already exists")
+        raise ValueError(ui_message("projects.4372dee3dc"))
     expected_revision = str(body.get("revision") or "")
     current_revision = file_revision(source_path.read_bytes())
     if not expected_revision or expected_revision != current_revision:
         return json_response(
             {
-                "error": "artifact changed externally; reload before transferring",
+                "error": ui_message("projects.f5411e02c2"),
                 "code": "revision_conflict",
                 "revision": current_revision,
             },
@@ -317,13 +318,13 @@ async def transfer_artifact(request: web.Request) -> web.Response:
         )
         return json_response({"artifact": copy, "action": action})
     if action != "move":
-        raise ValueError("action must be keep, copy, or move")
+        raise ValueError(ui_message("projects.0c1923439e"))
     if (
         source_path.drive
         and target_path.drive
         and source_path.drive.casefold() != target_path.drive.casefold()
     ):
-        raise ValueError("cross-volume note moves are not atomic; use Copy instead")
+        raise ValueError(ui_message("projects.fba0476a0c"))
     shutil.move(str(source_path), str(target_path))
     await history.move_artifact_scope(artifact["id"], target["id"], artifact["relative_path"])
     return json_response(
@@ -448,7 +449,7 @@ async def record_project_use(request: web.Request) -> web.Response:
     body = await request.json()
     reason = str(body.get("reason") or "")
     if reason not in _PROJECT_USE_REASONS:
-        raise ValueError({"reason": "must be prompt_submitted or session_started"})
+        raise ValueError({"reason": ui_message("projects.b6ffb443e7")})
     project = await request.app[keys.PROJECTS].touch_used(request.match_info["project_id"])
     await request.app[keys.EVENTS].emit(
         "project_used",
@@ -576,8 +577,7 @@ async def patch_project(request: web.Request) -> web.Response:
     if "default_agent_profiles" in body:
         selections = body["default_agent_profiles"]
         if not isinstance(selections, dict) or not all(
-            isinstance(key, str) and isinstance(value, str)
-            for key, value in selections.items()
+            isinstance(key, str) and isinstance(value, str) for key, value in selections.items()
         ):
             raise ValueError(
                 {"default_agent_profiles": "must be a map of backend to launch profile id"}
@@ -616,7 +616,7 @@ async def reorder_projects(request: web.Request) -> web.Response:
         )
     except ValueError as exc:
         if "order changed" in str(exc):
-            return json_response({"error": str(exc), "code": "order_conflict"}, 409)
+            return json_response({"error": error_text(exc), "code": "order_conflict"}, 409)
         raise
     await request.app[keys.EVENTS].emit(
         "projects_reordered", source="user", project_ids=ordered_ids
@@ -635,15 +635,17 @@ async def delete_project(request: web.Request) -> web.Response:
     live = [
         item.record
         for item in request.app[keys.SESSIONS].sessions.values()
-        if item.record.project_id == project_id
-        and item.record.state not in {"exited", "crashed"}
+        if item.record.project_id == project_id and item.record.state not in {"exited", "crashed"}
     ]
     if live:
         return json_response(
             {
                 "error": (
-                    f"{len(live)} live session{'s' if len(live) != 1 else ''} "
-                    "must be closed before removal"
+                    ui_message(
+                        "projects.86039168ae",
+                        value1=len(live),
+                        value2="s" if len(live) != 1 else "",
+                    )
                 ),
                 "code": "project_has_live_sessions",
                 "live_sessions": [
@@ -699,7 +701,7 @@ async def reorder_project_groups(request: web.Request) -> web.Response:
         )
     except ValueError as exc:
         if "order changed" in str(exc):
-            return json_response({"error": str(exc), "code": "order_conflict"}, 409)
+            return json_response({"error": error_text(exc), "code": "order_conflict"}, 409)
         raise
     return json_response([item.snapshot() for item in groups])
 

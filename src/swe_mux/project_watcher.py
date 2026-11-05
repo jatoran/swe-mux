@@ -18,6 +18,7 @@ from .project_files import (
     project_path,
 )
 from .projects import ProjectManager
+from .ui_messages import ui_message
 
 PROJECT_WATCH_LOOP = "project-file-watches"
 WATCH_LEASE_SECONDS = 45.0
@@ -122,16 +123,12 @@ class WatchLease:
 class ProjectFileWatcher:
     """Non-recursive, leased watches for directories visible in open resource tabs."""
 
-    def __init__(
-        self, projects: ProjectManager, events: EventBus, config: Config
-    ) -> None:
+    def __init__(self, projects: ProjectManager, events: EventBus, config: Config) -> None:
         self.projects = projects
         self.events = events
         self.config = config
         self.leases: dict[tuple[str, str], WatchLease] = {}
-        self._watchers: dict[
-            tuple[str, str, str, tuple[str, ...]], asyncio.Task[None]
-        ] = {}
+        self._watchers: dict[tuple[str, str, str, tuple[str, ...]], asyncio.Task[None]] = {}
         self._failed_until: dict[tuple[str, str, str, tuple[str, ...]], float] = {}
         self._task: asyncio.Task[None] | None = None
 
@@ -190,9 +187,11 @@ class ProjectFileWatcher:
     ) -> tuple[str, tuple[str, ...]]:
         project = self.projects.projects.get(project_id)
         if project is None:
-            raise ValueError("unknown project")
+            raise ValueError(ui_message("project_watcher.e222820974"))
         if len(paths) > MAX_WATCHED_DIRECTORIES:
-            raise ValueError(f"at most {MAX_WATCHED_DIRECTORIES} directories may be watched")
+            raise ValueError(
+                ui_message("project_watcher.b548352d19", value1=MAX_WATCHED_DIRECTORIES)
+            )
         resource_root = str(Path(root or project.root).resolve())
         canonical_root = str(Path(project.root).resolve())
         patterns = (
@@ -249,9 +248,7 @@ class ProjectFileWatcher:
 
     async def _reconcile_watchers(self) -> None:
         now = time.monotonic()
-        self.leases = {
-            key: lease for key, lease in self.leases.items() if lease.expires_at > now
-        }
+        self.leases = {key: lease for key, lease in self.leases.items() if lease.expires_at > now}
         requests = [
             (lease.project_id, lease.root, lease.paths, project.root)
             for lease in self.leases.values()

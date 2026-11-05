@@ -1,3 +1,4 @@
+import { rich, t } from './localization/index.ts'
 // Shared remote-connection UI: the Tailscale connection-state readout, the phone
 // DNS checklist, the Windows firewall panel, and the QR of the connection URL.
 // Used by both Settings → Remote/Voice and the standalone "Connect a phone" modal.
@@ -24,10 +25,10 @@ export type FirewallStatus = {
 }
 
 export const CONNECTION_LABEL:Record<TailscaleConnectionState,string>={
-  not_installed:'Not installed',
-  logged_out:'Logged out',
+  get not_installed() { return t("remoteConnection.d177cdc09a") },
+  get logged_out() { return t("remoteConnection.7d29213db0") },
   connecting:'Connecting…',
-  needs_machine_auth:'Waiting for tailnet approval',
+  get needs_machine_auth() { return t("remoteConnection.d24696c786") },
   stopped:'Stopped',
   connected:'Connected',
   unknown:'Unknown',
@@ -47,13 +48,13 @@ export function connectionUrl(remote:RemoteStatus|null,port:number):string|null{
 // PATH: a fresh install is installed but logged out. Cause-pointing text mirrors
 // Orca's unreachableHostDetail rather than a generic "unavailable".
 export function TailscaleConnection({status}:{status:RemoteStatus|null}){
-  if(!status)return <p aria-live="polite">Checking the Tailscale connection…</p>
+  if(!status)return <p aria-live="polite">{t("remoteConnection.9a94bbe3bf")}</p>
   const state=status.connection_state
   const tone=state==='connected'?'remote-state-ok':state==='connecting'?'':'remote-state-warn'
   return <div class="remote-connection">
-    <dl><dt>Tailscale</dt><dd class={`remote-state ${tone}`}>{CONNECTION_LABEL[state]||state}{state==='connected'&&status.device_name?` as ${status.device_name}`:''}</dd></dl>
+    <dl><dt>{t("remoteConnection.88d90e2eef")}</dt><dd class={`remote-state ${tone}`}>{CONNECTION_LABEL[state] || state}{state==='connected'&&status.device_name ? t("remoteConnection.ac6e713b79", { device_name: status.device_name }) : ''}</dd></dl>
     <p aria-live="polite">{status.connection_detail}</p>
-    {status.connection_command&&<p>Next step: <code>{status.connection_command}</code>{state==='not_installed'&&<> · <a href="https://tailscale.com/download/windows" target="_blank" rel="noreferrer">Download Tailscale</a></>}</p>}
+    {status.connection_command && <p>{rich("remoteConnection.d84a8f506b", { value1: <code>{status.connection_command}</code>, value2: state==='not_installed' && <> · <a href="https://tailscale.com/download/windows" target="_blank" rel="noreferrer">{t("remoteConnection.b5fdda763d")}</a></> })}</p>}
   </div>
 }
 
@@ -61,12 +62,12 @@ export function TailscaleConnection({status}:{status:RemoteStatus|null}){
 // Missing Tailscale DNS is the top silent first-connect failure.
 export function PhoneDnsChecklist(){
   return <details class="remote-phone-dns">
-    <summary>Phone setup checklist</summary>
-    <p>swe-mux cannot detect the phone's network settings, so confirm these on the phone itself. A missing Tailscale DNS setting is the most common silent failure.</p>
+    <summary>{t("remoteConnection.5a53ee8eef")}</summary>
+    <p>{t("remoteConnection.56a44949b3")}</p>
     <ol>
-      <li>Install Tailscale on the phone and sign in to the same tailnet.</li>
-      <li>In the Tailscale app, turn on <strong>Use Tailscale DNS</strong>. The <code>.ts.net</code> address only resolves when MagicDNS is on.</li>
-      <li>On Android, set <strong>Private DNS</strong> (Settings → Network → Private DNS) to <strong>Off</strong> or <strong>Automatic</strong>. A strict Private DNS host blocks MagicDNS.</li>
+      <li>{t("remoteConnection.4eb475d9ad")}</li>
+      <li>{rich("remoteConnection.278e5c5082", { value1: <strong>{t("remoteConnection.755b71085c")}</strong>, value2: <code>{t("remoteConnection.082c23067d")}</code> })}</li>
+      <li>{rich("remoteConnection.42f521433b", { value1: <strong>{t("remoteConnection.0d04efd0df")}</strong>, value2: <strong>{t("remoteConnection.ca7981b46e")}</strong>, value3: <strong>{t("remoteConnection.d461a493a3")}</strong> })}</li>
     </ol>
   </details>
 }
@@ -82,10 +83,10 @@ export function FirewallPanel({status,busy,message,onRepair}:{status:FirewallSta
   const needsRepair=status.needs_repair===true
   const offerRepair=needsRepair||status.direct_path_blocked===true||status.inspection_available===false
   return <div class="remote-firewall">
-    <strong>Windows Defender Firewall</strong>
+    <strong>{t("remoteConnection.335ef137f5")}</strong>
     <p class={needsRepair?'settings-inline-error':'profile-hint'} aria-live="polite">{status.detail}</p>
-    {offerRepair&&<div class="theme-actions"><button class={needsRepair?'primary':''} disabled={busy} onClick={onRepair}>{busy?'Repairing…':needsRepair?'Repair firewall rule':'Add rule for direct 100.x fallback'}</button></div>}
-    {message&&<p class={/decline|did not|could not/i.test(message)?'settings-inline-error':''} aria-live="polite">{message}</p>}
+    {offerRepair && <div class="theme-actions"><button class={needsRepair?'primary':''} disabled={busy} onClick={onRepair}>{busy ? t("remoteConnection.fb4c616eb4") : needsRepair ? t("remoteConnection.0f9acf4691") : t("remoteConnection.47f82ef8bf")}</button></div>}
+    {message && <p class={/decline|did not|could not/i.test(message)?'settings-inline-error':''} aria-live="polite">{message}</p>}
   </div>
 }
 
@@ -101,5 +102,5 @@ export function ConnectionQr({url}:{url:string}){
     }catch{return ''}
   })()
   if(!svg)return null
-  return <div class="remote-qr" aria-label={`QR code for ${url}`} dangerouslySetInnerHTML={{__html:svg}} />
+  return <div class="remote-qr" aria-label={t("remoteConnection.5fa78a5d79", { url: url })} dangerouslySetInnerHTML={{__html:svg}} />
 }

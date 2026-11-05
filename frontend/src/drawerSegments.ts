@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // The utility drawer's second axis: what a tab is showing, once a tab shows more than
 // one thing.
 //
@@ -74,15 +75,15 @@ export const DRAWER_SEGMENTS: DrawerSegment[] = [
   // Actions. Sections rather than segments: everything here ends in text reaching the
   // focused agent, and a mode switch between "the thing I want to send" and "the other
   // thing I want to send" is a click that buys nothing.
-  { tab: 'actions', id: 'skills', kind: 'section', label: 'Skills', title: 'Skills - what the focused session’s CLI can actually see' },
-  { tab: 'actions', id: 'prompts', kind: 'section', label: 'Prompts', title: 'Prompt templates - saved reusable messages' },
-  { tab: 'actions', id: 'clipboard', kind: 'section', label: 'Clipboard', title: 'Clipboard history - insert a recent copy' },
+  { tab: 'actions', id: 'skills', kind: 'section', get label() { return t("drawerSegments.66d0f523a3") }, get title() { return t("drawerSegments.25e25cc8c2") } },
+  { tab: 'actions', id: 'prompts', kind: 'section', get label() { return t("drawerSegments.5f2e66e653") }, get title() { return t("drawerSegments.399b381822") } },
+  { tab: 'actions', id: 'clipboard', kind: 'section', get label() { return t("drawerSegments.285d69f0c5") }, get title() { return t("drawerSegments.1777326286") } },
 
   // Activity. What this session said it was doing, what the detectors concluded, and
   // what it actually wrote. Three readings of one run, which is why they are one tab.
-  { tab: 'activity', id: 'timeline', kind: 'segment', label: 'Timeline', title: 'Timeline - the scan narration of this session’s run', available: hasTranscript },
-  { tab: 'activity', id: 'findings', kind: 'segment', label: 'Findings', title: 'Findings - durable run notes from the detectors and observers' },
-  { tab: 'activity', id: 'changes', kind: 'segment', label: 'Changes', title: 'Changes - what this session edited, and what those edits reach', keepMounted: true },
+  { tab: 'activity', id: 'timeline', kind: 'segment', get label() { return t("drawerSegments.9dcff98e27") }, get title() { return t("drawerSegments.5976072ae9") }, available: hasTranscript },
+  { tab: 'activity', id: 'findings', kind: 'segment', get label() { return t("drawerSegments.e171c2ff25") }, get title() { return t("drawerSegments.cecd69618d") } },
+  { tab: 'activity', id: 'changes', kind: 'segment', get label() { return t("drawerSegments.bbd4b6a86b") }, get title() { return t("drawerSegments.92de1fc168") }, keepMounted: true },
 
   // Agent. The three halves of "what is this agent actually running with".
   //
@@ -91,12 +92,12 @@ export const DRAWER_SEGMENTS: DrawerSegment[] = [
   // back to it rather than to an empty tab. That fallback is what the old Context tab
   // did by being a separate, Project-scoped tab, and it is preserved by `available`
   // rather than by keeping two tabs.
-  { tab: 'agent', id: 'config', kind: 'segment', label: 'Config', title: 'Config - runtime, policies, feature flags, and the configuration sources behind them', available: isAgent },
-  { tab: 'agent', id: 'tools', kind: 'segment', label: 'Tools', title: 'Tools - built-in tools, skills, MCP servers, plugins, hooks, and custom agents', available: isAgent },
+  { tab: 'agent', id: 'config', kind: 'segment', get label() { return t("drawerSegments.87e89abb4c") }, get title() { return t("drawerSegments.8c0096d6ba") }, available: isAgent },
+  { tab: 'agent', id: 'tools', kind: 'segment', get label() { return t("drawerSegments.ea93d6a262") }, get title() { return t("drawerSegments.b4bcdd5273") }, available: isAgent },
   // "Instructions" rather than "Context" or "Memory": bounded by Config and Tools it
   // reads as "the prose this agent was given", and learned memory files are auto-loaded
   // instructions in effect. The heading carries the longer, exact name.
-  { tab: 'agent', id: 'instructions', kind: 'segment', label: 'Instructions', title: 'Instructions - instruction files and learned project memory this agent reads' },
+  { tab: 'agent', id: 'instructions', kind: 'segment', get label() { return t("drawerSegments.934652dce4") }, get title() { return t("drawerSegments.8a0100892b") } },
 
   // Files. The tree and the Recent list are two readings of the same Project, and Recent
   // was a pressed icon inside the search row until now - a mode with no name anywhere in
@@ -106,14 +107,14 @@ export const DRAWER_SEGMENTS: DrawerSegment[] = [
   // pressed state. The labels are the headings rather than shorter chips: "File Explorer"
   // is what this surface is called everywhere else, and abbreviating it here to fit a chip
   // would rename it for no reason.
-  { tab: 'files', id: 'explorer', kind: 'segment', label: 'File Explorer', title: 'File Explorer - browse and search this Project’s tree' },
-  { tab: 'files', id: 'recent', kind: 'segment', label: 'Recent', title: 'Recent - what Git says was touched here, uncommitted work first' },
+  { tab: 'files', id: 'explorer', kind: 'segment', get label() { return t("drawerSegments.d6f6a04891") }, get title() { return t("drawerSegments.5323aefd3d") } },
+  { tab: 'files', id: 'recent', kind: 'segment', get label() { return t("drawerSegments.690dbe9dc0") }, get title() { return t("drawerSegments.9d86dea585") } },
 
   // Git. Registered rather than left on local state, so the drawer has one mechanism for
   // this idea instead of two. Lifting it also buys "open Git Log" as a voice phrase.
-  { tab: 'git', id: 'map', kind: 'segment', label: 'Map', title: 'Map - one row per worktree, with its files, changes, and live sessions' },
-  { tab: 'git', id: 'log', kind: 'segment', label: 'Log', title: 'Log - the repository’s commit graph' },
-  { tab: 'git', id: 'provenance', kind: 'segment', label: 'Provenance', title: 'Provenance - which session and run produced each commit' },
+  { tab: 'git', id: 'map', kind: 'segment', get label() { return t("drawerSegments.be176b0015") }, get title() { return t("drawerSegments.2595e7f012") } },
+  { tab: 'git', id: 'log', kind: 'segment', get label() { return t("drawerSegments.21e49eb2b2") }, get title() { return t("drawerSegments.50d5b0d824") } },
+  { tab: 'git', id: 'provenance', kind: 'segment', get label() { return t("drawerSegments.1c4b8ff605") }, get title() { return t("drawerSegments.9ce751b936") } },
 ]
 
 /**
@@ -151,8 +152,8 @@ export const RETIRED_DRAWER_SEGMENTS: RetiredDrawerSegment[] = [
   {
     tab: 'git',
     id: 'land',
-    label: 'Land',
-    title: 'Land - the landing strip at the head of the worktree map',
+    get label() { return t("drawerSegments.b6baff9358") },
+    get title() { return t("drawerSegments.141d9539fc") },
     landsOn: 'map',
   },
 ]

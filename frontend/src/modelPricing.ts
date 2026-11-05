@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 /**
  * Price and capacity facts for one OpenRouter catalog entry, rendered for a
  * chooser rather than for a ledger.
@@ -87,8 +88,8 @@ export function formatModelPricing(model: ModelPricingFacts): string | null {
   const input = perMillionTokens(model.prompt_price)
   const output = perMillionTokens(model.completion_price)
   if (input === null && output === null) return null
-  if (model.prompt_price === 0 && model.completion_price === 0) return 'free'
-  return `${input ?? '?'} / ${output ?? '?'} per M`
+  if (model.prompt_price === 0 && model.completion_price === 0) return t("modelPricing.ad95d5fa65")
+  return t("modelPricing.01d54c8959", { value1: input ?? '?', value2: output ?? '?' })
 }
 
 /** Context window as a reader states it: `128K`, `1M`. `null` when unstated. */
@@ -96,9 +97,9 @@ export function formatContextLength(tokens: number | null | undefined): string |
   if (tokens === null || tokens === undefined || !Number.isFinite(tokens) || tokens <= 0) return null
   if (tokens >= PER_MILLION) {
     const millions = tokens / PER_MILLION
-    return `${millions >= 10 ? Math.round(millions) : Number(millions.toFixed(1))}M`
+    return t("modelPricing.cf0d24d173", { value1: millions >= 10 ? Math.round(millions) : Number(millions.toFixed(1)) })
   }
-  if (tokens >= 1000) return `${Math.round(tokens / 1000)}K`
+  if (tokens >= 1000) return t("modelPricing.c046494e68", { value1: Math.round(tokens / 1000) })
   return String(Math.round(tokens))
 }
 
@@ -137,14 +138,14 @@ export function modelCachingLabel(model: ModelPricingFacts): string | null {
   if (read === null || read === undefined || !Number.isFinite(read)) {
     // Only a model with priced input can be *said* to not cache; without any
     // pricing the catalog simply did not answer.
-    return input === null || input === undefined ? null : 'no prompt caching'
+    return input === null || input === undefined ? null : t("modelPricing.1f718221e3")
   }
   const ratio = input && input > 0 ? read / input : null
-  const readPart = ratio ? `cache reads at ${ratio.toFixed(2)}x input` : 'caches prompts'
+  const readPart = ratio ? t("modelPricing.dd2e1204a4", { value1: ratio.toFixed(2) }) : t("modelPricing.c31eb28848")
   if (write !== null && write !== undefined && Number.isFinite(write) && input && write > input) {
-    return `${readPart}, writes at ${(write / input).toFixed(2)}x`
+    return t("modelPricing.51e574f950", { value1: readPart, value2: (write / input).toFixed(2) })
   }
-  return `${readPart}, free writes`
+  return t("modelPricing.06057ed9e0", { value1: readPart })
 }
 
 /**
@@ -156,8 +157,8 @@ export function modelMetaTitle(model: ModelPricingFacts): string | null {
   const lines: string[] = []
   const input = perMillionTokens(model.prompt_price)
   const output = perMillionTokens(model.completion_price)
-  if (input !== null) lines.push(`Input ${input} per million tokens`)
-  if (output !== null) lines.push(`Output ${output} per million tokens`)
+  if (input !== null) lines.push(t("modelPricing.333debc1ab", { value1: input }))
+  if (output !== null) lines.push(t("modelPricing.f1e5cb7204", { value1: output }))
   const caching = modelCachingLabel(model)
   if (caching !== null) lines.push(caching)
   const context = formatContextLength(model.context_length)

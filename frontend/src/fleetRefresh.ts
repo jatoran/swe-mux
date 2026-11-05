@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { api, type ApiOptions } from './api.ts'
 import type { HarnessRegistryPayload } from './harnessRegistry.ts'
 import type { Preview } from './processFleet.ts'
@@ -93,7 +94,7 @@ export function describeFleetFailures(failures: readonly FleetSliceFailure[]): s
   const first = failures[0]
   if (!first) return ''
   const message = first.cause instanceof Error ? first.cause.message : String(first.cause)
-  return failures.length > 1 ? `${message} (${failures.length} of ${SLICE_NAMES.length} fleet reads failed)` : message
+  return failures.length > 1 ? t("fleetRefresh.bce4572df5", { value1: message, value2: failures.length, value3: SLICE_NAMES.length }) : message
 }
 
 export type FleetRefreshController = {

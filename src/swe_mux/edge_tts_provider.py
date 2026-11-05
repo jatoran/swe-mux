@@ -19,6 +19,7 @@ from typing import Any
 from .bounded_subprocess import run_bounded
 from .config import Config
 from .tts_profiles import TtsProfile
+from .ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -488,9 +489,7 @@ class EdgeTtsProvider:
             "risk_acknowledged": acknowledged,
             "retry_after": self.retry_after or None,
             "managed": managed,
-            "using_managed": bool(
-                executable and Path(executable) == self.managed_python()
-            ),
+            "using_managed": bool(executable and Path(executable) == self.managed_python()),
             "catalog": self.catalog.snapshot(selected=self.config.tts_edge_voice),
         }
 
@@ -555,9 +554,7 @@ class EdgeTtsProvider:
     def _record_install_error(
         self, operation_id: str, message: str, prior_state: dict[str, Any]
     ) -> None:
-        prior_ready = (
-            prior_state.get("status") == "ready" and self.managed_python().is_file()
-        )
+        prior_ready = prior_state.get("status") == "ready" and self.managed_python().is_file()
         state = (
             {
                 **prior_state,
@@ -585,9 +582,7 @@ class EdgeTtsProvider:
                 exc_info=True,
             )
 
-    async def _run_install_command(
-        self, argv: list[str], *, label: str, operation_id: str
-    ) -> None:
+    async def _run_install_command(self, argv: list[str], *, label: str, operation_id: str) -> None:
         try:
             outcome = await run_bounded(
                 argv,
@@ -672,9 +667,7 @@ class EdgeTtsProvider:
                 "downloads Edge TTS from PyPI, so it needs outbound HTTPS.",
             ) from exc
 
-    async def _install_managed(
-        self, operation_id: str, prior_state: dict[str, Any]
-    ) -> None:
+    async def _install_managed(self, operation_id: str, prior_state: dict[str, Any]) -> None:
         started = time.monotonic()
         staging = self.integration_directory / f".staging-{operation_id}"
         previous: Path | None = None
@@ -706,7 +699,7 @@ class EdgeTtsProvider:
                 try:
                     await self._run_install_command(
                         plan.create_argv(staging),
-                        label=f"Edge TTS environment creation ({plan.kind})",
+                        label=ui_message("edge_tts_provider.dada1df7a1", value1=plan.kind),
                         operation_id=operation_id,
                     )
                 except EdgeTtsError as exc:
@@ -715,13 +708,12 @@ class EdgeTtsProvider:
                 if not staging_python.is_file():
                     raise EdgeTtsError(
                         "install_invalid",
-                        f"{plan.kind} completed without creating the managed Python "
-                        "interpreter",
+                        f"{plan.kind} completed without creating the managed Python interpreter",
                     )
                 self._install_phase(operation_id, "installing_package")
                 await self._run_install_command(
                     plan.install_argv(staging_python),
-                    label=f"Edge TTS package installation ({plan.kind})",
+                    label=ui_message("edge_tts_provider.ecc97e0b4f", value1=plan.kind),
                     operation_id=operation_id,
                 )
                 self._install_phase(operation_id, "verifying")
@@ -856,7 +848,7 @@ class EdgeTtsProvider:
         try:
             outcome = await run_bounded(
                 [executable, str(self.bridge), operation, *arguments],
-                label=f"edge-tts {operation}",
+                label=ui_message("edge_tts_provider.5d33378e14", value1=operation),
                 timeout_seconds=timeout_seconds,
                 output_limit=EDGE_CATALOG_LIMIT if operation == "voices" else EDGE_STATUS_LIMIT,
                 stderr_limit=32 * 1024,

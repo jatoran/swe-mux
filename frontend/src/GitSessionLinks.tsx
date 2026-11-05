@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { useEffect, useRef } from 'preact/hooks'
 import { clampContextMenuLeft, fitScrollingMenuInViewport } from './menuPosition'
 import { useDismissLevel } from './modalFocus'
@@ -45,9 +46,9 @@ export function sessionLinkDestination(item: SessionLinkItem): 'session' | 'hist
 }
 
 const DESTINATION_LABEL: Record<ReturnType<typeof sessionLinkDestination>, string> = {
-  session: 'Open its pane',
-  history: 'Read it in History',
-  none: 'No conversation recorded',
+  get session() { return t("GitSessionLinks.1a8125d35b") },
+  get history() { return t("GitSessionLinks.2eee784696") },
+  get none() { return t("GitSessionLinks.ba12b0dd5a") },
 }
 
 type Props = {
@@ -91,16 +92,16 @@ export function GitSessionLinks({ menu, onClose, onFollow }: Props) {
         key={item.key}
         role="menuitem"
         disabled={destination === 'none'}
-        title={`${item.label} · ${action}`}
+        title={t("GitSessionLinks.8ebdee1b9f", { label: item.label, action: action })}
         onClick={() => { onClose(); onFollow(item) }}
       >
         <StateIndicator session={item.session || undefined} shape={rowConfig.dotShape} />
         <span class="git-session-link-label">
           <strong>{item.label}</strong>
-          <small>{item.detail ? `${item.detail} · ${action}` : action}</small>
+          <small>{item.detail ? t("GitSessionLinks.94ce76e92f", { detail: item.detail, action: action }) : action}</small>
         </span>
       </button>
     })}
-    {!menu.items.length && <div class="context-note">No sessions are recorded here.</div>}
+    {!menu.items.length && <div class="context-note">{t("GitSessionLinks.83dc417309")}</div>}
   </div>
 }

@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { serverNow } from './serverClock.ts'
 import type { DeliveryReadiness, DeliveryState, Session } from './types.ts'
 
@@ -30,110 +31,106 @@ type Explanation = {
 const EXPLANATIONS: Record<string, Explanation> = {
   // --- blocked: the agent is busy or being asked something -------------------
   root_agent_working: {
-    summary: 'this agent is mid-turn',
-    clears: 'It clears when the turn ends. Mark a message “interrupt” to have it written into the running turn instead.',
+    get summary() { return t("deliveryReadiness.eef46d4d1d") },
+    get clears() { return t("deliveryReadiness.d0f9a0252e") },
   },
   approval_required: {
-    summary: 'this agent is waiting on an approval prompt',
-    clears: 'Answer the prompt in the terminal. Typing here cannot be allowed through, because text sent at an approval dialog would answer it.',
+    get summary() { return t("deliveryReadiness.f5a1aabb1e") },
+    get clears() { return t("deliveryReadiness.4380b02b1c") },
   },
   awaiting_user_input: {
-    summary: 'this agent asked you a question',
-    clears: 'Answer it in the terminal. The queue will not write into a question prompt, because the text would be taken as the answer.',
+    get summary() { return t("deliveryReadiness.f1ede2a0d0") },
+    get clears() { return t("deliveryReadiness.550511d99f") },
   },
   awaiting_approval: {
-    summary: 'this agent is waiting on an approval prompt',
-    clears: 'Answer the prompt in the terminal; this protection cannot be overridden.',
+    get summary() { return t("deliveryReadiness.f5a1aabb1e") },
+    get clears() { return t("deliveryReadiness.255022c879") },
   },
   awaiting_question: {
-    summary: 'this agent asked you a question',
-    clears: 'Answer it in the terminal; this protection cannot be overridden.',
+    get summary() { return t("deliveryReadiness.f1ede2a0d0") },
+    get clears() { return t("deliveryReadiness.bd2ce1826e") },
   },
   awaiting_elicitation: {
-    summary: 'this agent is collecting input through a tool prompt',
-    clears: 'Complete the prompt in the terminal; this protection cannot be overridden.',
+    get summary() { return t("deliveryReadiness.6a7fa6d678") },
+    get clears() { return t("deliveryReadiness.93e9a6cb7d") },
   },
   provider_rate_limit: {
-    summary: 'the provider is rate-limiting this agent',
-    clears: 'It clears when the limit lifts.',
+    get summary() { return t("deliveryReadiness.217bcc1fc0") },
+    get clears() { return t("deliveryReadiness.9d12746ff5") },
   },
 
   // --- blocked: the composer / the screen -----------------------------------
   composer_holds_draft: {
-    summary: 'there is unsent text in this agent’s composer',
-    clears:
-      'Send it or clear it in the terminal. A queued message would otherwise be pasted onto the end of it and the agent would receive both as one prompt.',
+    get summary() { return t("deliveryReadiness.4be0be851e") },
+    get clears() { return t("deliveryReadiness.65f54d2497") },
   },
   terminal_input_after_completion: {
-    summary: 'something was typed in this terminal after its last turn ended, and its composer has not been read since',
-    clears:
-      'Open the session: once a pane has drawn the composer empty, this clears on its own. Without a pane the queue cannot see what is in the composer, so it waits for the next turn to end rather than risk pasting onto text.',
+    get summary() { return t("deliveryReadiness.11dadd68fa") },
+    get clears() { return t("deliveryReadiness.3f7445b649") },
   },
   operator_recently_typed: {
-    summary: 'someone is typing in this terminal right now',
-    clears: 'It clears a moment after the typing stops.',
+    get summary() { return t("deliveryReadiness.a7c5b374b2") },
+    get clears() { return t("deliveryReadiness.4615818780") },
   },
   unsubmitted_delivery_in_composer: {
-    summary: 'the last message mux sent is still sitting in this composer, unsubmitted',
-    clears:
-      'The CLI took the text but not the Enter, so sending again would paste the next message on top of it and the agent would receive both as one. Press Enter in the pane to send what is there, or clear the composer — either one releases the queue.',
+    get summary() { return t("deliveryReadiness.587d03cacb") },
+    get clears() { return t("deliveryReadiness.5a86827dd6") },
   },
   screen_not_at_agent_prompt: {
-    summary: 'this terminal is not showing the agent’s prompt',
-    clears: 'Leave whatever is on top — a pager, a picker, a viewer — and get back to the prompt.',
+    get summary() { return t("deliveryReadiness.2db6c91aa2") },
+    get clears() { return t("deliveryReadiness.267d45c635") },
   },
 
   // --- blocked: identity, liveness, boundary --------------------------------
   session_ended: {
-    summary: 'this session has ended',
-    clears: 'Nothing can be delivered to it. Retarget the message at a live session.',
+    get summary() { return t("deliveryReadiness.fd1bc81b47") },
+    get clears() { return t("deliveryReadiness.7782dd9ead") },
   },
   not_live_agent_run: {
-    summary: 'this is not a live agent run',
-    clears: 'Only a registered prompt-delivery harness can be queued to; a plain shell would execute the paste.',
+    get summary() { return t("deliveryReadiness.d4f479d1e7") },
+    get clears() { return t("deliveryReadiness.f8d7c36e0c") },
   },
   transcript_stale: {
-    summary: 'the followed transcript is no longer this session’s conversation',
-    clears:
-      'An in-CLI /clear or /new retires the conversation being read, so every other reading here is about a conversation that no longer exists. It clears when the successor conversation proves itself.',
+    get summary() { return t("deliveryReadiness.8236821327") },
+    get clears() { return t("deliveryReadiness.858662ca54") },
   },
   remote_terminal_boundary: {
-    summary: 'this terminal is a remote shell',
-    clears: 'Delivery is restricted to local terminals, so SSH sessions and remote shells are never written into.',
+    get summary() { return t("deliveryReadiness.6092603cf1") },
+    get clears() { return t("deliveryReadiness.07a52e7832") },
   },
   terminal_boundary_unknown: {
-    summary: 'the daemon cannot tell whether this terminal is local',
-    clears: 'Only an explicit local boundary satisfies this check.',
+    get summary() { return t("deliveryReadiness.cd047876f0") },
+    get clears() { return t("deliveryReadiness.aec66ea8e3") },
   },
-  turn_interrupted: { summary: 'the last turn was interrupted rather than completed' },
-  turn_aborted: { summary: 'the last turn was aborted rather than completed' },
+  turn_interrupted: { get summary() { return t("deliveryReadiness.b39ca97ac5") } },
+  turn_aborted: { get summary() { return t("deliveryReadiness.f6ce899bfc") } },
 
   // --- unknown: evidence is missing rather than damning ---------------------
   no_root_lifecycle_evidence: {
-    summary: 'nothing has yet proved this agent finished a turn',
-    clears: 'It resolves on its own once the agent starts or completes a turn.',
+    get summary() { return t("deliveryReadiness.c330fb2892") },
+    get clears() { return t("deliveryReadiness.b976e6d9bb") },
   },
   observation_capability_unknown: {
-    summary: 'the daemon has not yet confirmed it can read this session',
-    clears: 'It resolves once a hook or a transcript record arrives.',
+    get summary() { return t("deliveryReadiness.418c04500d") },
+    get clears() { return t("deliveryReadiness.0a95ae8726") },
   },
   completion_input_boundary_unknown: {
-    summary: 'the daemon does not know what was in the composer when the last turn ended',
-    clears: 'Without that boundary it cannot tell a clean prompt from a half-typed one, so it declines to guess.',
+    get summary() { return t("deliveryReadiness.a70cc872f2") },
+    get clears() { return t("deliveryReadiness.dd11308fd3") },
   },
   lifecycle_evidence_stale: {
-    summary: 'the evidence about this agent has gone stale',
-    clears: 'It refreshes on the next turn, hook, or transcript record.',
+    get summary() { return t("deliveryReadiness.4241cbb709") },
+    get clears() { return t("deliveryReadiness.9b76dc90a2") },
   },
   readiness_debounce_pending: {
-    summary: 'the agent just reached its prompt',
-    clears: 'It settles in a moment.',
+    get summary() { return t("deliveryReadiness.7c1fc3da1b") },
+    get clears() { return t("deliveryReadiness.f5bd9dc8b7") },
   },
   incomplete_readiness_evidence: {
-    summary: 'some required evidence is missing',
-    clears: 'Unknown is never treated as safe, so the send needs your explicit confirmation.',
+    get summary() { return t("deliveryReadiness.d42d99fd68") },
+    get clears() { return t("deliveryReadiness.43e8ac298b") },
   },
-  all_required_evidence_positive: { summary: 'every required check is positive' },
+  all_required_evidence_positive: { get summary() { return t("deliveryReadiness.d0ec4ac094") } },
 }
 
 /** The one place a raw reason code becomes a sentence. Unmapped codes pass through. */
@@ -201,7 +198,7 @@ export function describeReadiness(
   return {
     state,
     headline:
-      state === 'safe' ? 'deliverable' : state === 'blocked' ? 'not deliverable' : 'readiness unknown',
+      state === 'safe' ? 'deliverable' : state === 'blocked' ? t("deliveryReadiness.38e847b485") : t("deliveryReadiness.766f768353"),
     summary: state === 'safe' ? '' : leading.summary,
     clears: state === 'safe' ? '' : leading.clears ?? '',
     protected: isProtected(readiness),
@@ -224,7 +221,7 @@ export const READINESS_AGE_VISIBLE_SECONDS = 5
 export function readinessAgeLabel(verdict: ReadinessVerdict): string {
   const age = verdict.ageSeconds
   if (age === null || age < READINESS_AGE_VISIBLE_SECONDS) return ''
-  return age < 90 ? `${Math.round(age)}s ago` : `${Math.round(age / 60)} min ago`
+  return age < 90 ? t("deliveryReadiness.54cc4999d6", { value1: Math.round(age) }) : t("deliveryReadiness.1de67215cf", { value1: Math.round(age / 60) })
 }
 
 /** One compact line for a row or a chip: "not deliverable — this agent is mid-turn". */

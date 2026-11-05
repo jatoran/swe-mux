@@ -469,9 +469,7 @@ def _holds_importable_code(dist: Any, name: str) -> bool:
         return located.suffix in {".py", ".pyd", ".so", ".dylib"}
     if not located.is_dir():
         return False
-    return any(
-        child.suffix in {".py", ".pyd", ".so", ".dylib"} for child in located.rglob("*")
-    )
+    return any(child.suffix in {".py", ".pyd", ".so", ".dylib"} for child in located.rglob("*"))
 
 
 def voice_closure_top_levels() -> tuple[str, ...]:
@@ -554,9 +552,7 @@ RELINKABLE_LGPL = ("pystray",)
 # frozen artifact. Edge TTS runs through the shipped Apache bridge under a
 # user-managed Python, so finding the LGPL package here means the distribution
 # boundary regressed even when relinking would have been technically possible.
-EXTERNAL_ONLY_ARTIFACTS = (
-    ("edge_tts", "the optional LGPL Edge TTS client must remain external"),
-)
+EXTERNAL_ONLY_ARTIFACTS = (("edge_tts", "the optional LGPL Edge TTS client must remain external"),)
 
 # Payloads the audit found hiding inside wheels that declare a permissive
 # license. Each is checked by artifact name because the declaration lies: PyAV
@@ -627,11 +623,7 @@ def verify_bundle_licenses(bundle_root: Path) -> None:
             + "\nSee packaging/license_audit.py for why each of these may never ship."
         )
 
-    missing = [
-        name
-        for name in RELINKABLE_LGPL
-        if not sorted((internal / name).glob("*.py"))
-    ]
+    missing = [name for name in RELINKABLE_LGPL if not sorted((internal / name).glob("*.py"))]
     if missing:
         raise SystemExit(
             "LGPL relink regression: "
@@ -651,11 +643,7 @@ def verify_no_gpl_av(bundle_root: Path) -> None:
     race to the real module. The bundle check is the regression gate.
     """
     internal = bundle_root / "_internal"
-    offenders = [
-        path
-        for path in (internal / "av.libs", internal / "av")
-        if path.exists()
-    ]
+    offenders = [path for path in (internal / "av.libs", internal / "av") if path.exists()]
     offenders += sorted(internal.glob("av/**/*.pyd")) if (internal / "av").exists() else []
     if offenders:
         raise SystemExit(
@@ -796,9 +784,7 @@ def verify_stable_abi_forwarder(bundle_root: Path) -> None:
     )
 
 
-def verify_voice_closure_absent(
-    bundle_root: Path, closure: Collection[str] | None = None
-) -> None:
+def verify_voice_closure_absent(bundle_root: Path, closure: Collection[str] | None = None) -> None:
     """Fail the build when the acquired speech closure rode along anyway.
 
     `verify_bundle_contents` already rejects any unexpected top-level package, so
@@ -852,9 +838,7 @@ def verify_bundle_contents(
 
     verify_stable_abi_forwarder(bundle_root)
 
-    unexpected = sorted(
-        (size, name) for name, size in sizes.items() if name not in expected
-    )
+    unexpected = sorted((size, name) for name, size in sizes.items() if name not in expected)
     if unexpected:
         listing = "\n  ".join(
             f"{name} ({size / 1_000_000:.1f} MB)" for size, name in reversed(unexpected)
@@ -964,7 +948,8 @@ def build_supervisor_bundle(*, force: bool = False) -> bool:
 # themselves stay frozen in the executable's archive. Admitting the name alone
 # would blunt this gate (a future import chain dragging real daemon modules into
 # that directory would only show as size), so `verify_cli_bundle_contents`
-# additionally asserts the directory holds nothing but that skills subtree.
+# additionally asserts the directory holds only that skills subtree and the two
+# UI catalogs used by config validation and error message descriptors.
 EXPECTED_CLI_BUNDLE_PACKAGES = frozenset({"psutil", "swe_mux"})
 
 
@@ -1017,21 +1002,28 @@ def verify_cli_bundle_contents(
         )
     # `swe_mux` is admitted for its package data alone, so admitting the *name*
     # must not blunt the gate: anything under `_internal/swe_mux/` other than
-    # the embedded skill subtree means the client's modules stopped being frozen
+    # the embedded skill subtree and explicit UI catalogs means modules stopped being frozen
     # into the archive - or a daemon module arrived as data - and both are the
     # class of regression this function exists to catch by name, not by size.
     package_dir = bundle_root / "_internal" / "swe_mux"
     stray = sorted(
         str(item.relative_to(package_dir))
         for item in (package_dir.rglob("*") if package_dir.is_dir() else ())
-        if item.is_file() and item.relative_to(package_dir).parts[:2] != ("assets", "skills")
+        if item.is_file()
+        and item.relative_to(package_dir).parts[:2] != ("assets", "skills")
+        and item.relative_to(package_dir).as_posix()
+        not in {
+            "assets/locales/en.json",
+            "assets/locales/zh-Hans.json",
+        }
     )
     if stray:
         raise SystemExit(
             "CLI bundle membership regression: _internal/swe_mux/ holds more than "
-            "the embedded skill data:\n  "
+            "the embedded skill and UI catalog data:\n  "
             + "\n  ".join(stray)
-            + "\nOnly `assets/skills/` may live there (packaging/swe_mux_cli.spec "
+            + "\nOnly `assets/skills/` and `assets/locales/{en,zh-Hans}.json` may live there "
+            "(packaging/swe_mux_cli.spec "
             "datas). Anything else is code or data arriving outside the frozen "
             "archive; find the entry that put it there rather than widening this."
         )
@@ -1119,9 +1111,7 @@ def smoke_cli_bundle(
                     f"stdout: {completed.stdout.strip()[:2000]}\n"
                     f"stderr: {completed.stderr.strip()[:2000]}"
                 )
-    print(
-        f"Smoked {executable} (--help, --skill, and exit {EXIT_CONNECTION} on a dead daemon)"
-    )
+    print(f"Smoked {executable} (--help, --skill, and exit {EXIT_CONNECTION} on a dead daemon)")
 
 
 def build_cli_bundle() -> None:

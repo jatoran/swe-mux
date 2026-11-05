@@ -37,6 +37,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .host_platform import IS_WINDOWS
+from .ui_messages import ui_message
 
 #: One marker file, beside the other install-lifecycle state in the data dir.
 #: JSON rather than a touch-file because "when, and what they said" is worth
@@ -50,19 +51,7 @@ FIRST_RUN_NAME = "desktop-first-run.json"
 OFFER_SLOTS: tuple[str, ...] = ("start-menu", "startup")
 
 OFFER_TITLE = "swe-mux"
-OFFER_TEXT = (
-    "Add swe-mux to the Start Menu, and start it when you sign in?\n"
-    "\n"
-    "It will start minimised to the notification area, so the browser UI and "
-    "your agent sessions are there whenever you want them - with no terminal "
-    "and nothing to launch.\n"
-    "\n"
-    "You can change this later from the tray menu (Start with Windows) or from "
-    "Settings, and `swemux install-shortcut --remove` takes back everything this "
-    "writes.\n"
-    "\n"
-    "swe-mux will not ask again either way."
-)
+OFFER_TEXT = ui_message("first_run.84ff915c73")
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,9 +93,7 @@ def record_answer(data_dir: Path, *, accepted: bool) -> None:
     """Persist the answer, so this is asked once per install and not once per start."""
     state = FirstRunState(asked=True, accepted=accepted)
     data_dir.mkdir(parents=True, exist_ok=True)
-    marker_path(data_dir).write_text(
-        json.dumps(state.as_dict(), indent=2) + "\n", encoding="utf-8"
-    )
+    marker_path(data_dir).write_text(json.dumps(state.as_dict(), indent=2) + "\n", encoding="utf-8")
 
 
 def should_offer(

@@ -1,3 +1,5 @@
+import { codeLabel } from './localization/codeLabels.ts'
+import { rich, t } from './localization/index.ts'
 /**
  * The first-use asset panels shared by Settings and the guided voice setup.
  *
@@ -123,16 +125,8 @@ export function VoiceRuntimePanel({initial,action=true}:{initial:VoiceRuntimeInf
   const megabytes=Math.round(total/1048576)
   const waiting=runtime.supported&&status!=='ready'&&status!=='downloading'
   return <div class="kokoro-model-panel">
-    <p aria-live="polite">
-      <span class={`state-dot ${status==='ready'?'idle':status==='downloading'?'running':'stopped'}`}/>
-      Speech libraries::{runtime.supported?status:'unsupported'}
-      {status==='ready'&&runtime.source==='installed'&&' · installed in this environment'}
-      {status==='ready'&&runtime.source==='downloaded'&&` · ${runtime.distributions} packages, ${megabytes} MB, hash-verified`}
-      {status==='downloading'&&` · ${pct}% (${Math.round(done/1048576)}/${megabytes} MB)${runtime.current_file?` · ${runtime.current_file}`:''}`}
-      {runtime.supported&&status==='not_downloaded'&&' · read aloud and dictation both need them'}
-      {(!runtime.supported||status==='error')&&runtime.error&&` · ${runtime.error}`}
-    </p>
-    {action&&waiting&&<button disabled={starting} onClick={()=>void download()}>{status==='error'?'Retry download':`Download speech libraries (~${megabytes} MB)`}</button>}
+    <p aria-live="polite">{rich("voiceModelPanels.59f878bdff", { value1: <span class={`state-dot ${status==='ready'?'idle':status==='downloading'?'running':'stopped'}`}/>, value2: runtime.supported ? status : t("voiceModelPanels.60945d4953"), value3: status==='ready'&&runtime.source==='installed' && t("voiceModelPanels.6035e91d38"), value4: status==='ready'&&runtime.source==='downloaded' && t("voiceModelPanels.7062fbe25e", { distributions: runtime.distributions, megabytes: megabytes }), value5: status==='downloading' && t("voiceModelPanels.b36b590239", { pct: pct, value2: Math.round(done/1048576), megabytes: megabytes, value4: runtime.current_file?` · ${runtime.current_file}`:'' }), value6: runtime.supported&&status==='not_downloaded' && t("voiceModelPanels.6589de2e75"), value7: (!runtime.supported||status==='error')&&runtime.error && t("voiceModelPanels.f3b99994b4", { error: runtime.error }) })}</p>
+    {action&&waiting && <button disabled={starting} onClick={()=>void download()}>{status==='error' ? t("voiceModelPanels.9e90b86876") : t("voiceModelPanels.a79ef9d4c7", { megabytes: megabytes })}</button>}
   </div>
 }
 
@@ -210,35 +204,14 @@ export function KokoroModelPanel({initial}:{initial:KokoroModelInfo|null}){
   // `start_download` short-circuits when it is already `ready`, so pressing this
   // after a partial failure re-runs the failed parts and no others. That is the
   // per-store retry the three lines promise, without three controls to read.
-  const label=failed?'Retry what failed'
-    :`Download everything Kokoro needs (~${Math.max(1,Math.round(outstanding/1048576))} MB)`
+  const label=failed?t("voiceModelPanels.4fba9d4050")
+    :t("voiceModelPanels.4f0b14edcc", { value1: Math.max(1,Math.round(outstanding/1048576)) })
   return <div class="kokoro-model-panel">
-    {runtime&&<p aria-live="polite">
-      <span class={`state-dot ${runtimeStatus==='ready'?'idle':runtimeStatus==='downloading'?'running':'stopped'}`}/>
-      Speech libraries::{runtimeStatus}
-      {runtimeStatus==='ready'&&runtime.source==='installed'&&' · installed in this environment'}
-      {runtimeStatus==='ready'&&runtime.source!=='installed'&&` · ${runtime.distributions} packages, ${Math.round((runtime.total_bytes||0)/1048576)} MB, hash-verified`}
-      {runtimeStatus==='downloading'&&` · ${Math.round((runtime.downloaded_bytes||0)/1048576)}/${Math.round((runtime.total_bytes||0)/1048576)} MB${runtime.current_file?` · ${runtime.current_file}`:''}`}
-      {runtimeStatus==='not_downloaded'&&' · Kokoro has no engine to load without them'}
-      {(runtimeStatus==='error'||runtimeStatus==='unsupported')&&runtime.error&&` · ${runtime.error}`}
-    </p>}
-    <p aria-live="polite">
-      <span class={`state-dot ${status==='ready'?'idle':status==='downloading'?'running':'stopped'}`}/>
-      Kokoro model::{status}
-      {status==='downloading'&&` · ${pct}% (${Math.round(done/1048576)}/${Math.round(total/1048576)} MB)${model?.current_file?` · ${model.current_file}`:''}`}
-      {status==='ready'&&` · ${Math.round(total/1048576)} MB, hash-verified`}
-      {status==='error'&&model?.error&&` · ${model.error}`}
-    </p>
-    {g2p&&<p aria-live="polite">
-      <span class={`state-dot ${g2pStatus==='ready'?'idle':g2pStatus==='downloading'?'running':'stopped'}`}/>
-      Pronunciation model::{g2pStatus}
-      {g2pStatus==='ready'&&` · ${g2p.distribution} ${g2p.version}, ${g2p.source==='installed'?'installed in this environment':'downloaded and hash-verified'}`}
-      {g2pStatus==='downloading'&&` · ${Math.round((g2p.total_bytes||0)/1048576)} MB`}
-      {g2pStatus==='not_downloaded'&&' · Kokoro cannot pronounce anything without it'}
-      {g2pStatus==='error'&&g2p.error&&` · ${g2p.error}`}
-    </p>}
-    {(waiting||g2pWaiting||runtimeWaiting)&&<button disabled={starting||busy} onClick={()=>void download()}>{label}</button>}
-    {runtime?.supported===false&&<p class="tts-lexicon-hint tts-lexicon-error">Kokoro cannot run on this platform: {runtime.error}. Use the OS voice engine instead.</p>}
+    {runtime && <p aria-live="polite">{rich("voiceModelPanels.dd2566895d", { value1: <span class={`state-dot ${runtimeStatus==='ready'?'idle':runtimeStatus==='downloading'?'running':'stopped'}`}/>, runtimeStatus: runtimeStatus, value3: runtimeStatus==='ready'&&runtime.source==='installed' && t("voiceModelPanels.6035e91d38"), value4: runtimeStatus==='ready'&&runtime.source!=='installed' && t("voiceModelPanels.336f53b724", { distributions: runtime.distributions, value2: Math.round((runtime.total_bytes||0)/1048576) }), value5: runtimeStatus==='downloading' && t("voiceModelPanels.5d5aed2ade", { value1: Math.round((runtime.downloaded_bytes||0)/1048576), value2: Math.round((runtime.total_bytes||0)/1048576), value3: runtime.current_file?` · ${runtime.current_file}`:'' }), value6: runtimeStatus==='not_downloaded' && t("voiceModelPanels.2d39abada8"), value7: (runtimeStatus==='error'||runtimeStatus==='unsupported')&&runtime.error && t("voiceModelPanels.f3b99994b4", { error: runtime.error }) })}</p>}
+    <p aria-live="polite">{rich("voiceModelPanels.275d48f8a5", { value1: <span class={`state-dot ${status==='ready'?'idle':status==='downloading'?'running':'stopped'}`}/>, status: status, value3: status==='downloading' && t("voiceModelPanels.85087b4021", { pct: pct, value2: Math.round(done/1048576), value3: Math.round(total/1048576), value4: model?.current_file?` · ${model.current_file}`:'' }), value4: status==='ready' && t("voiceModelPanels.500d1cac6c", { value1: Math.round(total/1048576) }), value5: status==='error'&&model?.error && t("voiceModelPanels.f3b99994b4", { error: model.error }) })}</p>
+    {g2p && <p aria-live="polite">{rich("voiceModelPanels.3e3c0a9ceb", { value1: <span class={`state-dot ${g2pStatus==='ready'?'idle':g2pStatus==='downloading'?'running':'stopped'}`}/>, g2pStatus: g2pStatus, value3: g2pStatus==='ready' && t("voiceModelPanels.1cbcc926b9", { distribution: g2p.distribution, version: g2p.version, value3: (g2p.source==='installed') ? 'yes' : 'no' }), value4: g2pStatus==='downloading' && t("voiceModelPanels.9c3d12ad2c", { value1: Math.round((g2p.total_bytes||0)/1048576) }), value5: g2pStatus==='not_downloaded' && t("voiceModelPanels.74c180923e"), value6: g2pStatus==='error'&&g2p.error && t("voiceModelPanels.f3b99994b4", { error: g2p.error }) })}</p>}
+    {(waiting||g2pWaiting||runtimeWaiting) && <button disabled={starting||busy} onClick={()=>void download()}>{label}</button>}
+    {runtime?.supported===false && <p class="tts-lexicon-hint tts-lexicon-error">{rich("voiceModelPanels.978099fd70", { error: runtime.error })}</p>}
   </div>
 }
 
@@ -292,24 +265,15 @@ export function WhisperModelPanel({initial,runtime}:{initial:WhisperModelInfo[]|
   // "faster-whisper not installed" with nothing to press.
   const blocked=Boolean(runtime)&&runtime?.supported===false
   return <div class="kokoro-model-panel">
-    {runtime&&<VoiceRuntimePanel initial={runtime} action={false}/>}
+    {runtime && <VoiceRuntimePanel initial={runtime} action={false}/>}
     {models.map(entry=>{
       const size=entry.size_hint?` · ${entry.size_hint}`:''
       const acquiring=Boolean(runtime)&&runtime?.status==='downloading'
-      return <p key={entry.model} aria-live="polite">
-        <span class={`state-dot ${entry.status==='ready'?'idle':entry.status==='downloading'||acquiring?'running':'stopped'}`}/>
-        Speech model {entry.model}::{entry.status}
-        {entry.status==='downloading'&&` · downloading${size}${entry.elapsed_seconds?` · ${Math.round(entry.elapsed_seconds)}s elapsed`:''}`}
-        {entry.status!=='downloading'&&acquiring&&' · waiting for the speech libraries'}
-        {entry.status==='not_downloaded'&&!acquiring&&` · nothing has been downloaded${size}`}
-        {entry.status==='error'&&entry.error&&` · ${entry.error}`}
-        {!blocked&&!acquiring&&entry.status!=='ready'&&entry.status!=='downloading'&&
-          <button disabled={busy===entry.model} onClick={()=>void download(entry.model)}>
-            {entry.status==='error'?'Retry download':`Download ${entry.model}${entry.size_hint?` (${entry.size_hint})`:''}`}
-          </button>}
-      </p>
+      return <p key={entry.model} aria-live="polite">{rich("voiceModelPanels.a69caa164c", { value1: <span class={`state-dot ${entry.status==='ready'?'idle':entry.status==='downloading'||acquiring?'running':'stopped'}`}/>, model: entry.model, status: codeLabel(entry.status), value4: entry.status==='downloading' && t("voiceModelPanels.10bd2a67c2", { size: size, value2: entry.elapsed_seconds?` · ${Math.round(entry.elapsed_seconds)}s elapsed`:'' }), value5: entry.status!=='downloading'&&acquiring && t("voiceModelPanels.f8bcca86a4"), value6: entry.status==='not_downloaded'&&!acquiring && t("voiceModelPanels.63c1a70fb8", { size: size }), value7: entry.status==='error'&&entry.error && t("voiceModelPanels.f3b99994b4", { error: entry.error }), value8: !blocked&&!acquiring&&entry.status!=='ready'&&entry.status!=='downloading' && <button disabled={busy===entry.model} onClick={()=>void download(entry.model)}>
+            {entry.status==='error' ? t("voiceModelPanels.9e90b86876") : t("voiceModelPanels.69168c7e44", { model: entry.model, value2: entry.size_hint?` (${entry.size_hint})`:'' })}
+          </button> })}</p>
     })}
-    {blocked&&<p class="tts-lexicon-hint tts-lexicon-error">On-device dictation cannot run on this platform: {runtime?.error}. Use Windows Speech Recognition instead.</p>}
+    {blocked && <p class="tts-lexicon-hint tts-lexicon-error">{rich("voiceModelPanels.db85d1f53a", { error: runtime?.error })}</p>}
   </div>
 }
 

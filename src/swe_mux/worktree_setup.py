@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from .ui_messages import ui_message
 from .worktree_exec import (
     WorktreeCommand,
     convention_command,
@@ -107,7 +108,7 @@ async def run_worktree_setup(
         worktree,
         timeout_seconds=SETUP_TIMEOUT_SECONDS,
         output_limit=MAX_SETUP_OUTPUT_BYTES,
-        label="setup",
+        label=ui_message("worktree_setup.8fb6d5f37e"),
     )
     if outcome.timed_out:
         log.warning(

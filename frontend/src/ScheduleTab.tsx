@@ -1,3 +1,4 @@
+import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { Dropdown } from './Dropdown'
@@ -113,8 +114,8 @@ export function ScheduleTab({
     onSeedConsumed?.()
   }, [seed])
 
-  const ordered = useMemo(() => orderSchedules(schedules), [schedules])
-  const attention = useMemo(() => needsAttention(schedules), [schedules])
+  const ordered = useMemo(() => orderSchedules(schedules), [schedules, uiLocale.value, catalogRevision.value])
+  const attention = useMemo(() => needsAttention(schedules), [schedules, uiLocale.value, catalogRevision.value])
   const activeProject = projects.find(item => item.id === scope) || project
 
   const act = async <T,>(key: string, operation: () => Promise<T>): Promise<T | null> => {
@@ -149,7 +150,7 @@ export function ScheduleTab({
         return api<Schedule>('PATCH', `/api/schedules/${schedule.id}`, { ...body, revision: schedule.revision })
       }
       const target = scope || project?.id || ''
-      if (!target) throw new Error('Select a Project before adding a schedule.')
+      if (!target) throw new Error(t("ScheduleTab.68047b1692"))
       return api<Schedule>('POST', `/api/projects/${target}/schedules`, body)
     })
     if (saved) setEditing(null)
@@ -172,37 +173,33 @@ export function ScheduleTab({
   return <div class="schedule-tab">
     <div class="schedule-filters">
       <Dropdown
-        ariaLabel="Filter schedules by project"
+        ariaLabel={t("ScheduleTab.b57822813c")}
         value={scope}
         onChange={onScope}
         options={[
-          { value: project?.id || '', label: project ? project.name : 'No project', disabled: !project },
-          { value: '', label: 'All projects' },
+          { value: project?.id || '', label: project ? project.name : t("ScheduleTab.f34c2be0d1"), disabled: !project },
+          { value: '', get label() { return t("ScheduleTab.4b87271b6b") } },
         ]}
       />
-      <button title="Re-read schedules now" onClick={() => void load()}>refresh</button>
-      <button class="primary" disabled={!scope && !project} onClick={startNew}>new…</button>
+      <button title={t("ScheduleTab.beecf40080")} onClick={() => void load()}>{t("ScheduleTab.d6cc0a088c")}</button>
+      <button class="primary" disabled={!scope && !project} onClick={startNew}>{t("ScheduleTab.d74acc791a")}</button>
     </div>
     <p class="schedule-summary">
-      {status
-        ? `${status.armed} armed · ${status.live_sessions}/${status.max_concurrent} live${status.enabled ? '' : ' · switched off for this install'}`
-        : 'Reading schedules…'}
-      {attention.length ? ` · ${attention.length} need${attention.length === 1 ? 's' : ''} attention` : ''}
+      {status ? t("ScheduleTab.c3110d0cf4", { armed: status.armed, live_sessions: status.live_sessions, max_concurrent: status.max_concurrent, value4: (status.enabled) ? 'yes' : 'no' }) : t("ScheduleTab.10646fb3fb")}
+      {attention.length ? t("ScheduleTab.78a61e1bb9", { length: attention.length, value2: (attention.length === 1) ? 'yes' : 'no' }) : ''}
     </p>
     {/* The install stop is not a row-level condition — it silences every schedule in every
         Project at once — so it is stated once above the list rather than repeated on each
         row that happens to be loaded. */}
     {status && !status.enabled && <CompactGrantFlag id="schedules.install"
-      heading="Scheduled runs are off."
-      consequence="Configured schedules cannot fire."
+      heading={t("ScheduleTab.b98637f58f")}
+      consequence={t("ScheduleTab.5463ec94b3")}
       onGranted={load}/>}
     <div class="schedule-body">
-      {loading && !ordered.length && <p class="schedule-empty">Reading schedules…</p>}
+      {loading && !ordered.length && <p class="schedule-empty">{t("ScheduleTab.10646fb3fb")}</p>}
       {error && <p class="schedule-error" role="alert">{error}</p>}
       {!loading && !ordered.length && <p class="schedule-empty">
-        {scope
-          ? 'Nothing scheduled in this Project. A schedule starts an agent session for you - a nightly health check, a weekly sweep - and can pre-queue what to say next. To pick a conversation back up later instead, open it in History and choose "Resume later…".'
-          : 'Nothing scheduled anywhere yet.'}
+        {scope ? t("ScheduleTab.2f5f825f0d") : t("ScheduleTab.beb4d49009")}
       </p>}
       {ordered.map(schedule => <section
         class={`schedule-row ${schedule.enabled ? '' : 'paused'} ${schedule.blocked || targetIsMissing(schedule) ? 'blocked' : ''}`}
@@ -220,7 +217,7 @@ export function ScheduleTab({
           <small>
             {cadenceLabel(schedule)}
             {' · '}
-            {schedule.enabled ? untilLabel(schedule.next_fire_at) : 'paused'}
+            {schedule.enabled ? untilLabel(schedule.next_fire_at) : t("ScheduleTab.a7a9dc5bcf")}
             {' · '}
             {actionLabel(schedule)}
           </small>
@@ -229,9 +226,7 @@ export function ScheduleTab({
             never fire, which is the same lie `blocked` exists to prevent. Said on the
             row rather than left for the run history, because the next fire that would
             record it may be a week away. */}
-        {targetIsMissing(schedule) && <p class="schedule-blocked">
-          The conversation this resumes is no longer in History, so it can never open.
-        </p>}
+        {targetIsMissing(schedule) && <p class="schedule-blocked">{t("ScheduleTab.c40ee4fea2")}</p>}
         {/* Both blocked reasons are switches, and each row offers the one that is holding
             it: the Project's own opt-in, or the install-wide stop that overrides every
             Project. The install case previously stated the reason and left the reader to
@@ -241,65 +236,59 @@ export function ScheduleTab({
           {' '}
           {schedule.blocked === 'automation_disabled' && <GrantButton
             id="project.scheduledRuns" projectId={schedule.project_id} onGranted={load}
-          >Permit them here</GrantButton>}
+          >{t("ScheduleTab.2d70ba1a2d")}</GrantButton>}
           {schedule.blocked === 'install_disabled' && <GrantButton
             id="schedules.install" onGranted={load}
-          >Turn it on</GrantButton>}
+          >{t("ScheduleTab.e679ca0953")}</GrantButton>}
         </p>}
         <div class="schedule-meta">
           <span title={schedule.last_reason || undefined}>
-            {schedule.last_outcome
-              ? `${OUTCOME_LABELS[schedule.last_outcome] || schedule.last_outcome} ${absoluteLabel(schedule.last_fire_at)}`
-              : 'never run'}
+            {schedule.last_outcome ? t("ScheduleTab.4040b7c06c", { value1: OUTCOME_LABELS[schedule.last_outcome] || schedule.last_outcome, value2: absoluteLabel(schedule.last_fire_at) }) : t("ScheduleTab.de5f9d00b8")}
           </span>
           {schedule.last_session_id && <button
             class="link"
-            title="Reveal the session this schedule last started"
+            title={t("ScheduleTab.5a8c65ccf7")}
             onClick={() => { onOpenSession(schedule.last_session_id as string); onDone() }}
-          >open session</button>}
+          >{t("ScheduleTab.bf8caf6677")}</button>}
         </div>
         <div class="schedule-actions">
           <button
             disabled={busy !== ''}
-            title="Start this now. Every guard except lateness still applies."
+            title={t("ScheduleTab.755ae1c9b1")}
             onClick={() => void act(`run:${schedule.id}`, () => api('POST', `/api/schedules/${schedule.id}/run`))}
-          >{busy === `run:${schedule.id}` ? 'starting…' : 'run now'}</button>
+          >{busy === `run:${schedule.id}` ? t("ScheduleTab.407944301e") : t("ScheduleTab.2bb215f2a2")}</button>
           <button
             disabled={busy !== ''}
             onClick={() => void act(`arm:${schedule.id}`, () => api('PATCH', `/api/schedules/${schedule.id}`, { enabled: !schedule.enabled }))}
-          >{schedule.enabled ? 'pause' : 'resume'}</button>
-          <button disabled={busy !== ''} onClick={() => startEdit(schedule)}>edit</button>
+          >{schedule.enabled ? t("ScheduleTab.6210c0bf05") : t("ScheduleTab.a83a31320d")}</button>
+          <button disabled={busy !== ''} onClick={() => startEdit(schedule)}>{t("ScheduleTab.262121c537")}</button>
           <button
             class="danger"
             disabled={busy !== ''}
             onClick={() => void act(`delete:${schedule.id}`, () => api('DELETE', `/api/schedules/${schedule.id}`))}
-          >delete</button>
+          >{t("ScheduleTab.6197595503")}</button>
         </div>
         {expanded === schedule.id && <div class="schedule-detail">
           {schedule.action === 'resume' && schedule.target && !schedule.target.missing && <p class="schedule-target">
             <strong>{TARGET_KIND_COPY[schedule.target_kind].label}</strong>
             <small>
-              {`[${schedule.target.backend}] ${schedule.target.name}`}
+              {t("ScheduleTab.1770faf36f", { backend: schedule.target.backend, name: schedule.target.name })}
               {/* Only worth a second line when the two differ, which is exactly when
                   the pinned row is no longer where the work is. */}
               {schedule.target_kind === 'latest_of_session'
-                && schedule.target.resolved_run_id !== schedule.target.run_id
-                && ` · now at ${schedule.target.resolved_name}`}
-              {schedule.context_ceiling_pct > 0
-                && ` · stops above ${Math.round(schedule.context_ceiling_pct * 100)}% context`}
+                && schedule.target.resolved_run_id !== schedule.target.run_id && t("ScheduleTab.d50db6315d", { resolved_name: schedule.target.resolved_name })}
+              {schedule.context_ceiling_pct > 0 && t("ScheduleTab.4043075b82", { value1: Math.round(schedule.context_ceiling_pct * 100) })}
             </small>
           </p>}
           <p class="schedule-prompt">{schedule.prompt}</p>
-          {schedule.follow_ups.length > 0 && <p class="schedule-followups">
-            {schedule.follow_ups.length} message{schedule.follow_ups.length === 1 ? '' : 's'} pre-queued behind it
-          </p>}
+          {schedule.follow_ups.length > 0 && <p class="schedule-followups">{rich("ScheduleTab.0267b83808", { length: schedule.follow_ups.length, value2: (schedule.follow_ups.length === 1) ? 'yes' : 'no' })}</p>}
           <ol class="schedule-runs">
-            {!schedule.runs.length && <li class="schedule-empty">No runs recorded yet.</li>}
+            {!schedule.runs.length && <li class="schedule-empty">{t("ScheduleTab.c13e0702db")}</li>}
             {schedule.runs.map(run => <li key={run.id} class={`schedule-run ${run.outcome}`}>
               <span>{OUTCOME_LABELS[run.outcome] || run.outcome}</span>
-              <small>{absoluteLabel(run.started_at)}{run.origin === 'manual' ? ' · manual' : ''}</small>
+              <small>{absoluteLabel(run.started_at)}{run.origin === 'manual' ? t("ScheduleTab.c79d3fa09e") : ''}</small>
               {run.reason && <em title={run.reason}>{run.reason}</em>}
-              {run.session_id && <button class="link" onClick={() => { onOpenSession(run.session_id as string); onDone() }}>session</button>}
+              {run.session_id && <button class="link" onClick={() => { onOpenSession(run.session_id as string); onDone() }}>{t("ScheduleTab.3f3af1eceb")}</button>}
             </li>)}
           </ol>
         </div>}
@@ -342,7 +331,7 @@ function ResumeTargetFields({ draft, onDraft }: {
     return () => { live = false }
   }, [draft.target_kind, draft.target_run_id])
 
-  const ordered = useMemo(() => orderedBranchPoints(points?.points || []), [points])
+  const ordered = useMemo(() => orderedBranchPoints(points?.points || []), [points, uiLocale.value, catalogRevision.value])
   const chosen = ordered.find(item => item.message_id === draft.target_cut_message_id) || null
   const pick = (point: BranchPoint) => onDraft({
     ...draft,
@@ -352,10 +341,10 @@ function ResumeTargetFields({ draft, onDraft }: {
 
   return <>
     <p class="schedule-target-summary">
-      <strong>Resumes</strong>
-      <span>{draft.target_backend ? `[${draft.target_backend}] ` : ''}{draft.target_label || draft.target_run_id}</span>
+      <strong>{t("ScheduleTab.2c501fc3ba")}</strong>
+      <span>{draft.target_backend ? t("ScheduleTab.bb15fba8fd", { target_backend: draft.target_backend }) : ''}{draft.target_label || draft.target_run_id}</span>
     </p>
-    <label>What to reopen<Dropdown
+    <label>{rich("ScheduleTab.2d755819c7", { value1: <Dropdown
       value={draft.target_kind}
       onChange={value => onDraft({
         ...draft,
@@ -370,8 +359,8 @@ function ResumeTargetFields({ draft, onDraft }: {
       })}
       options={(Object.keys(TARGET_KIND_COPY) as ScheduleTargetKind[]).map(kind =>
         ({ value: kind, label: TARGET_KIND_COPY[kind].label }))}
-    /><small>{TARGET_KIND_COPY[draft.target_kind].detail}</small></label>
-    {draft.target_kind === 'latest_of_session' && <label>Stop above<input
+    />, value2: <small>{TARGET_KIND_COPY[draft.target_kind].detail}</small> })}</label>
+    {draft.target_kind === 'latest_of_session' && <label>{rich("ScheduleTab.f5a1aa9723", { value1: <input
       type="number"
       min={0}
       max={100}
@@ -380,23 +369,15 @@ function ResumeTargetFields({ draft, onDraft }: {
         ...draft,
         context_ceiling_pct: Math.max(0, Math.min(100, Number(event.currentTarget.value))) / 100,
       })}
-    /><small>
-      Percent of the context window. Above it the run is skipped and recorded instead
-      of started: the early half of the conversation has already been compacted into a
-      summary by then, so continuing buys a turn that no longer remembers what it is
-      continuing. 0 removes the ceiling.
-    </small></label>}
+    />, value2: <small>{t("ScheduleTab.d5f1008ae1")}</small> })}</label>}
     {draft.target_kind === 'fork_point' && <fieldset class="schedule-branch-points">
-      <legend>Fork at</legend>
-      {loading && <p class="schedule-empty">Reading the conversation…</p>}
+      <legend>{t("ScheduleTab.7b231f8651")}</legend>
+      {loading && <p class="schedule-empty">{t("ScheduleTab.65c280a9a0")}</p>}
       {failure && <p class="schedule-error" role="alert">{failure}</p>}
       {!loading && !failure && !ordered.length && <p class="schedule-empty">
         {branchPointsEmptyMessage(points?.reason ?? null, points?.backend || draft.target_backend)}
       </p>}
-      {points?.truncated && !!ordered.length && <p class="schedule-note">
-        Older messages are not listed, but a fork always carries the conversation from
-        its first message.
-      </p>}
+      {points?.truncated && !!ordered.length && <p class="schedule-note">{t("ScheduleTab.346e11112f")}</p>}
       {ordered.map(point => {
         const mode = branchModeFor(point)
         const eligible = branchPointEligible(point, mode)
@@ -413,8 +394,8 @@ function ResumeTargetFields({ draft, onDraft }: {
             onChange={() => pick(point)}
           />
           <span>
-            <strong>{transcriptSpeaker(point.role)} · {mode === 'before' ? 'before this' : 'after this'}</strong>
-            <small>{branchPointPreview(point.text) || '(no text in this message)'}</small>
+            <strong>{transcriptSpeaker(point.role)} · {mode === 'before' ? t("ScheduleTab.4062a9f595") : t("ScheduleTab.a3d7a6bf20")}</strong>
+            <small>{branchPointPreview(point.text) || t("ScheduleTab.66d85990a4")}</small>
           </span>
         </label>
       })}
@@ -454,7 +435,7 @@ function ScheduleEditor({ draft, onDraft, profiles, busy, error, projectName, on
         const payload = await api<{ next_fires: number[] }>('POST', '/api/schedules/preview', draftToBody(draft), { timeoutMs: 10_000 })
         if (cancelled) return
         setFires(payload.next_fires)
-        setPreviewError(payload.next_fires.length ? '' : 'This trigger never fires.')
+        setPreviewError(payload.next_fires.length ? '' : t("ScheduleTab.67d00d3c0f"))
       } catch (cause) {
         if (cancelled) return
         setFires([])
@@ -468,42 +449,30 @@ function ScheduleEditor({ draft, onDraft, profiles, busy, error, projectName, on
 
   return <form class="schedule-editor" onSubmit={event => { event.preventDefault(); onSave() }}>
     <header>
-      <strong>{projectName ? `Schedule in ${projectName}` : 'Schedule'}</strong>
-      <small>{resuming
-        ? 'Reopens a conversation on its own. It is not a background job: it opens a real pane you can read.'
-        : 'Starts an agent session on its own. It is not a background job: it opens a real pane you can read.'}</small>
+      <strong>{projectName ? t("ScheduleTab.b668963d55", { projectName: projectName }) : t("ScheduleTab.f4830a1dae")}</strong>
+      <small>{resuming ? t("ScheduleTab.d2e5ccdd55") : t("ScheduleTab.f1f211040b")}</small>
     </header>
     {error && <p class="schedule-error" role="alert">{error}</p>}
     {resuming && <ResumeTargetFields draft={draft} onDraft={onDraft} />}
-    <label>Name<input
+    <label>{rich("ScheduleTab.5b326d4444", { value1: <input
       autofocus={!resuming}
       value={draft.label}
       maxLength={80}
-      placeholder={resuming ? 'Pick this back up' : 'Nightly health check'}
+      placeholder={resuming ? t("ScheduleTab.d69f2af4ac") : t("ScheduleTab.93ef25e0ef")}
       onInput={event => change('label', event.currentTarget.value)}
-    /></label>
-    <label>{resuming ? 'Then say' : 'Prompt'}<textarea
+    /> })}</label>
+    <label>{resuming ? t("ScheduleTab.77175c9878") : t("ScheduleTab.5c39123805")}<textarea
       rows={4}
       value={draft.prompt}
-      placeholder={resuming
-        ? 'Carry on where we left off: finish the migration and run the tests.'
-        : "Check the deployment's health, and report PASS or the findings."}
+      placeholder={resuming ? t("ScheduleTab.d613487084") : t("ScheduleTab.e4bdb6ddde")}
       onInput={event => change('prompt', event.currentTarget.value)}
-    />{resuming && <small>
-      Staged in the resumed pane's queue rather than typed. It is delivered when the
-      agent is ready, which means automatically only where this conversation has
-      auto-delivery granted; otherwise it waits in the Queue tab for you.
-    </small>}</label>
-    <label>Trigger<Dropdown value={draft.trigger_kind} onChange={value => change('trigger_kind', value as ScheduleDraft['trigger_kind'])} options={[
-      { value: 'cron', label: 'On a schedule (cron)' },
-      { value: 'interval', label: 'Every N minutes' },
-      { value: 'once', label: 'Once, at a time' },
-    ]}/></label>
-    {draft.trigger_kind === 'cron' && <label>Cron
-      {/* The preset beside the field rather than instead of it: choosing one fills the
-          input, so the next edit is to a working expression rather than to a blank box,
-          and the field stays the source of truth. */}
-      <div class="schedule-cron-row">
+    />{resuming && <small>{t("ScheduleTab.c7a3712de4")}</small>}</label>
+    <label>{rich("ScheduleTab.f61a238dc9", { value1: <Dropdown value={draft.trigger_kind} onChange={value => change('trigger_kind', value as ScheduleDraft['trigger_kind'])} options={[
+      { value: 'cron', get label() { return t("ScheduleTab.a914ee0ca8") } },
+      { value: 'interval', get label() { return t("ScheduleTab.025156c3d5") } },
+      { value: 'once', get label() { return t("ScheduleTab.727af8e666") } },
+    ]}/> })}</label>
+    {draft.trigger_kind === 'cron' && <label>{rich("ScheduleTab.c9eb1a6329", { value1: <div class="schedule-cron-row">
         <input
           value={draft.cron}
           spellcheck={false}
@@ -511,99 +480,93 @@ function ScheduleEditor({ draft, onDraft, profiles, busy, error, projectName, on
           onInput={event => change('cron', event.currentTarget.value)}
         />
         <Dropdown
-          ariaLabel="Common schedules"
+          ariaLabel={t("ScheduleTab.0f6ef8da44")}
           value={preset?.cron || ''}
           onChange={value => { if (value) change('cron', value) }}
           options={[
-            { value: '', label: preset ? 'Common…' : 'Custom' },
+            { value: '', label: preset ? t("ScheduleTab.d3c25d944a") : t("ScheduleTab.494ca78f73") },
             ...CRON_PRESETS.map(item => ({ value: item.cron, label: item.label })),
           ]}
         />
-      </div>
-      <small>{preset ? preset.teaches : 'minute hour day-of-month month day-of-week'}</small>
-    </label>}
-    {draft.trigger_kind === 'interval' && <label>Every<input
+      </div>, value2: <small>{preset ? preset.teaches : t("ScheduleTab.11a7c2e9c8")}</small> })}</label>}
+    {draft.trigger_kind === 'interval' && <label>{rich("ScheduleTab.dd5633797e", { value1: <input
       type="number"
       min={5}
       max={129_600}
       value={draft.interval_minutes}
       onInput={event => change('interval_minutes', Number(event.currentTarget.value))}
-    /><small>minutes, counted from the previous run</small></label>}
-    {draft.trigger_kind === 'once' && <label>At<input
+    />, value2: <small>{t("ScheduleTab.83556c8661")}</small> })}</label>}
+    {draft.trigger_kind === 'once' && <label>{rich("ScheduleTab.e837be609d", { value1: <input
       type="datetime-local"
       value={draft.run_at_local}
       onInput={event => change('run_at_local', event.currentTarget.value)}
-    /></label>}
-    <label>Timezone <em>optional</em><input
+    /> })}</label>}
+    <label>{rich("ScheduleTab.5a784e199d", { value1: <em>{t("ScheduleTab.ec91fdd925")}</em>, value2: <input
       value={draft.timezone}
       spellcheck={false}
-      placeholder="this computer's time"
+      placeholder={t("ScheduleTab.49144769a4")}
       onInput={event => change('timezone', event.currentTarget.value)}
-    /><small>An IANA name such as Europe/Oslo. Empty follows this machine, daylight saving included.</small></label>
+    />, value3: <small>{t("ScheduleTab.1dbfa8e49a")}</small> })}</label>
     <p class={`schedule-preview ${previewError ? 'bad' : ''}`}>
-      {previewError || (fires.length ? `Next: ${fires.slice(0, 3).map(absoluteLabel).join(' · ')}` : 'Working out the next run…')}
+      {previewError || (fires.length ? t("ScheduleTab.634d8b810d", { value1: fires.slice(0, 3).map(absoluteLabel).join(' · ') }) : t("ScheduleTab.e58b9f1484"))}
     </p>
     {/* A resume runs the harness the conversation belongs to, with `--resume <id>` as
         its arguments, in the Project root the conversation resolves from. The daemon
         refuses a backend or a profile on one rather than ignoring it, so offering
         either here would be offering control this form does not have. */}
-    {!resuming && <label>Agent<Dropdown value={draft.backend} onChange={value => onDraft({ ...draft, backend: value, profile_id: '' })} options={[
-      { value: '', label: "This Project's default" },
+    {!resuming && <label>{rich("ScheduleTab.84887d3897", { value1: <Dropdown value={draft.backend} onChange={value => onDraft({ ...draft, backend: value, profile_id: '' })} options={[
+      { value: '', get label() { return t("ScheduleTab.a6f70f181e") } },
       ...harnesses.map(harness => ({ value: harness.name, label: harness.display_name })),
-    ]}/></label>}
-    {!resuming && draft.backend && profilesForBackend.length > 0 && <label>Launch profile<Dropdown
+    ]}/> })}</label>}
+    {!resuming && draft.backend && profilesForBackend.length > 0 && <label>{rich("ScheduleTab.1fc22339bf", { value1: <Dropdown
       value={draft.profile_id}
       onChange={value => change('profile_id', value)}
       options={[
-        { value: '', label: 'Default arguments' },
+        { value: '', get label() { return t("ScheduleTab.db10a8733c") } },
         ...profilesForBackend.map(profile => ({ value: profile.id, label: profile.label })),
       ]}
-    /><small>A profile is where the model flag lives.</small></label>}
-    <label>Session name <em>optional</em><input
+    />, value2: <small>{t("ScheduleTab.5a94ad7fea")}</small> })}</label>}
+    <label>{rich("ScheduleTab.2bd076e3aa", { value1: <em>{t("ScheduleTab.ec91fdd925")}</em>, value2: <input
       value={draft.session_name}
       maxLength={80}
-      placeholder={resuming ? "the conversation's own name" : 'same as the schedule name'}
+      placeholder={resuming ? t("ScheduleTab.ef1c3fe8bc") : t("ScheduleTab.f4435ba1d9")}
       onInput={event => change('session_name', event.currentTarget.value)}
-    /></label>
-    {!resuming && <label>If the last run is still open<Dropdown value={draft.overlap} onChange={value => change('overlap', value as ScheduleDraft['overlap'])} options={[
-      { value: 'skip', label: 'Skip this run' },
-      { value: 'allow', label: 'Start another session' },
-    ]}/></label>}
-    {resuming && draft.target_kind !== 'fork_point' && <p class="schedule-note">
-      A conversation can only be open once, so a run whose conversation is already
-      live - in a pane, or in a background agent - is skipped and recorded rather than
-      forced.
-    </p>}
-    <label class="schedule-check"><input
+    /> })}</label>
+    {!resuming && <label>{rich("ScheduleTab.2823892840", { value1: <Dropdown value={draft.overlap} onChange={value => change('overlap', value as ScheduleDraft['overlap'])} options={[
+      { value: 'skip', get label() { return t("ScheduleTab.d0fc7b77ee") } },
+      { value: 'allow', get label() { return t("ScheduleTab.c86ae1e9af") } },
+    ]}/> })}</label>}
+    {resuming && draft.target_kind !== 'fork_point' && <p class="schedule-note">{t("ScheduleTab.aef2e66c6b")}</p>}
+    <label class="schedule-check">{rich("ScheduleTab.9c8dacba78", { value1: <input
       type="checkbox"
       checked={draft.catch_up}
       onChange={event => change('catch_up', event.currentTarget.checked)}
-    />Run it late if this computer was off<small>Otherwise the missed window is recorded and skipped.</small></label>
-    <label>Daily limit<input
+    />, value2: <small>{t("ScheduleTab.8ebbe60f79")}</small> })}</label>
+    <label>{rich("ScheduleTab.75c989b56f", { value1: <input
       type="number"
       min={0}
       max={500}
       value={draft.daily_run_cap}
       onInput={event => change('daily_run_cap', Number(event.currentTarget.value))}
-    /><small>0 leaves only the install-wide ceiling.</small></label>
+    />, value2: <small>{t("ScheduleTab.b53747cb33")}</small> })}</label>
     <fieldset class="schedule-followup-editor">
-      <legend>Then send</legend>
-      <small>Queued behind the first prompt through the ordinary prompt queue, so delivery still waits for the agent to be ready.</small>
+      <legend>{t("ScheduleTab.a41e6e5b6f")}</legend>
+      <small>{t("ScheduleTab.11d0752243")}</small>
       {draft.follow_ups.map((body, index) => <div key={index}>
         <textarea
           rows={2}
           value={body}
           onInput={event => change('follow_ups', draft.follow_ups.map((item, position) => position === index ? event.currentTarget.value : item))}
         />
-        <button type="button" onClick={() => change('follow_ups', draft.follow_ups.filter((_item, position) => position !== index))}>remove</button>
+        <button type="button" onClick={() => change('follow_ups', draft.follow_ups.filter((_item, position) => position !== index))}>{t("ScheduleTab.7e5608ab61")}</button>
       </div>)}
       {draft.follow_ups.length < 20 && <button
         type="button"
         onClick={() => change('follow_ups', [...draft.follow_ups, ''])}
-      >add a message</button>}
+      >{t("ScheduleTab.bef78f4933")}</button>}
     </fieldset>
     <div class="schedule-editor-actions">
-      <button type="button" onClick={onCancel}>Cancel</button>
+      <button type="button" onClick={onCancel}>{t("ScheduleTab.19766ed6cc")}</button>
       {/* A fork schedule with no chosen point has nothing to cut at, and the daemon
           would refuse it. Held here so the refusal is a disabled button with a visible
           empty list rather than an error after a save. */}
@@ -611,7 +574,7 @@ function ScheduleEditor({ draft, onDraft, profiles, busy, error, projectName, on
         class="primary"
         type="submit"
         disabled={busy || (resuming && draft.target_kind === 'fork_point' && !draft.target_cut_message_id)}
-      >{busy ? 'Saving…' : 'Save'}</button>
+      >{busy ? t("ScheduleTab.23e39291d6") : t("ScheduleTab.1509f561f2")}</button>
     </div>
   </form>
 }

@@ -16,6 +16,7 @@ from . import (
 )
 from .git_monitor import _git
 from .git_operations import GitMutationResult, run_git_mutation
+from .ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -33,8 +34,7 @@ async def listed_worktree_entries(cwd: str) -> dict[str, dict[str, Any]]:
 
 async def listed_worktree_paths(cwd: str) -> dict[str, str]:
     return {
-        key: str(item["worktree"])
-        for key, item in (await listed_worktree_entries(cwd)).items()
+        key: str(item["worktree"]) for key, item in (await listed_worktree_entries(cwd)).items()
     }
 
 
@@ -43,9 +43,10 @@ async def worktree_root_matches(path: str, expected: str) -> bool:
     if code or not reported.strip():
         return False
     try:
-        return str(Path(reported.strip()).resolve()).casefold() == str(
-            Path(expected).resolve()
-        ).casefold()
+        return (
+            str(Path(reported.strip()).resolve()).casefold()
+            == str(Path(expected).resolve()).casefold()
+        )
     except OSError:
         return False
 
@@ -251,7 +252,7 @@ async def remove_registered_worktree(
         )
         return RemovalRefused(
             code="not_registered_worktree",
-            message="path is not a registered worktree for this repository",
+            message=ui_message("worktree_mutation.b98c8a3166"),
             status=409,
         )
     registered = str(entry["worktree"])
@@ -378,7 +379,7 @@ async def _repair_prunable(
         )
         return RemovalRefused(
             code="prunable_worktree",
-            message="worktree is prunable but cannot be repaired at its registered path",
+            message=ui_message("worktree_mutation.47df3a88aa"),
             status=409,
         )
     log.info(
@@ -508,10 +509,7 @@ async def _after_failed_removal(
             )
             return RemovalRefused(
                 code="worktree_cleanup_failed",
-                message=(
-                    "Git removed the worktree registration but its directory "
-                    "could not be quarantined"
-                ),
+                message=(ui_message("worktree_mutation.3a6c3906d0")),
                 status=409,
                 repaired=repaired,
                 removed=True,

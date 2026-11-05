@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .ui_messages import ui_message
+
 
 def file_manager_command(
     path: Path, *, is_directory: bool, platform: str | None = None
@@ -76,7 +78,7 @@ def _focus_launched_windows_explorer(previous_handles: set[int]) -> None:
 def open_in_file_manager(path: str | Path) -> None:
     target = Path(path).resolve()
     if not target.exists():
-        raise ValueError("path does not exist")
+        raise ValueError(ui_message("file_manager.4626e60626"))
     previous = set(_windows_explorer_handles()) if sys.platform == "win32" else set()
     subprocess.Popen(file_manager_command(target, is_directory=target.is_dir()))
     if sys.platform == "win32":

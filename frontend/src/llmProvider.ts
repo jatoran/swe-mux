@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 /**
  * Which language-model endpoint this install talks to, and whether it is proven.
  *
@@ -88,12 +89,12 @@ export function capabilitySummary(
 ): string {
   if (!capabilities || !verified) return ''
   const parts: string[] = []
-  if (capabilities.catalog === 'annotated') parts.push('full model catalog with pricing')
-  else if (capabilities.catalog === 'bare') parts.push('model list without pricing')
-  else parts.push('no model list, so it serves the one model named above')
-  parts.push(capabilities.reports_cost ? 'reports cost per call' : 'reports no cost')
-  if (capabilities.reports_cache) parts.push('reports prompt caching')
-  return `Measured: ${parts.join(' · ')}.`
+  if (capabilities.catalog === 'annotated') parts.push(t("llmProvider.a56b887038"))
+  else if (capabilities.catalog === 'bare') parts.push(t("llmProvider.d0a3f691af"))
+  else parts.push(t("llmProvider.499b8ed2f7"))
+  parts.push(capabilities.reports_cost ? t("llmProvider.856d23c718") : t("llmProvider.c13ec684cd"))
+  if (capabilities.reports_cache) parts.push(t("llmProvider.9d8cd8a10f"))
+  return t("llmProvider.124e66ffa0", { value1: parts.join(' · ') })
 }
 
 export type ProviderStatusPayload = {
@@ -177,15 +178,15 @@ export async function verifyLlmProvider(provider?: string): Promise<VerifyResult
  */
 export function llmGateHeading(readiness: LlmReadiness): string {
   switch (readiness.code) {
-    case 'models_unverified': return 'Choose and verify the model roles before enabling this.'
-    case 'no_key': return 'No model provider is configured, so this cannot run.'
+    case 'models_unverified': return t("llmProvider.fada0743ea")
+    case 'no_key': return t("llmProvider.c93f159560")
     case 'no_endpoint':
-    case 'no_model': return 'The custom model endpoint is incomplete, so this cannot run.'
+    case 'no_model': return t("llmProvider.4e70b021b3")
     case 'endpoint_changed':
-      return 'The model endpoint changed since it was verified, so this is on hold.'
+      return t("llmProvider.033aa1f79e")
     case 'unverified':
-      return 'The model endpoint is not verified yet, so this is on hold.'
-    default: return 'No verified model provider, so this cannot run.'
+      return t("llmProvider.55506a866c")
+    default: return t("llmProvider.8c7a31e3cd")
   }
 }
 

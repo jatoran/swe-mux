@@ -1,10 +1,11 @@
+import { withCatalogText } from './support/localizedSource.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
-import { BUDGET_NOTE, CHANNEL_ORDER, budgetLine, fanoutHeadline, suppressedLabel, type AttentionBudget, type FanOut } from '../src/attention.ts'
+import { budgetNote, CHANNEL_ORDER, budgetLine, fanoutHeadline, suppressedLabel, type AttentionBudget, type FanOut } from '../src/attention.ts'
 
-const source = (name:string) => readFileSync(join(import.meta.dirname, '..', 'src', name), 'utf8')
+const source = (name:string) => withCatalogText(readFileSync(join(import.meta.dirname, '..', 'src', name), 'utf8'))
 
 test('fan-out reports itself unknown rather than inventing a number', () => {
   const scarce:FanOut = {status:'insufficient_samples',samples:2,required:5,interaction_seconds:null,neglect_seconds:null,sustainable_agents:null,attended_now:6}
@@ -19,16 +20,16 @@ test('the budget line shows the daily bound and the burst limiter under it', () 
 })
 
 test('the budget line says in visible text that a waiting permission prompt never spends it', () => {
-  assert.equal(BUDGET_NOTE,'Permission prompts and anything else quick to resolve never count as interrupts, however many are waiting, and a session waiting on you shows as awaiting even with the budget spent.')
-  assert.ok(!BUDGET_NOTE.includes('—'))
+  assert.equal(budgetNote(),'Permission prompts and anything else quick to resolve never count as interrupts, however many are waiting, and a session waiting on you shows as awaiting even with the budget spent.')
+  assert.ok(!budgetNote().includes('—'))
   // Drawn as text right under the counter, inside every inbox instance (both Alerts
   // tabs and the dashboard's Activity tab), never as a hover title: a phone cannot hover.
   const inbox = source('AttentionInbox.tsx')
   const counter = inbox.indexOf('<p class="attention-budget">{budgetLine(data.budget)}')
-  const note = inbox.indexOf('<span class="attention-budget-note">{BUDGET_NOTE}</span>')
+  const note = inbox.indexOf('<span class="attention-budget-note">{budgetNote()}</span>')
   assert.ok(counter >= 0 && note > counter)
   assert.ok(inbox.indexOf('</p>', counter) > note)
-  assert.ok(!/title=\{BUDGET_NOTE\}/.test(inbox))
+  assert.ok(!/title=\{budgetNote\(\)\}/.test(inbox))
 })
 
 test('every suppression reason is spelled out, including a user rule', () => {

@@ -26,6 +26,7 @@ from .git_projects import ProjectIdentity, rebase_identity, resolve_project
 from .harness import is_agent_harness
 from .leaf_names import validate_leaf_name
 from .nested_worktrees import nested_worktree_paths
+from .ui_messages import error_text, ui_message
 
 PROJECT_CONFIG_VERSION = 1
 LEGACY_AUTOMATION_IDS = frozenset({"project_card"})
@@ -243,9 +244,7 @@ class ProjectConfigConflict(ValueError):
 
     def __init__(self, fields: Sequence[str], current: dict[str, Any]) -> None:
         super().__init__(
-            "project config changed externally in "
-            + ", ".join(fields)
-            + "; reload before saving"
+            "project config changed externally in " + ", ".join(fields) + "; reload before saving"
         )
         self.fields = list(fields)
         self.current = current
@@ -273,12 +272,12 @@ def _read_regular_file_bounded(target: Path, limit: int) -> tuple[bytes | None, 
         with target.open("rb") as handle:
             file_stat = os.fstat(handle.fileno())
             if not stat.S_ISREG(file_stat.st_mode):
-                raise ValueError("project file is not a regular file")
+                raise ValueError(ui_message("project_files.5b09b386f0"))
             if file_stat.st_size > limit:
                 return None, file_stat.st_size
             data = handle.read(limit + 1)
     except OSError as exc:
-        raise ValueError(f"unable to read project file: {exc}") from exc
+        raise ValueError(ui_message("project_files.5b8bd343f4", value1=exc)) from exc
     if len(data) > limit:
         return None, len(data)
     return data, len(data)
@@ -426,7 +425,7 @@ def safe_note_filename(identity: str) -> str:
     if _SAFE_NOTE_ID.fullmatch(identity):
         return identity
     if not identity or len(identity) > 512 or any(ord(character) < 32 for character in identity):
-        raise ValueError("note identity must be a non-empty printable string up to 512 characters")
+        raise ValueError(ui_message("project_files.33c3ad8886"))
     return f"id-{hashlib.sha256(identity.encode('utf-8')).hexdigest()[:24]}"
 
 
@@ -442,11 +441,11 @@ def ensure_project_local_data_ignored(root: str | Path) -> Path:
 
     project_root = Path(root).resolve()
     if not project_root.is_dir():
-        raise FileNotFoundError(f"Project folder is unavailable: {project_root}")
+        raise FileNotFoundError(ui_message("project_files.3a45319b64", value1=project_root))
     mux_root = project_root / ".swe-mux"
     mux_root.mkdir(parents=True, exist_ok=True)
     if mux_root.is_symlink() or not mux_root.is_dir():
-        raise ValueError("Project swe-mux storage path is unsafe")
+        raise ValueError(ui_message("project_files.4286783370"))
     ignore = mux_root / ".gitignore"
     try:
         with ignore.open("x", encoding="utf-8", newline="\n") as handle:
@@ -455,7 +454,7 @@ def ensure_project_local_data_ignored(root: str | Path) -> Path:
     except FileExistsError:
         pass
     if ignore.is_symlink() or not ignore.is_file():
-        raise ValueError("Project local-data ignore file is unsafe")
+        raise ValueError(ui_message("project_files.547230650e"))
     return ignore
 
 
@@ -463,11 +462,11 @@ def ensure_project_notes_ignored(root: str | Path) -> Path:
     """Keep all Project-owned note storage out of Git."""
     project_root = Path(root).resolve()
     if not project_root.is_dir():
-        raise FileNotFoundError(f"Project folder is unavailable: {project_root}")
+        raise FileNotFoundError(ui_message("project_files.3a45319b64", value1=project_root))
     notes_root = project_root / ".swe-mux" / "notes"
     notes_root.mkdir(parents=True, exist_ok=True)
     if notes_root.is_symlink() or not notes_root.is_dir():
-        raise ValueError("Project note storage path is unsafe")
+        raise ValueError(ui_message("project_files.686ffc24df"))
     ignore = notes_root / ".gitignore"
     try:
         with ignore.open("x", encoding="utf-8", newline="\n") as handle:
@@ -476,7 +475,7 @@ def ensure_project_notes_ignored(root: str | Path) -> Path:
     except FileExistsError:
         pass
     if ignore.is_symlink() or not ignore.is_file():
-        raise ValueError("Project note ignore file is unsafe")
+        raise ValueError(ui_message("project_files.f9e0f55f71"))
     return ignore
 
 
@@ -491,10 +490,10 @@ def normalize_note_title(value: str, *, default: str | None = None) -> str:
     title = " ".join(value.split())
     if not title:
         if default is None:
-            raise ValueError("note title must not be empty")
+            raise ValueError(ui_message("project_files.15d769fde9"))
         title = default
     if len(title) > MAX_NOTE_TITLE_CHARS:
-        raise ValueError(f"note title must be {MAX_NOTE_TITLE_CHARS} characters or fewer")
+        raise ValueError(ui_message("project_files.803156b1fb", value1=MAX_NOTE_TITLE_CHARS))
     return title
 
 
@@ -794,10 +793,10 @@ def project_path(root: str | Path, relative_path: str = "") -> Path:
     project_root = Path(root).resolve()
     relative = Path(relative_path.replace("\\", "/"))
     if relative.is_absolute() or ".." in relative.parts:
-        raise ValueError("project file path must stay inside the project root")
+        raise ValueError(ui_message("project_files.2085a6503d"))
     target = (project_root / relative).resolve()
     if target != project_root and not target.is_relative_to(project_root):
-        raise ValueError("project file path resolves outside the project root")
+        raise ValueError(ui_message("project_files.ce5efb1710"))
     return target
 
 
@@ -806,7 +805,7 @@ def _validate_project_resource_name(name: str) -> None:
 
     validate_leaf_name(
         name,
-        label="project resource name",
+        label=ui_message("project_files.b11417578f"),
         reserved_names=_RESERVED_PROJECT_RESOURCE_NAMES,
     )
 
@@ -820,20 +819,20 @@ def create_project_resource(
     """Create exactly one empty file or directory, exclusively and inside a Project."""
 
     if kind not in {"file", "directory"}:
-        raise ValueError("project resource kind must be file or directory")
+        raise ValueError(ui_message("project_files.9334e798ad"))
     _validate_project_resource_name(name)
     parent_parts = Path(parent.replace("\\", "/")).parts
     if any(part.casefold() in _RESERVED_PROJECT_RESOURCE_NAMES for part in parent_parts):
-        raise ValueError("project control directories cannot be modified")
+        raise ValueError(ui_message("project_files.75a48e57b8"))
 
     project_root = Path(root).resolve()
     try:
         parent_path = project_path(project_root, parent)
         parent_is_directory = parent_path.is_dir()
     except (OSError, RuntimeError) as exc:
-        raise ValueError("project resource parent is invalid or unavailable") from exc
+        raise ValueError(ui_message("project_files.9625920696")) from exc
     if not parent_is_directory:
-        raise ValueError("project resource parent must be an existing folder")
+        raise ValueError(ui_message("project_files.25616609ba"))
     # The parent is already resolved and contained, while the validated leaf cannot carry a
     # separator. Keeping the final component unresolved also makes an existing symlink a plain
     # exclusive-create collision instead of following it outside the Project.
@@ -847,11 +846,11 @@ def create_project_resource(
     except FileExistsError as exc:
         raise ProjectResourceExists(f"project resource already exists: {name}") from exc
     except FileNotFoundError as exc:
-        raise ValueError("project resource parent no longer exists") from exc
+        raise ValueError(ui_message("project_files.ac25172110")) from exc
     except PermissionError as exc:
-        raise ValueError(f"project resource could not be created: {exc}") from exc
+        raise ValueError(ui_message("project_files.ec879b7443", value1=exc)) from exc
     except OSError as exc:
-        raise ValueError(f"project resource could not be created: {exc}") from exc
+        raise ValueError(ui_message("project_files.ec879b7443", value1=exc)) from exc
 
     requested_parent = Path(parent.replace("\\", "/")).as_posix()
     if requested_parent == ".":
@@ -955,9 +954,7 @@ def read_project_authority(root: str | Path, field: str) -> tuple[str | None, bo
     return (str(value) if isinstance(value, str) else None), True
 
 
-def _authority_grant(
-    root: str | Path, field: str, allowed: tuple[str, ...], failed: str
-) -> str:
+def _authority_grant(root: str | Path, field: str, allowed: tuple[str, ...], failed: str) -> str:
     """Read one authority grant with default-granted / fail-closed semantics.
 
     Three answers, deliberately distinct: an explicit value in a valid config is
@@ -1143,14 +1140,14 @@ def list_project_directory(
     pruned = resolve_pruned_paths(project_root, pruned_paths)
     target = project_path(project_root, relative_path)
     if not target.is_dir():
-        raise ValueError("project path is not a folder")
+        raise ValueError(ui_message("project_files.eea0634e11"))
     items: list[dict[str, Any]] = []
     try:
         children = sorted(
             target.iterdir(), key=lambda item: (not item.is_dir(), item.name.casefold())
         )
     except OSError as exc:
-        raise ValueError(f"unable to browse project folder: {exc}") from exc
+        raise ValueError(ui_message("project_files.74c2d3ecb7", value1=exc)) from exc
     ignore = ignore_patterns or [".git"]
     visible_children = [
         child
@@ -1490,7 +1487,7 @@ def read_project_image_content(
     root: str | Path, relative_path: str, expected_revision: str
 ) -> tuple[bytes, dict[str, Any]]:
     if not expected_revision:
-        raise ValueError("image content requires a file revision")
+        raise ValueError(ui_message("project_files.fec4685966"))
     suffix = Path(relative_path.replace("\\", "/")).suffix.casefold()
     if suffix not in _IMAGE_EXTENSIONS:
         raise ProjectImageUnavailable("project file is not an allowlisted image type")
@@ -1508,16 +1505,16 @@ def write_project_file(
 ) -> dict[str, Any]:
     suffix = Path(relative_path.replace("\\", "/")).suffix.casefold()
     if suffix in _IMAGE_EXTENSIONS:
-        raise ValueError("image files are read-only")
+        raise ValueError(ui_message("project_files.73ad5def37"))
     data = text.encode("utf-8")
     if len(data) > PROJECT_TEXT_FILE_MAX_BYTES:
-        raise ValueError("project file exceeds the 2 MiB editor limit")
+        raise ValueError(ui_message("project_files.aaa8d78140"))
     target = project_path(root, relative_path)
     current, _size = _read_regular_file_bounded(target, PROJECT_TEXT_FILE_MAX_BYTES)
     if current is None:
-        raise ValueError("existing project file exceeds the 2 MiB editor limit")
+        raise ValueError(ui_message("project_files.89e20ca77a"))
     if revision(current) != expected_revision:
-        raise ValueError("project file changed externally; reload before saving")
+        raise ValueError(ui_message("project_files.39921b0021"))
     _atomic_write(target, data)
     return read_project_file(root, relative_path)
 
@@ -1542,17 +1539,17 @@ def parse_project_config(data: bytes) -> dict[str, Any]:
     parsed = tomllib.loads(data.decode("utf-8"))
     version = parsed.pop("version", None)
     if version != PROJECT_CONFIG_VERSION:
-        raise ValueError(f"project config version must be {PROJECT_CONFIG_VERSION}")
+        raise ValueError(ui_message("project_files.292b97d5b9", value1=PROJECT_CONFIG_VERSION))
     for legacy in LEGACY_PROJECT_FIELDS:
         parsed.pop(legacy, None)
     forbidden = sorted(set(parsed) & FORBIDDEN_PROJECT_FIELDS)
     unknown = sorted(set(parsed) - PROJECT_CONFIG_FIELDS)
     if forbidden:
-        raise ValueError(f"forbidden project fields: {', '.join(forbidden)}")
+        raise ValueError(ui_message("project_files.d4f49801b6", value1=", ".join(forbidden)))
     if unknown:
-        raise ValueError(f"unknown project fields: {', '.join(unknown)}")
+        raise ValueError(ui_message("project_files.0e3444d3ca", value1=", ".join(unknown)))
     if "default_shell_profile" in parsed and not isinstance(parsed["default_shell_profile"], str):
-        raise ValueError("default_shell_profile must be a string")
+        raise ValueError(ui_message("project_files.fb932ad041"))
     if "default_agent_profiles" in parsed:
         # A *selection*, never a definition. The committed file may name a launch
         # profile the user defined locally; it may not carry argv of its own. Argv
@@ -1562,15 +1559,13 @@ def parse_project_config(data: bytes) -> dict[str, Any]:
         # `preferred_backend` already makes.
         agent_profiles = parsed["default_agent_profiles"]
         if not isinstance(agent_profiles, dict) or not all(
-            isinstance(key, str) and isinstance(value, str)
-            for key, value in agent_profiles.items()
+            isinstance(key, str) and isinstance(value, str) for key, value in agent_profiles.items()
         ):
-            raise ValueError("default_agent_profiles must be a table of backend to profile id")
+            raise ValueError(ui_message("project_files.a3bfd20650"))
         unknown_backends = sorted(key for key in agent_profiles if not is_agent_harness(key))
         if unknown_backends:
             raise ValueError(
-                f"default_agent_profiles names unregistered harnesses: "
-                f"{', '.join(unknown_backends)}"
+                ui_message("project_files.d213639cde", value1=", ".join(unknown_backends))
             )
     if "default_agent_models" in parsed:
         # Shape-validated only: a model *name* is deliberately not checked
@@ -1579,23 +1574,14 @@ def parse_project_config(data: bytes) -> dict[str, Any]:
         # degrade at spawn time, not brick the whole config.
         agent_models = parsed["default_agent_models"]
         if not isinstance(agent_models, dict) or not all(
-            isinstance(key, str)
-            and isinstance(value, str)
-            and value.strip()
-            and len(value) <= 100
+            isinstance(key, str) and isinstance(value, str) and value.strip() and len(value) <= 100
             for key, value in agent_models.items()
         ):
-            raise ValueError(
-                "default_agent_models must be a table of backend to a model "
-                "name of at most 100 characters"
-            )
-        unknown_model_backends = sorted(
-            key for key in agent_models if not is_agent_harness(key)
-        )
+            raise ValueError(ui_message("project_files.748143939e"))
+        unknown_model_backends = sorted(key for key in agent_models if not is_agent_harness(key))
         if unknown_model_backends:
             raise ValueError(
-                f"default_agent_models names unregistered harnesses: "
-                f"{', '.join(unknown_model_backends)}"
+                ui_message("project_files.11ed200820", value1=", ".join(unknown_model_backends))
             )
     preferred_backend = parsed.get("preferred_backend")
     if (
@@ -1603,85 +1589,84 @@ def parse_project_config(data: bytes) -> dict[str, Any]:
         and preferred_backend != "shell"
         and not is_agent_harness(preferred_backend)
     ):
-        raise ValueError("preferred_backend must be shell or a registered agent")
+        raise ValueError(ui_message("project_files.4145290d9a"))
     if parsed.get("resource_open_mode") not in {None, "dock", "popout"}:
-        raise ValueError("resource_open_mode must be dock or popout")
+        raise ValueError(ui_message("project_files.20bab04123"))
     if parsed.get("prompt_library_scope") not in {None, "off", "global", "project", "both"}:
-        raise ValueError("prompt_library_scope must be off, global, project, or both")
+        raise ValueError(ui_message("project_files.afb7bef6c1"))
     if parsed.get("session_control_grant") not in {None, *SESSION_CONTROL_GRANTS}:
-        raise ValueError("session_control_grant must be draft or granted")
+        raise ValueError(ui_message("project_files.dc03c24323"))
     if parsed.get("spawn_grant") not in {None, *SESSION_CONTROL_GRANTS}:
-        raise ValueError("spawn_grant must be draft or granted")
+        raise ValueError(ui_message("project_files.2fd9b74913"))
     if parsed.get("land_grant") not in {None, *SESSION_CONTROL_GRANTS}:
-        raise ValueError("land_grant must be draft or granted")
+        raise ValueError(ui_message("project_files.854f74a79d"))
     if parsed.get("land_verify_grant") not in {None, *SESSION_CONTROL_GRANTS}:
-        raise ValueError("land_verify_grant must be draft or granted")
+        raise ValueError(ui_message("project_files.fe0927beb7"))
     if parsed.get("interject_grant") not in {None, *INTERJECT_GRANTS}:
-        raise ValueError("interject_grant must be off or granted")
+        raise ValueError(ui_message("project_files.be3f071dc6"))
     if parsed.get("message_envelope") not in {None, *MESSAGE_ENVELOPES}:
-        raise ValueError("message_envelope must be full, compact, or bare")
+        raise ValueError(ui_message("project_files.a5e4bf6fd0"))
     if parsed.get("approval_ceiling") not in {None, *APPROVAL_CEILINGS}:
-        raise ValueError("approval_ceiling must be wait, allowlisted, or allow_all")
+        raise ValueError(ui_message("project_files.6fddbc2fd0"))
     if "approval_allow" in parsed and (
         not isinstance(parsed["approval_allow"], list)
         or not all(isinstance(item, str) for item in parsed["approval_allow"])
         or len(parsed["approval_allow"]) > MAX_PROJECT_APPROVAL_RULES
         or any(not item.strip() or len(item) > 200 for item in parsed["approval_allow"])
     ):
-        raise ValueError(
-            "approval_allow must be an array of at most "
-            f"{MAX_PROJECT_APPROVAL_RULES} non-empty rule strings"
-        )
+        raise ValueError(ui_message("project_files.27fa653ec7", value1=MAX_PROJECT_APPROVAL_RULES))
     if "notification_sounds_enabled" in parsed and not isinstance(
         parsed["notification_sounds_enabled"], bool
     ):
-        raise ValueError("notification_sounds_enabled must be a boolean")
+        raise ValueError(ui_message("project_files.6dfcef49bd"))
     if "scan_timeline_auto_enable" in parsed and not isinstance(
         parsed["scan_timeline_auto_enable"], bool
     ):
-        raise ValueError("scan_timeline_auto_enable must be a boolean")
+        raise ValueError(ui_message("project_files.9bc6f15d00"))
     if "title_refinements" in parsed and (
         isinstance(parsed["title_refinements"], bool)
         or not isinstance(parsed["title_refinements"], int)
         or not 0 <= parsed["title_refinements"] <= TITLE_REFINEMENTS_MAX
     ):
-        raise ValueError(
-            f"title_refinements must be an integer from 0 to {TITLE_REFINEMENTS_MAX}"
-        )
+        raise ValueError(ui_message("project_files.8d85ef2ec0", value1=TITLE_REFINEMENTS_MAX))
     if "ignore_patterns" in parsed and (
         not isinstance(parsed["ignore_patterns"], list)
         or not all(isinstance(item, str) for item in parsed["ignore_patterns"])
         or len(parsed["ignore_patterns"]) > 256
         or any(not item.strip() or len(item) > 200 for item in parsed["ignore_patterns"])
     ):
-        raise ValueError("ignore_patterns must be an array of at most 256 non-empty strings")
+        raise ValueError(ui_message("project_files.f68b15a026"))
     if "automations" in parsed:
         automations = parsed["automations"]
         if not isinstance(automations, dict) or not all(
             isinstance(value, bool) for value in automations.values()
         ):
-            raise ValueError("automations must be a table of boolean opt-ins")
+            raise ValueError(ui_message("project_files.c98e7f45be"))
         unknown_automations = sorted(
             set(automations) - set(AUTOMATION_REGISTRY) - LEGACY_AUTOMATION_IDS
         )
         if unknown_automations:
-            raise ValueError(f"unknown automations: {', '.join(unknown_automations)}")
+            raise ValueError(
+                ui_message("project_files.5694e8396c", value1=", ".join(unknown_automations))
+            )
         parsed["automations"] = {
             key: value for key, value in automations.items() if key in AUTOMATION_REGISTRY
         }
     if "worktree" in parsed:
         worktree = parsed["worktree"]
         if not isinstance(worktree, dict):
-            raise ValueError("worktree must be a table")
+            raise ValueError(ui_message("project_files.329c439450"))
         unknown_worktree = sorted(set(worktree) - {"setup_command", "verify_command"})
         if unknown_worktree:
-            raise ValueError(f"unknown worktree fields: {', '.join(unknown_worktree)}")
+            raise ValueError(
+                ui_message("project_files.db37ac98a3", value1=", ".join(unknown_worktree))
+            )
         for field in ("setup_command", "verify_command"):
             command = worktree.get(field)
             if command is not None and (
                 not isinstance(command, str) or not command.strip() or len(command) > 4096
             ):
-                raise ValueError(f"worktree.{field} must be a non-empty string")
+                raise ValueError(ui_message("project_files.fe7e46e97a", value1=field))
     return parsed
 
 
@@ -1692,7 +1677,7 @@ def serialize_project_config(values: dict[str, Any]) -> bytes:
     values = {key: value for key, value in values.items() if key not in LEGACY_PROJECT_FIELDS}
     invalid = sorted(set(values) - PROJECT_CONFIG_FIELDS)
     if invalid:
-        raise ValueError(f"unknown project fields: {', '.join(invalid)}")
+        raise ValueError(ui_message("project_files.0e3444d3ca", value1=", ".join(invalid)))
     lines = [f"version = {PROJECT_CONFIG_VERSION}"]
     for key in (
         "default_shell_profile",
@@ -1820,7 +1805,7 @@ def _read_project_config_sync(path: Path, project: ProjectIdentity) -> dict[str,
             "revision": revision(current_data),
             "values": {},
             "status": "malformed",
-            "error": str(exc),
+            "error": error_text(exc),
         }
 
 
@@ -1862,7 +1847,7 @@ async def write_project_config(
     """
     current = await read_project_config(cwd, project=project)
     if current["revision"] != expected_revision:
-        raise ValueError("project config changed externally; reload before saving")
+        raise ValueError(ui_message("project_files.2c9cafc9d9"))
     data = serialize_project_config(values)
     _atomic_write(Path(current["path"]), data)
     return await read_project_config(cwd, project=project)
@@ -1907,18 +1892,16 @@ async def merge_project_config(
     """
     current = await read_project_config(cwd, project=project)
     if current["status"] == "malformed":
-        raise ValueError(
-            "this Project's .swe-mux/config.toml cannot be parsed; fix it before saving"
-        )
+        raise ValueError(ui_message("project_files.c184675127"))
     if current["status"] == "read-only":
-        raise ValueError("this Project's .swe-mux/config.toml is read-only")
+        raise ValueError(ui_message("project_files.1f4e878eb6"))
     # Retired keys are dropped rather than refused, for the same reason
     # `serialize_project_config` drops them: a caller that read a config and changed
     # one thing does not have to know which keys have since moved to global settings.
     requested = {key: value for key, value in changes.items() if key not in LEGACY_PROJECT_FIELDS}
     invalid = sorted(set(requested) - PROJECT_CONFIG_FIELDS)
     if invalid:
-        raise ValueError(f"unknown project fields: {', '.join(invalid)}")
+        raise ValueError(ui_message("project_files.0e3444d3ca", value1=", ".join(invalid)))
     stored = normalized_project_values(dict(current["values"]))
     expected = normalized_project_values(
         {key: value for key, value in base.items() if value is not None}
@@ -2043,21 +2026,21 @@ def _clean_request(request: Any) -> dict[str, Any]:
 
 def _validate_observations(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not isinstance(items, list) or len(items) > MAX_OBSERVATIONS:
-        raise ValueError(f"observations must be a list of at most {MAX_OBSERVATIONS} items")
+        raise ValueError(ui_message("project_files.895cd77965", value1=MAX_OBSERVATIONS))
     cleaned: list[dict[str, Any]] = []
     seen: set[str] = set()
     for item in items:
         if not isinstance(item, dict):
-            raise ValueError("each observation must be an object")
+            raise ValueError(ui_message("project_files.37ee525007"))
         identity = item.get("id")
         body = item.get("body")
         if not isinstance(identity, str) or not _SAFE_NOTE_ID.fullmatch(identity):
-            raise ValueError("observation id must be a short safe token")
+            raise ValueError(ui_message("project_files.37dbdcc08c"))
         if identity in seen:
-            raise ValueError("observation ids must be unique")
+            raise ValueError(ui_message("project_files.aab0708bbc"))
         seen.add(identity)
         if not isinstance(body, str) or not body.strip() or len(body) > MAX_OBSERVATION_CHARS:
-            raise ValueError(f"observation body must be 1–{MAX_OBSERVATION_CHARS} characters")
+            raise ValueError(ui_message("project_files.c46d52d932", value1=MAX_OBSERVATION_CHARS))
         entry: dict[str, Any] = {
             "id": identity,
             "body": body,
@@ -2066,7 +2049,9 @@ def _validate_observations(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         }
         kind = str(item.get("kind") or "note")
         if kind not in OBSERVATION_KINDS:
-            raise ValueError(f"observation kind must be one of {', '.join(OBSERVATION_KINDS)}")
+            raise ValueError(
+                ui_message("project_files.d0c9a74848", value1=", ".join(OBSERVATION_KINDS))
+            )
         if kind != "note":
             entry["kind"] = kind
             entry["request"] = _clean_request(item.get("request"))
@@ -2103,7 +2088,7 @@ async def read_observations(
             "revision": revision(data),
             "observations": [],
             "status": "malformed",
-            "error": str(exc),
+            "error": error_text(exc),
         }
     return {
         "project": asdict(project),
@@ -2131,11 +2116,13 @@ async def append_observation(
     """
     text = body.strip()
     if not text:
-        raise ValueError("observation body must not be empty")
+        raise ValueError(ui_message("project_files.bb7f1314e1"))
     if len(text) > MAX_OBSERVATION_CHARS:
-        raise ValueError(f"observation body must be {MAX_OBSERVATION_CHARS} characters or fewer")
+        raise ValueError(ui_message("project_files.57aa67bd5b", value1=MAX_OBSERVATION_CHARS))
     if kind not in OBSERVATION_KINDS:
-        raise ValueError(f"observation kind must be one of {', '.join(OBSERVATION_KINDS)}")
+        raise ValueError(
+            ui_message("project_files.d0c9a74848", value1=", ".join(OBSERVATION_KINDS))
+        )
     if project is None:
         project, mux_dir = await project_status(cwd)
     else:
@@ -2143,7 +2130,7 @@ async def append_observation(
     path = mux_dir / "observations.json"
     current = _load_observations(path)
     if len(current) >= MAX_OBSERVATIONS:
-        raise ValueError(f"observation inbox is full ({MAX_OBSERVATIONS} items); clear some first")
+        raise ValueError(ui_message("project_files.9a8dcd3e91", value1=MAX_OBSERVATIONS))
     identity = uuid.uuid4().hex[:16]
     entry: dict[str, Any] = {
         "id": identity,
@@ -2190,7 +2177,7 @@ async def update_observation_request(
         if done is not None:
             item["done"] = done
     if not found:
-        raise ValueError("no such observation")
+        raise ValueError(ui_message("project_files.aa0f938053"))
     _atomic_write(path, _serialize_observations(_validate_observations(current)))
     return await read_observations(cwd, project=project)
 
@@ -2207,7 +2194,7 @@ async def write_observations(
     if current.get("status") == "malformed":
         raise ObservationsUnreadableError(str(current.get("error") or "observations.json"))
     if current["revision"] != expected_revision:
-        raise ValueError("observations changed externally; reload before saving")
+        raise ValueError(ui_message("project_files.79e02ea0e3"))
     cleaned = _validate_observations(observations)
     _atomic_write(Path(current["path"]), _serialize_observations(cleaned))
     return await read_observations(cwd, project=project)
@@ -2247,7 +2234,7 @@ def _read_note_file(
                 "revision": _unread_revision(),
                 "markdown": "",
                 "status": "too-large",
-                "error": "note exceeds the 1 MiB editor limit",
+                "error": ui_message("project_files.da3403fdec"),
             }
         text = data.decode("utf-8")
         metadata = _note_metadata(text)
@@ -2277,7 +2264,7 @@ def _read_note_file(
             "revision": "unreadable",
             "markdown": "",
             "status": "malformed",
-            "error": str(exc),
+            "error": error_text(exc),
         }
 
 
@@ -2335,10 +2322,10 @@ async def write_global_note(
     title: str,
 ) -> dict[str, Any]:
     if len(markdown.encode("utf-8")) > MAX_NOTE_MARKDOWN_BYTES:
-        raise ValueError("note exceeds the 1 MiB limit")
+        raise ValueError(ui_message("project_files.a3fa535f6b"))
     current = await read_global_note(data_dir, identity, default_title=title)
     if current["revision"] != expected_revision:
-        raise ValueError("note changed externally; reload before saving")
+        raise ValueError(ui_message("project_files.fa1b29f15b"))
     body = note_header(
         identity,
         title,
@@ -2360,10 +2347,10 @@ async def write_note(
     project: ProjectIdentity | None = None,
 ) -> dict[str, Any]:
     if len(markdown.encode("utf-8")) > MAX_NOTE_MARKDOWN_BYTES:
-        raise ValueError("note exceeds the 1 MiB limit")
+        raise ValueError(ui_message("project_files.a3fa535f6b"))
     current = await read_note(cwd, identity, default_title=default_title, project=project)
     if current["revision"] != expected_revision:
-        raise ValueError("note changed externally; reload before saving")
+        raise ValueError(ui_message("project_files.fa1b29f15b"))
     project_root = Path(str(current["project"]["root"]))
     ensure_project_notes_ignored(project_root)
     body = note_header(
@@ -2428,9 +2415,9 @@ async def delete_note(
     """
     current = await read_note(cwd, identity, project=project)
     if current["revision"] != expected_revision:
-        raise ValueError("note changed externally; reload before deleting")
+        raise ValueError(ui_message("project_files.f2eaf4a174"))
     if not current["exists"]:
-        raise ValueError("note does not exist")
+        raise ValueError(ui_message("project_files.a4798896ca"))
     project_root = Path(str(current["project"]["root"]))
     if project_note_count(project_root) <= 1:
         raise ProjectNoteProtected(
@@ -2440,7 +2427,7 @@ async def delete_note(
     try:
         trashed = _move_note_aside(project_root / ".swe-mux" / "notes" / "trash" / path.name, path)
     except FileNotFoundError as exc:
-        raise ValueError("note changed externally; reload before deleting") from exc
+        raise ValueError(ui_message("project_files.f2eaf4a174")) from exc
     return {
         "deleted": True,
         "path": str(path),
@@ -2468,10 +2455,10 @@ def note_save_loop_sample(raw: Any) -> dict[str, Any]:
     submitted by a page, so nothing in it is trusted beyond its type.
     """
     if not isinstance(raw, dict):
-        raise ValueError("save loop diagnostic must be an object")
+        raise ValueError(ui_message("project_files.adf5b72dae"))
     kind = str(raw.get("kind") or "")
     if kind not in {"paused", "echo"}:
-        raise ValueError("save loop kind must be paused or echo")
+        raise ValueError(ui_message("project_files.62bd3cc268"))
 
     def bounded_int(value: Any, ceiling: int) -> int:
         try:

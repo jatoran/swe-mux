@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
+from .ui_messages import ui_message
+
 MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_ATTACHMENTS_PER_SESSION = 32
@@ -55,9 +57,9 @@ def attachment_workspace_root(project_root: str | Path, spawn_cwd: str | Path) -
     project = Path(project_root).expanduser().resolve()
     cwd = Path(spawn_cwd).expanduser().resolve()
     if not project.is_dir():
-        raise ValueError("the session's Project folder is unavailable")
+        raise ValueError(ui_message("session_attachments.09741d8322"))
     if not cwd.is_dir():
-        raise ValueError("the session's working folder is unavailable")
+        raise ValueError(ui_message("session_attachments.2baeb7fbc7"))
     try:
         cwd.relative_to(project)
     except ValueError:
@@ -102,12 +104,12 @@ def classify_attachment(
     sniffed = _sniff_image_type(data)
     if sniffed is not None:
         if declared in set(_IMAGE_SUFFIXES.values()) and declared != sniffed:
-            raise ValueError("image content does not match its declared type")
+            raise ValueError(ui_message("session_attachments.60ef9485c6"))
         if suffix_type is not None and suffix_type != sniffed:
-            raise ValueError("image content does not match its filename extension")
+            raise ValueError(ui_message("session_attachments.472c70de6a"))
         return "image", sniffed
     if declared in set(_IMAGE_SUFFIXES.values()) or suffix_type is not None:
-        raise ValueError("image content does not match its declared type")
+        raise ValueError(ui_message("session_attachments.60ef9485c6"))
     media_type = declared if declared and len(declared) <= 127 else ""
     if not media_type:
         media_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
@@ -123,29 +125,29 @@ def _safe_session_component(session_id: str) -> str:
 def _checked_directory(parent: Path, name: str) -> Path:
     directory = parent / name
     if directory.exists() and (directory.is_symlink() or not directory.is_dir()):
-        raise ValueError(f"attachment storage path is not a folder: {directory}")
+        raise ValueError(ui_message("session_attachments.acca77e05b", value1=directory))
     directory.mkdir(exist_ok=True)
     if directory.is_symlink():
-        raise ValueError(f"attachment storage path cannot be a symlink: {directory}")
+        raise ValueError(ui_message("session_attachments.a8a74a9461", value1=directory))
     return directory
 
 
 def session_attachment_directory(workspace_root: Path, session_id: str) -> Path:
     root = workspace_root.expanduser().resolve()
     if not root.is_dir():
-        raise ValueError("attachment workspace is unavailable")
+        raise ValueError(ui_message("session_attachments.73ba319d80"))
     mux = _checked_directory(root, ".swe-mux")
     attachments = _checked_directory(mux, "attachments")
     ignore = attachments / ".gitignore"
     if ignore.exists() and (ignore.is_symlink() or not ignore.is_file()):
-        raise ValueError("attachment ignore file is unsafe")
+        raise ValueError(ui_message("session_attachments.26f4021859"))
     if not ignore.exists():
         ignore.write_text("*\n", encoding="utf-8")
     directory = _checked_directory(attachments, _safe_session_component(session_id))
     try:
         directory.resolve().relative_to(root)
     except ValueError as exc:
-        raise ValueError("attachment storage escaped the workspace") from exc
+        raise ValueError(ui_message("session_attachments.e6883401d5")) from exc
     return directory
 
 
@@ -159,13 +161,13 @@ def store_session_attachment(
     image_only: bool = False,
 ) -> StoredAttachment:
     if len(data) > MAX_ATTACHMENT_BYTES:
-        raise ValueError("attachment exceeds the 25 MiB limit")
+        raise ValueError(ui_message("session_attachments.15348776ec"))
     safe_name = sanitize_attachment_name(filename)
     kind, media_type = classify_attachment(safe_name, declared_media_type, data)
     if image_only and kind != "image":
-        raise ValueError("supported clipboard image types: PNG, JPEG, WebP, GIF")
+        raise ValueError(ui_message("session_attachments.3a8bbd3c3b"))
     if kind == "image" and len(data) > MAX_IMAGE_BYTES:
-        raise ValueError("image exceeds the 10 MiB limit")
+        raise ValueError(ui_message("session_attachments.0613e0304c"))
 
     directory = session_attachment_directory(workspace_root, session_id)
     entries = [
@@ -174,10 +176,10 @@ def store_session_attachment(
         if item.is_file() and not item.is_symlink() and not item.name.endswith(".tmp")
     ]
     if len(entries) >= MAX_ATTACHMENTS_PER_SESSION:
-        raise ValueError("this session has reached the 32-file attachment limit")
+        raise ValueError(ui_message("session_attachments.f5b9288c0d"))
     total = sum(item.stat().st_size for item in entries)
     if total + len(data) > MAX_ATTACHMENT_BYTES_PER_SESSION:
-        raise ValueError("this session has reached the 100 MiB attachment limit")
+        raise ValueError(ui_message("session_attachments.e8b481d3c5"))
 
     attachment_id = uuid4().hex
     path = directory / f"{attachment_id}-{safe_name}"

@@ -1,3 +1,4 @@
+import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { notifyPromptLibraryChanged, subscribeToPromptLibraryChanges } from './promptLibraryEvents'
@@ -76,7 +77,7 @@ export function PromptLibrary({ project, backend, startCreating, onInsert, onClo
     return (library?.items || []).filter(item =>
       (!backend || item.backends.includes(backend)) &&
       (!needle || `${item.title} ${item.tags.join(' ')} ${item.body} ${item.project_name || ''}`.toLocaleLowerCase().includes(needle)))
-  }, [library, query, backend])
+  }, [library, query, backend, uiLocale.value, catalogRevision.value])
 
   const selected = creating ? null : filtered.find(item => promptTemplateRef(item) === selectedRef)
     || (library?.items || []).find(item => promptTemplateRef(item) === selectedRef)
@@ -122,7 +123,7 @@ export function PromptLibrary({ project, backend, startCreating, onInsert, onClo
     if (!selected || missing.length) return
     // The unsaved body is what the preview shows, so inserting it while the draft
     // is dirty would paste text no template holds. Save first, or discard.
-    if (editor.dirty) { setNote('Save or revert this template before inserting it.'); return }
+    if (editor.dirty) { setNote(t("PromptLibrary.6a3b9b4ae7")); return }
     onInsert(preview)
     await api('POST', `/api/prompts/${selected.scope}/${selected.id}/use`, { project_id: selected.project_id || project?.id })
       .then(() => notifyPromptLibraryChanged()).catch(() => {})
@@ -131,82 +132,82 @@ export function PromptLibrary({ project, backend, startCreating, onInsert, onClo
 
   const beginCreate = () => { setCreating(true); setCreateNonce(value => value + 1); setNote('') }
   const pick = (item: PromptTemplate) => {
-    if (editor.dirty) { setNote('Save or revert the open template before switching.'); return }
+    if (editor.dirty) { setNote(t("PromptLibrary.22a9aba5f7")); return }
     setCreating(false); setSelectedRef(promptTemplateRef(item)); setNote('')
   }
 
   return <div class="modal-layer prompt-library-layer" onMouseDown={event => event.target === event.currentTarget && close()}>
-    <section class="prompt-library" role="dialog" aria-modal="true" aria-label="Prompt library">
+    <section class="prompt-library" role="dialog" aria-modal="true" aria-label={t("PromptLibrary.a9e479fe98")}>
       <header>
         <div>
-          <strong>PROMPT LIBRARY</strong>
-          <small>{project ? project.name : 'global templates'} · text is inserted, never sent</small>
+          <strong>{t("PromptLibrary.bc787aa8c4")}</strong>
+          <small>{rich("PromptLibrary.ad9de5392b", { value1: project ? project.name : t("PromptLibrary.b4c065c0b9") })}</small>
         </div>
-        <button aria-label="Close prompt library" onClick={close}>×</button>
+        <button aria-label={t("PromptLibrary.977a54d60c")} onClick={close}>×</button>
       </header>
       <div class="prompt-library-body">
         <aside>
           <div class="prompt-search">
-            <input ref={search} value={query} onInput={event => setQuery(event.currentTarget.value)} placeholder="Search prompts…" />
-            <button title="New template" aria-label="New template" onClick={beginCreate}>+</button>
+            <input ref={search} value={query} onInput={event => setQuery(event.currentTarget.value)} placeholder={t("PromptLibrary.e6ec7d118c")} />
+            <button title={t("PromptLibrary.30d87ec452")} aria-label={t("PromptLibrary.30d87ec452")} onClick={beginCreate}>+</button>
           </div>
           <label class="prompt-scope-filter">
             <input type="checkbox" checked={fleet} onChange={event => setFleet(event.currentTarget.checked)} />
-            <span>All Projects</span>
+            <span>{t("PromptLibrary.cdd1b88308")}</span>
           </label>
-          {creating && <button class="active" disabled aria-current="true"><span>New template</span><small>unsaved</small></button>}
+          {creating && <button class="active" disabled aria-current="true"><span>{t("PromptLibrary.30d87ec452")}</span><small>{t("PromptLibrary.9c80e8331a")}</small></button>}
           {filtered.map(item => <button
             key={promptTemplateRef(item)}
             class={!creating && promptTemplateRef(item) === selectedRef ? 'active' : ''}
             onClick={() => pick(item)}
           >
             <span>{item.favorite ? '★ ' : '☆ '}{item.title}</span>
-            <small>{item.project_name || item.scope}{item.conflict ? ' · ID CONFLICT' : ''}{item.tags.length ? ` · ${item.tags.join(', ')}` : ''}</small>
+            <small>{item.project_name || item.scope}{item.conflict ? t("PromptLibrary.88b0a4040a") : ''}{item.tags.length ? t("PromptLibrary.f6b53f9c8a", { value1: item.tags.join(', ') }) : ''}</small>
           </button>)}
-          {!filtered.length && <p>No compatible prompts.</p>}
+          {!filtered.length && <p>{t("PromptLibrary.da23d34e8e")}</p>}
         </aside>
         <main>
           {(selected || creating) ? <>
             <header>
               <div>
-                <strong>{editor.draft.title || (creating ? 'New template' : 'Untitled')}</strong>
-                <small>{editor.draft.scope}{selected?.project_name ? ` · ${selected.project_name}` : ''} · {editor.draft.backends.join(' · ') || 'no backends'}</small>
+                <strong>{editor.draft.title || (creating ? t("PromptLibrary.30d87ec452") : t("PromptLibrary.f59ab8d133"))}</strong>
+                <small>{editor.draft.scope}{selected?.project_name ? t("PromptLibrary.3f26e58e96", { project_name: selected.project_name }) : ''} · {editor.draft.backends.join(' · ') || t("PromptLibrary.d0ed8bb41b")}</small>
               </div>
               {selected && <div>
-                <button aria-label="Toggle favorite" onClick={() => void favorite(selected)}>{selected.favorite ? '★' : '☆'}</button>
+                <button aria-label={t("PromptLibrary.e32bb6dbee")} onClick={() => void favorite(selected)}>{selected.favorite ? '★' : '☆'}</button>
               </div>}
             </header>
-            {selected?.conflict && <p class="settings-inline-error">A global and Project template share this stable ID. Choose by scope or edit one ID on disk.</p>}
+            {selected?.conflict && <p class="settings-inline-error">{t("PromptLibrary.efd117bdc1")}</p>}
             <PromptDraftFields state={editor} owners={owners} />
-            <PromptDraftActions state={editor} onCancel={creating ? () => setCreating(false) : undefined} cancelLabel="Discard" />
+            <PromptDraftActions state={editor} onCancel={creating ? () => setCreating(false) : undefined} cancelLabel={t("PromptLibrary.eb1a70e392")} />
             {editor.message && <p class="prompt-draft-note" aria-live="polite">{editor.message}</p>}
             {selected && <div class="prompt-fill">
               {editor.variables.map(name => <label key={name}>{name}
                 <input value={variables[name] || ''} onInput={event => setVariables({ ...variables, [name]: event.currentTarget.value })} />
               </label>)}
-              <label>Preview<textarea readOnly rows={10} value={preview} /></label>
+              <label>{rich("PromptLibrary.3fee52855c", { value1: <textarea readOnly rows={10} value={preview} /> })}</label>
               <div class="prompt-actions">
                 <button
                   class="primary"
                   disabled={missing.length > 0 || editor.dirty}
-                  title={editor.dirty ? 'Save or revert first' : missing.length ? `Fill: ${missing.join(', ')}` : 'Insert without submitting'}
+                  title={editor.dirty ? t("PromptLibrary.2b7ab144ae") : missing.length ? t("PromptLibrary.5bad85b71b", { value1: missing.join(', ') }) : t("PromptLibrary.d3b7774cd7")}
                   onClick={() => void insert()}
-                >Insert into terminal</button>
-                <button onClick={() => void navigator.clipboard.writeText(preview)}>Copy</button>
+                >{t("PromptLibrary.ac44735147")}</button>
+                <button onClick={() => void navigator.clipboard.writeText(preview)}>{t("PromptLibrary.e21f935f11")}</button>
               </div>
             </div>}
-          </> : <p>Create a global or Project prompt template.</p>}
+          </> : <p>{t("PromptLibrary.8c6ca23a20")}</p>}
         </main>
       </div>
       {library?.diagnostics.map(item => <p class="settings-inline-error" key={item.path}>{item.path}: {item.error}</p>)}
       {note && <footer aria-live="polite">{note}</footer>}
     </section>
     {confirmClose && <section class="modal prompt-close-confirm" role="alertdialog" aria-modal="true" onMouseDown={event => event.stopPropagation()}>
-      <h3>Unsaved prompt</h3>
-      <p>Save or discard the pending template changes.</p>
-      <button class="primary" onClick={() => void editor.save().then(saved => saved && onClose())}>Save</button>
-      <button onClick={() => { setConfirmClose(false); onClose() }}>Discard</button>
-      <button onClick={() => setConfirmClose(false)}>Keep editing</button>
+      <h3 data-heading-message="PromptLibrary.66e1b64e3d">{t("PromptLibrary.66e1b64e3d")}</h3>
+      <p>{t("PromptLibrary.b7649c4964")}</p>
+      <button class="primary" onClick={() => void editor.save().then(saved => saved && onClose())}>{t("PromptLibrary.1509f561f2")}</button>
+      <button onClick={() => { setConfirmClose(false); onClose() }}>{t("PromptLibrary.eb1a70e392")}</button>
+      <button onClick={() => setConfirmClose(false)}>{t("PromptLibrary.e76fd2add0")}</button>
     </section>}
   </div>
 }

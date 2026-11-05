@@ -59,6 +59,7 @@ from .schedules import (
     occurrence_key,
 )
 from .session_resume import ResumeRefused, fork_run, resolve_latest_run, resume_run
+from .ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -297,7 +298,7 @@ class ScheduleService:
                 session_id=session_id,
                 rule_id=f"schedule:{schedule_id}",
                 kind="schedule-failed",
-                title=f"Scheduled run failed: {spec.label}",
+                title=ui_message("scheduler.111f71c861", value1=spec.label),
                 message=reason or "the scheduled run could not start",
                 severity="warn",
             )
@@ -320,11 +321,7 @@ class ScheduleService:
 
         # A late timer fire is either replayed once or recorded as missed. A
         # manual run is never "late": the human is standing there.
-        if (
-            origin == "timer"
-            and moment - due_at > MISSED_GRACE_SECONDS
-            and not spec.catch_up
-        ):
+        if origin == "timer" and moment - due_at > MISSED_GRACE_SECONDS and not spec.catch_up:
             return "missed", REASON_LABELS["missed_window"], None, 0
 
         project = self.projects.projects.get(str(schedule["project_id"]))
@@ -555,9 +552,7 @@ class ScheduleService:
 
     # ------------------------------------------------------------- follow-ups
 
-    async def _queue_messages(
-        self, spec: ScheduleSpec, session_id: str, *, run_id: str
-    ) -> int:
+    async def _queue_messages(self, spec: ScheduleSpec, session_id: str, *, run_id: str) -> int:
         """Stage what this schedule says, in order, through the ordinary prompt queue.
 
         Bind-on-first-run means these can be written the moment the session exists:
@@ -578,9 +573,7 @@ class ScheduleService:
         if spec.action == "resume" and spec.prompt.strip():
             messages.insert(0, FollowUp(body=spec.prompt))
         for index, item in enumerate(messages):
-            constraints = (
-                {"not_before": base + item.delay_seconds} if item.delay_seconds else None
-            )
+            constraints = {"not_before": base + item.delay_seconds} if item.delay_seconds else None
             try:
                 await self._enqueue(
                     target_session_id=session_id,

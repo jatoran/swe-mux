@@ -1,3 +1,4 @@
+import { rich, t } from './localization/index.ts'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { api, type ApiError } from './api'
 import { DirectoryPicker } from './DirectoryPicker'
@@ -36,7 +37,7 @@ export function ProjectCreateDialog({groups,onClose,onCreated,onSetupComplete}:P
       setScripts(config.project_init_scripts||[])
       setDraft(current=>({...current,parent:current.parent||config.new_project_parent||''}))
       setLoaded(true)
-    }).catch(cause=>{if(!controller.signal.aborted)setError(`Could not load global defaults. ${(cause as Error).message}`)})
+    }).catch(cause=>{if(!controller.signal.aborted)setError(t("ProjectCreateDialog.4a2977dde9", { message: (cause as Error).message }))})
     return()=>controller.abort()
   },[attempt])
   const selectedScripts=scripts.filter(script=>script.default_enabled)
@@ -59,33 +60,33 @@ export function ProjectCreateDialog({groups,onClose,onCreated,onSetupComplete}:P
       try{
         const result=await api<{errors:SetupResult['errors']}>('POST',`/api/projects/${project.id}/init-scripts/run`,{script_ids:ids},{timeoutMs:30000})
         onSetupComplete(project,{errors:result.errors,started:result.errors.length<ids.length})
-      }catch(cause){onSetupComplete(project,{errors:[{script:'Setup commands',error:(cause as Error).message}],started:false})}
+      }catch(cause){onSetupComplete(project,{errors:[{get script() { return t("ProjectCreateDialog.ea2ab00c4c") },error:(cause as Error).message}],started:false})}
     }
     submitting.current=false
     if(alive.current)setBusy(false)
   }
-  return <div class="modal-layer project-registry-dialog-layer" role="dialog" aria-modal="true" aria-label="Create project" onMouseDown={event=>{if(event.target===event.currentTarget)close()}}>
+  return <div class="modal-layer project-registry-dialog-layer" role="dialog" aria-modal="true" aria-label={t("ProjectCreateDialog.fa67e4d0da")} onMouseDown={event=>{if(event.target===event.currentTarget)close()}}>
     <form ref={panel} data-tutorial="project-form" class="modal project-create-dialog" onSubmit={event=>{event.preventDefault();void submit()}}>
-      <div class="modal-heading"><h2>Create project</h2><button type="button" aria-label="Close create project" disabled={busy} onClick={close}>×</button></div>
+      <div class="modal-heading"><h2 data-heading-message="ProjectCreateDialog.fa67e4d0da">{t("ProjectCreateDialog.fa67e4d0da")}</h2><button type="button" aria-label={t("ProjectCreateDialog.c446f1a379")} disabled={busy} onClick={close}>×</button></div>
       <fieldset disabled={busy} class="project-create-fields">
-        <div class="project-create-mode" role="tablist" aria-label="How to add this project">
-          <button type="button" role="tab" aria-selected={draft.mode==='existing'} class={draft.mode==='existing'?'active':''} onClick={()=>setDraft(current=>({...current,mode:'existing'}))}>Existing folder</button>
-          <button type="button" role="tab" aria-selected={draft.mode==='new'} class={draft.mode==='new'?'active':''} onClick={()=>setDraft(current=>({...current,mode:'new'}))}>New folder</button>
+        <div class="project-create-mode" role="tablist" aria-label={t("ProjectCreateDialog.d919bdeddd")}>
+          <button type="button" role="tab" aria-selected={draft.mode==='existing'} class={draft.mode==='existing'?'active':''} onClick={()=>setDraft(current=>({...current,mode:'existing'}))}>{t("ProjectCreateDialog.f160333f79")}</button>
+          <button type="button" role="tab" aria-selected={draft.mode==='new'} class={draft.mode==='new'?'active':''} onClick={()=>setDraft(current=>({...current,mode:'new'}))}>{t("ProjectCreateDialog.cf28f49ec5")}</button>
         </div>
-        <label>Name<input ref={nameInput} value={draft.name} onInput={event=>setDraft(current=>({...current,name:event.currentTarget.value}))} autofocus/></label>
-        {draft.mode==='existing'?<label>Folder<div class="project-folder-field"><input aria-label="Folder" value={draft.root} onInput={event=>setDraft(current=>({...current,root:event.currentTarget.value}))} placeholder="Path to an existing folder"/><button type="button" onClick={()=>setBrowsing(true)}>Browse…</button></div></label>:<>
-          <label>Parent folder<div class="project-folder-field"><input aria-label="Parent folder" value={draft.parent} onInput={event=>setDraft(current=>({...current,parent:event.currentTarget.value}))} placeholder="Choose a parent folder"/><button type="button" onClick={()=>setBrowsing(true)}>Browse…</button></div></label>
-          <label>New folder name<input value={projectCreateFolder(draft)} onInput={event=>setDraft(current=>({...current,folder:event.currentTarget.value,folderTouched:true}))} placeholder={suggestFolderName(draft.name)||'my-project'}/></label>
+        <label>{rich("ProjectCreateDialog.5b326d4444", { value1: <input ref={nameInput} value={draft.name} onInput={event=>setDraft(current=>({...current,name:event.currentTarget.value}))} autofocus/> })}</label>
+        {draft.mode==='existing' ? <label>{rich("ProjectCreateDialog.275a68a3f6", { value1: <div class="project-folder-field"><input aria-label={t("ProjectCreateDialog.74ccd43303")} value={draft.root} onInput={event=>setDraft(current=>({...current,root:event.currentTarget.value}))} placeholder={t("ProjectCreateDialog.09cfabdf66")}/><button type="button" onClick={()=>setBrowsing(true)}>{t("ProjectCreateDialog.93c6b664dc")}</button></div> })}</label> : <>
+          <label>{rich("ProjectCreateDialog.9d4d0696ec", { value1: <div class="project-folder-field"><input aria-label={t("ProjectCreateDialog.158f5a01ef")} value={draft.parent} onInput={event=>setDraft(current=>({...current,parent:event.currentTarget.value}))} placeholder={t("ProjectCreateDialog.5dbae92725")}/><button type="button" onClick={()=>setBrowsing(true)}>{t("ProjectCreateDialog.93c6b664dc")}</button></div> })}</label>
+          <label>{rich("ProjectCreateDialog.77dbe72d19", { value1: <input value={projectCreateFolder(draft)} onInput={event=>setDraft(current=>({...current,folder:event.currentTarget.value,folderTouched:true}))} placeholder={suggestFolderName(draft.name) || t("ProjectCreateDialog.1c7cd944c2")}/> })}</label>
         </>}
-        {groups.length>0&&<label>Group<Dropdown ariaLabel="Project group" value={draft.group_id} onChange={group_id=>setDraft(current=>({...current,group_id}))} options={[{value:'',label:'Ungrouped'},...groups.map(group=>({value:group.id,label:group.name}))]}/></label>}
-        <div class="project-create-defaults"><strong>Global defaults selected</strong><span>Customize this Project after creation.</span></div>
-        {selectedScripts.length>0&&<details class="project-create-commands"><summary>Global setup commands ({selectedScripts.length})</summary><p class="modal-note">These commands will run in the new Project.</p><ul>{selectedScripts.map(script=><li key={script.id}><strong>{script.label}</strong><code>{script.command}</code></li>)}</ul></details>}
-        {draft.mode==='new'&&<p class="modal-note">Creates one folder inside the selected parent.</p>}
+        {groups.length>0 && <label>{rich("ProjectCreateDialog.bd64d0e1c9", { value1: <Dropdown ariaLabel={t("ProjectCreateDialog.0a330c84d8")} value={draft.group_id} onChange={group_id=>setDraft(current=>({...current,group_id}))} options={[{value:'',get label() { return t("ProjectCreateDialog.674b38cae7") }},...groups.map(group=>({value:group.id,label:group.name}))]}/> })}</label>}
+        <div class="project-create-defaults"><strong>{t("ProjectCreateDialog.2804d37d58")}</strong><span>{t("ProjectCreateDialog.9dd4f0be5e")}</span></div>
+        {selectedScripts.length>0 && <details class="project-create-commands"><summary>{rich("ProjectCreateDialog.ba1462f6ef", { length: selectedScripts.length })}</summary><p class="modal-note">{t("ProjectCreateDialog.02e548b1ec")}</p><ul>{selectedScripts.map(script=><li key={script.id}><strong>{script.label}</strong><code>{script.command}</code></li>)}</ul></details>}
+        {draft.mode==='new' && <p class="modal-note">{t("ProjectCreateDialog.5c1bcc30d2")}</p>}
       </fieldset>
-      {!loaded&&!error&&<p role="status" class="modal-note">Loading global defaults…</p>}
-      {error&&<p role="alert" class="project-create-error">{error}{!loaded&&<button type="button" onClick={()=>setAttempt(value=>value+1)}>Retry</button>}</p>}
-      <div class="modal-footer"><button type="button" disabled={busy} onClick={close}>Cancel</button><button class="primary" type="submit" disabled={busy||!loaded||!projectCreateReady(draft)}>{busy?'Creating…':'Create project'}</button></div>
+      {!loaded&&!error && <p role="status" class="modal-note">{t("ProjectCreateDialog.f34fea6351")}</p>}
+      {error && <p role="alert" class="project-create-error">{error}{!loaded && <button type="button" onClick={()=>setAttempt(value=>value+1)}>{t("ProjectCreateDialog.942087cc2d")}</button>}</p>}
+      <div class="modal-footer"><button type="button" disabled={busy} onClick={close}>{t("ProjectCreateDialog.19766ed6cc")}</button><button class="primary" type="submit" disabled={busy||!loaded||!projectCreateReady(draft)}>{busy ? t("ProjectCreateDialog.c79ed9492e") : t("ProjectCreateDialog.fa67e4d0da")}</button></div>
     </form>
-    {browsing&&<DirectoryPicker initialPath={draft.mode==='new'?draft.parent:draft.root} onCancel={()=>setBrowsing(false)} onSelect={root=>{setDraft(current=>current.mode==='new'?{...current,parent:root}:{...current,root,name:current.name||folderNameFromPath(root)});setBrowsing(false)}}/>}
+    {browsing && <DirectoryPicker initialPath={draft.mode==='new'?draft.parent:draft.root} onCancel={()=>setBrowsing(false)} onSelect={root=>{setDraft(current=>current.mode==='new'?{...current,parent:root}:{...current,root,name:current.name||folderNameFromPath(root)});setBrowsing(false)}}/>}
   </div>
 }

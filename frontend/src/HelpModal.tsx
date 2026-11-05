@@ -1,3 +1,4 @@
+import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useEffect, useMemo, useState } from 'preact/hooks'
 import { dismissStack } from './dismissStack.ts'
 import { useDismissLevel } from './modalFocus'
@@ -42,14 +43,14 @@ function TopicBody({ topic }: { topic: HelpTopic }) {
     {/* Said out loud rather than implied: the text below is the design document, not a
         summary of it, which is what makes it impossible for the two to disagree. */}
     {content && <>
-      <p class="help-source">From <code>{content.doc}</code>, the document that defines this surface.</p>
+      <p class="help-source">{rich("HelpModal.8eabc7257f", { value1: <code>{content.doc}</code> })}</p>
       {content.sections.map(section => <section key={section.heading} class="help-doc-section">
         <h4>{section.heading}</h4>
         {section.blocks.map(renderBlock)}
       </section>)}
     </>}
     <p class="help-more">
-      <a href={helpDocsUrl(topic)} target="_blank" rel="noreferrer noopener">Read more on swemux.dev</a>
+      <a href={helpDocsUrl(topic)} target="_blank" rel="noreferrer noopener">{t("HelpModal.cbd27402a9")}</a>
     </p>
   </div>
 }
@@ -73,34 +74,34 @@ export function HelpModal({ initialTopic, onClose, onStartTutorial, onShowGettin
     const needle = query.trim().toLowerCase()
     if (!needle) return HELP_TOPICS
     return HELP_TOPICS.filter(topic => `${topic.title} ${topic.blurb} ${topic.id}`.toLowerCase().includes(needle))
-  }, [query])
+  }, [query, uiLocale.value, catalogRevision.value])
   const topic = selected ? helpTopic(selected) : null
 
   return <div class="modal-layer help-layer" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
-    <section class={`modal help-modal${topic ? ' topic-open' : ''}`} role="dialog" aria-modal="true" aria-label="Help">
+    <section class={`modal help-modal${topic ? ' topic-open' : ''}`} role="dialog" aria-modal="true" aria-label={t("HelpModal.b79cac926e")}>
       <div class="modal-heading">
-        <div><span>HELP</span><h2>{topic ? topic.title : 'How swe-mux works'}</h2></div>
-        <button type="button" aria-label="Close help" onClick={onClose}>×</button>
+        <div><span>{t("HelpModal.37a6760fa4")}</span><h2>{topic ? topic.title : t("HelpModal.ff49260423")}</h2></div>
+        <button type="button" aria-label={t("HelpModal.88f2b69280")} onClick={onClose}>×</button>
       </div>
       <div class="help-body">
-        <nav class="help-nav" aria-label="Help topics">
+        <nav class="help-nav" aria-label={t("HelpModal.138dc09b28")}>
           {/* The tour, first and unconditional. It is the only thing here that *does*
               something rather than explaining something, and it was previously reachable
               only from one section of one Settings tab. */}
-          <button type="button" class="help-action primary" onClick={onStartTutorial}>Take the guided tour</button>
-          {onShowGettingStarted&&<button type="button" class="help-action" onClick={onShowGettingStarted}>Show Getting started again</button>}
-          {onRestartSetup&&<button type="button" class="help-action" onClick={onRestartSetup}>Restart setup / use existing settings</button>}
+          <button type="button" class="help-action primary" onClick={onStartTutorial}>{t("HelpModal.87ad9af10e")}</button>
+          {onShowGettingStarted && <button type="button" class="help-action" onClick={onShowGettingStarted}>{t("HelpModal.144cb9d488")}</button>}
+          {onRestartSetup && <button type="button" class="help-action" onClick={onRestartSetup}>{t("HelpModal.fa1896c897")}</button>}
           <button
             type="button"
             class="help-action"
             disabled={!configurator.enabled}
-            title={configurator.enabled ? 'Start an agent session pointed at this install' : configurator.reason}
+            title={configurator.enabled ? t("HelpModal.c42e9256a7") : configurator.reason}
             onClick={onOpenConfigurator}
-          >Ask an agent about this install</button>
-          <label class="help-search"><span class="sr-only">Filter help topics</span>
-            <input type="search" placeholder="Filter topics" value={query} onInput={event => setQuery(event.currentTarget.value)} />
+          >{t("HelpModal.9e252559e7")}</button>
+          <label class="help-search"><span class="sr-only">{t("HelpModal.82a9d88cd5")}</span>
+            <input type="search" placeholder={t("HelpModal.4fae04c104")} value={query} onInput={event => setQuery(event.currentTarget.value)} />
           </label>
-          {selected && <button type="button" class="help-topic-link" onClick={() => setSelected(null)}>← All topics</button>}
+          {selected && <button type="button" class="help-topic-link" onClick={() => setSelected(null)}>{t("HelpModal.6e435c329d")}</button>}
           <ul class="help-topic-list">
             {matches.map(item => <li key={item.id}>
               <button
@@ -110,18 +111,16 @@ export function HelpModal({ initialTopic, onClose, onStartTutorial, onShowGettin
                 onClick={() => setSelected(item.id)}
               >{item.title}</button>
             </li>)}
-            {!matches.length && <li><p class="help-empty">No topic matches that.</p></li>}
+            {!matches.length && <li><p class="help-empty">{t("HelpModal.c71310b721")}</p></li>}
           </ul>
         </nav>
         <div class="help-content">
-          {topic
-            ? <TopicBody topic={topic} />
-            : <div class="help-index">
-                <p>Every surface below is explained by the design document that defines it, so what you read here is what the code was built to.</p>
+          {topic ? <TopicBody topic={topic} /> : <div class="help-index">
+                <p>{t("HelpModal.ca360c9583")}</p>
                 {matches.map(item => <button key={item.id} type="button" class="help-index-row" onClick={() => setSelected(item.id)}>
                   <strong>{item.title}</strong><span>{item.blurb}</span>
                 </button>)}
-                {!matches.length && <p class="help-empty">No topic matches that.</p>}
+                {!matches.length && <p class="help-empty">{t("HelpModal.c71310b721")}</p>}
               </div>}
         </div>
       </div>

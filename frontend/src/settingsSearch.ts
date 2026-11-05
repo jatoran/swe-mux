@@ -20,6 +20,7 @@
  * Ranking itself is not local to this file: `fuzzyText.ts` owns the ladder, which
  * the sidebar's Project/session filter scores by too.
  */
+import { sourceText } from './localization/index.ts'
 import { fieldScore, normalizeSearchText } from './fuzzyText.ts'
 
 export { normalizeSearchText }
@@ -177,12 +178,12 @@ const textOf = (node: unknown): string => { const out: string[] = []; collectTex
 function leadText(node: unknown): string {
   const rendered: string[] = []
   collectText(node, rendered, false)
-  const visible = rendered.find(run => /[a-z0-9]/i.test(run))
+  const visible = rendered.find(run => /[\p{L}\p{N}]/u.test(run))
   if (visible) return visible
   const props = isVNode(node) ? node.props : null
   for (const name of TEXT_PROPS) {
     const value = props?.[name]
-    if (typeof value === 'string' && /[a-z0-9]/i.test(value)) return value.trim()
+    if (typeof value === 'string' && /[\p{L}\p{N}]/u.test(value)) return value.trim()
   }
   return ''
 }
@@ -268,23 +269,24 @@ function walk(node: unknown, state: Harvest, tab: string, tabLabel: string, tabI
  * Text is joined across runs rather than taken from the first, because the live read
  * is `textContent` and the two lists have to name the same sections.
  */
-export function harvestHeadings(node: unknown, tag = 'h3'): string[] {
+export function harvestHeadings(node: unknown, tag = 'h3', source = false): string[] {
   const found: string[] = []
-  collectHeadings(node, tag, found)
+  collectHeadings(node, tag, found, source)
   return found
 }
 
-function collectHeadings(node: unknown, tag: string, found: string[]): void {
-  if (Array.isArray(node)) { for (const child of node) collectHeadings(child, tag, found); return }
+function collectHeadings(node: unknown, tag: string, found: string[], source = false): void {
+  if (Array.isArray(node)) { for (const child of node) collectHeadings(child, tag, found, source); return }
   if (!isVNode(node)) return
   if (typeof node.type === 'string' && node.type.toLowerCase() === tag) {
     const runs: string[] = []
     collectText(node, runs, false)
-    const text = runs.join(' ').trim()
+    const message=node.props?.['data-heading-message']
+    const text = source&&typeof message==='string'?sourceText(message):runs.join(' ').trim()
     if (text) found.push(text)
     return
   }
-  collectHeadings(childrenOf(node), tag, found)
+  collectHeadings(childrenOf(node), tag, found, source)
 }
 
 /** Index one tab's rendered vnode tree. */

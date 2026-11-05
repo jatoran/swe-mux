@@ -48,6 +48,12 @@ Three rules the existing boundaries follow, each of which has a failure mode:
 - **A static import from any host puts the library straight back into the entry chunk**, silently, and nothing about the app behaves differently.
   `test/bundleSplit.test.ts` asserts the absence for each boundary, because a build-size number is not something the unit suite can measure.
 
+## Localization
+
+`localization/index.ts` owns reactive message resolution and locale-aware formatters.
+`LanguagePicker.tsx` saves the shared preference through the configuration API.
+Catalog ownership, translation syntax, and verification are documented in [Localization catalogs](localization.md).
+
 ## Domain maps
 
 - [`packages/composition.md`](packages/composition.md) - workspace composition, UI state boundaries, connection liveness, server clock, redeploy progress, shared interaction primitives.

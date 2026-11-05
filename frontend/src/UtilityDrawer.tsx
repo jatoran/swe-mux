@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import type { JSX } from 'preact'
 import { useEffect, useRef } from 'preact/hooks'
 import { AgentContextTab } from './AgentContextTab'
@@ -553,8 +554,7 @@ export function UtilityDrawer(props: Props) {
       props.onOpenDrawerFile(path)
     }
     return <div class="drawer-files-host" hidden={!visible}>
-      {project
-        ? <>
+      {project ? <>
           <div class="drawer-files-browser" hidden={!!activeDrawerFile}>
             {filesVisited.current && <ProjectResource
               key={`drawer-files:${project.id}`}
@@ -578,8 +578,7 @@ export function UtilityDrawer(props: Props) {
             onSendToAgent={props.onSendToAgent}
             onPreviewFile={path => { props.onPreviewFile(path); onDone() }}
           />}
-        </>
-        : <p class="drawer-empty">Select a Project to browse its files.</p>}
+        </> : <p class="drawer-empty">{t("UtilityDrawer.ca0b5326d2")}</p>}
     </div>
   }
 
@@ -635,7 +634,7 @@ export function UtilityDrawer(props: Props) {
     // The display name, not the raw one: this heading names the same session the sidebar
     // and the tab strip name, and a drawer that still said `claude-0e7d93` after a title
     // arrived read as a different session than the pane it describes.
-    if (scope === 'session') return session ? `Session: ${sessionDisplayName(session)}` : 'No focused session'
+    if (scope === 'session') return session ? `Session: ${sessionDisplayName(session)}` : t("UtilityDrawer.e49ed53065")
     // The Project's bare name, with no `Project:` in front of it (operator decision
     // 2026-08-22). The word cost eight characters of the heading row on every
     // Project-scoped tab, and on a phone that is what pushed Git's three subtabs into
@@ -643,7 +642,7 @@ export function UtilityDrawer(props: Props) {
     // scope dot already establish that a Project is what is being named here, and the
     // session line beside it is the only other thing this slot can say - so the two are
     // told apart by the one prefix that is still doing work.
-    if (scope === 'project') return project ? project.name : 'No active Project'
+    if (scope === 'project') return project ? project.name : t("UtilityDrawer.621f16cd4f")
     return 'Application-wide'
   }
 
@@ -671,7 +670,7 @@ export function UtilityDrawer(props: Props) {
     stripProps={{
       'data-drawer-stack-id':stack.id,
       role:'tablist',
-      'aria-label':projection ? 'Panel sections' : `Panel section ${stack.id}`,
+      'aria-label':projection ? t("UtilityDrawer.93415cbe26") : t("UtilityDrawer.75f0a7ea9f", { value1: stack.id }),
     }}
   >
     {visibleDrawerTabs(stack.tabs, visibility).map((id, index, visibleTabs) => {
@@ -694,10 +693,10 @@ export function UtilityDrawer(props: Props) {
         data-scope={item.scope}
         aria-controls={panelDomId(stack.id)}
         aria-selected={id === selected}
-        aria-label={`${item.label}${item.scope === 'session' ? ', session scoped' : ''}${badge ? `, ${badge.label}` : ''}`}
+        aria-label={t("UtilityDrawer.86c3723a47", { label: item.label, value2: (item.scope === 'session') ? 'yes' : 'no', value3: badge ? `, ${badge.label}` : '' })}
         tabIndex={id === selected ? 0 : -1}
         class={`${id === selected ? 'active' : ''} ${props.draggingTab === id ? 'dragging' : ''}`}
-        title={`${item.title}${item.scope === 'session' ? ' - session scoped' : ''}${badge ? ` - ${badge.label}` : ''}${id === selected && !props.transientTab ? ' - click again to collapse' : ''}${projection ? '' : ' - drag to rearrange or split'}`}
+        title={t("UtilityDrawer.93749f2c4d", { title: item.title, value2: (item.scope === 'session') ? 'yes' : 'no', value3: badge ? ` - ${badge.label}` : '', value4: (id === selected && !props.transientTab) ? 'yes' : 'no', value5: (projection) ? 'yes' : 'no' })}
         onPointerDown={projection
           ? event => { beginTabLongPress(event, id); props.onProjectionTabReorder?.(event, id) }
           : event => props.onTabDragStart(event, id)}
@@ -762,8 +761,8 @@ export function UtilityDrawer(props: Props) {
             const topic = helpTopicForDrawer(selected, segment)
             return topic ? <button
               class="drawer-help"
-              aria-label={`Help: ${topic.title}`}
-              title={`Help: ${topic.title}`}
+              aria-label={t("UtilityDrawer.51cb75c505", { title: topic.title })}
+              title={t("UtilityDrawer.51cb75c505", { title: topic.title })}
               onClick={() => props.onHelp(topic.id)}
             >?</button> : null
           })()}
@@ -861,14 +860,14 @@ export function UtilityDrawer(props: Props) {
   const renderEmptyDrawer = () => <section class="drawer-pane">
     <div class="drawer-body">
       <div class="drawer-pane-heading">
-        <h2 class="drawer-panel-title">Side panel</h2>
+        <h2 class="drawer-panel-title" data-heading-message="UtilityDrawer.c28cdd9864">{t("UtilityDrawer.c28cdd9864")}</h2>
       </div>
-      <p class="drawer-empty">Nothing to show here. Every panel is either hidden or unavailable for the focused session.</p>
+      <p class="drawer-empty">{t("UtilityDrawer.c4dc63e447")}</p>
       <p class="drawer-empty">
         <button onClick={event => {
           const rect = event.currentTarget.getBoundingClientRect()
           props.onTabDisplayMenu(rect.left, rect.bottom)
-        }}>Choose panels…</button>
+        }}>{t("UtilityDrawer.315c7c3481")}</button>
       </p>
     </div>
   </section>
@@ -889,7 +888,7 @@ export function UtilityDrawer(props: Props) {
       <div
         class="drawer-splitter"
         role="separator"
-        aria-label="Resize drawer panes"
+        aria-label={t("UtilityDrawer.2086a2bfe5")}
         aria-orientation={node.direction === 'horizontal' ? 'vertical' : 'horizontal'}
         aria-valuemin={10}
         aria-valuemax={90}
@@ -915,17 +914,17 @@ export function UtilityDrawer(props: Props) {
   }
 
   return <>
-    {mobile && <button class="utility-drawer-scrim" aria-label="Close panel" onClick={onClose} />}
+    {mobile && <button class="utility-drawer-scrim" aria-label={t("UtilityDrawer.a600b900f8")} onClick={onClose} />}
     {!mobile && <div
       class="drawer-resizer"
       role="separator"
       aria-orientation="vertical"
-      aria-label="Resize panel"
+      aria-label={t("UtilityDrawer.c9fe271c08")}
       aria-valuemin={props.minimumWidth}
       aria-valuemax={props.maximumWidth}
       aria-valuenow={Math.round(props.width)}
       tabIndex={0}
-      title="Drag to resize, or double click to restore the default width"
+      title={t("UtilityDrawer.8bbd6340f9")}
       onPointerDown={props.onResize}
       onDblClick={() => props.onWidth(props.defaultWidth)}
       onKeyDown={event => {
@@ -944,15 +943,13 @@ export function UtilityDrawer(props: Props) {
       class={`utility-drawer ${mobile ? 'overlay' : 'docked'}`}
       role={mobile ? 'dialog' : 'complementary'}
       aria-modal={mobile || undefined}
-      aria-label="Utility drawer"
+      aria-label={t("UtilityDrawer.5c6ef8b9b3")}
       onKeyDown={event => {
         if (event.key === 'Escape' && !event.defaultPrevented) { event.stopPropagation(); onClose() }
       }}
     >
       <div class="drawer-tree">
-        {(mobile ? mobileStack.tabs : drawerTabs(layout)).some(tabAvailable)
-          ? (mobile ? renderStack(mobileStack, focusedTab) : renderNode(layout.root))
-          : renderEmptyDrawer()}
+        {(mobile ? mobileStack.tabs : drawerTabs(layout)).some(tabAvailable) ? (mobile ? renderStack(mobileStack, focusedTab) : renderNode(layout.root)) : renderEmptyDrawer()}
       </div>
       <span class="sr-only" aria-live="polite">{props.announcement}</span>
     </aside>

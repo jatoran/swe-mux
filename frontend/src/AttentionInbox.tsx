@@ -1,3 +1,5 @@
+import { locale as uiLocale } from './localization/index.ts'
+import { rich, t } from './localization/index.ts'
 // The ranked half of the Alerts tab: which of N sessions actually needs you.
 //
 // Four rules shape this surface and are easy to lose in a redesign:
@@ -24,7 +26,7 @@ import {
 } from './projectAutomations'
 import type { Project } from './types'
 import {
-  BUDGET_NOTE, CHANNEL_HINTS, CHANNEL_LABELS, CHANNEL_ORDER,
+  budgetNote, CHANNEL_HINTS, CHANNEL_LABELS, CHANNEL_ORDER,
   budgetLine, decideAttentionRule, fanoutHeadline, fetchAttentionInbox,
   sendAttentionFeedback, suppressedLabel,
   type AttentionChannel, type AttentionInbox as InboxData, type AttentionItem,
@@ -74,37 +76,31 @@ export function AttentionInbox({onOpenSession,project,visibleChannels}:{
     finally{setBusy(false)}
   }
 
-  if(!data)return <p class="drawer-status">{error||'Ranking has produced nothing yet.'}</p>
+  if(!data)return <p class="drawer-status">{error || t("AttentionInbox.cfda259efd")}</p>
   const channels=(visibleChannels||CHANNEL_ORDER).filter(channel=>channel!=='digest'||showDigest)
   const total=CHANNEL_ORDER.reduce((count,channel)=>count+(data.channels[channel]?.length||0),0)
 
   return <section class="attention-inbox">
     <p class="attention-fanout" aria-live="polite">{fanoutHeadline(data.fanout)}</p>
-    <p class="attention-budget">{budgetLine(data.budget)}{data.resumption_lag.mean_seconds!==null?` · returning to interrupted work takes you ${Math.round(data.resumption_lag.mean_seconds)}s on average`:''}
-      <span class="attention-budget-note">{BUDGET_NOTE}</span></p>
-    {error&&<p class="drawer-status">{error}</p>}
+    <p class="attention-budget">{budgetLine(data.budget)}{data.resumption_lag.mean_seconds!==null ? t("AttentionInbox.d4995c00a9", { value1: Math.round(data.resumption_lag.mean_seconds) }) : ''}
+      <span class="attention-budget-note">{budgetNote()}</span></p>
+    {error && <p class="drawer-status">{error}</p>}
     {data.rules.filter(rule=>rule.state==='proposed'&&rule.total>0).map(rule=><article class="attention-rule">
-      <div><strong>Rule suggestion</strong><span>{rule.statement}</span></div>
+      <div><strong>{t("AttentionInbox.b35f570827")}</strong><span>{rule.statement}</span></div>
       <div class="notification-row-actions">
-        <button disabled={busy} onClick={()=>void write(()=>decideAttentionRule(rule.incident_class,rule.channel,true))}>accept</button>
-        <button disabled={busy} onClick={()=>void write(()=>decideAttentionRule(rule.incident_class,rule.channel,false))}>reject</button>
+        <button disabled={busy} onClick={()=>void write(()=>decideAttentionRule(rule.incident_class,rule.channel,true))}>{t("AttentionInbox.c125d0397b")}</button>
+        <button disabled={busy} onClick={()=>void write(()=>decideAttentionRule(rule.incident_class,rule.channel,false))}>{t("AttentionInbox.084e990a49")}</button>
       </div>
     </article>)}
-    {data.rules.filter(rule=>rule.state==='accepted').map(rule=><p class="attention-rule-active">
-      Your rule holds {rule.incident_class.replaceAll('_',' ')} items in the inbox{rule.expires_at?` until ${new Date(rule.expires_at*1000).toLocaleDateString()}, when it comes back for review`:''}.
-      <button disabled={busy} onClick={()=>void write(()=>decideAttentionRule(rule.incident_class,rule.channel,false))}>drop rule</button>
-    </p>)}
+    {data.rules.filter(rule=>rule.state==='accepted').map(rule=><p class="attention-rule-active">{rich("AttentionInbox.d0a2fc81fd", { value1: rule.incident_class.replaceAll('_',' '), value2: rule.expires_at ? t("AttentionInbox.b706f5b6ae", { value1: new Date(rule.expires_at*1000).toLocaleDateString(uiLocale.value) }) : '', value3: <button disabled={busy} onClick={()=>void write(()=>decideAttentionRule(rule.incident_class,rule.channel,false))}>{t("AttentionInbox.3e8b5d8463")}</button> })}</p>)}
     {/* "Nothing is ranked" is two different statements. With ranking permitted it means a
         quiet fleet; without it, nothing will ever be ranked for this Project however busy it
         gets, and the switch is one click away. */}
-    {total===0&&(rankingOn===false&&project
-      ? <GrantGate ids={['project.attentionRanking']} projectId={project.id}
-        heading={`Attention ranking is off for ${project.name}.`}
+    {total===0 && (rankingOn===false&&project ? <GrantGate ids={['project.attentionRanking']} projectId={project.id}
+        heading={t("AttentionInbox.7a3d404739", { name: project.name })}
         onGranted={()=>{forgetProjectAutomations(project.id);void load()}}>
-        <p>Findings from its sessions are recorded either way. Ranking is what decides
-        which of them are worth interrupting you for, and routes those into this inbox.</p>
-      </GrantGate>
-      : <p class="notification-empty">Nothing is ranked. Enable attention ranking for a Project to route its findings here.</p>)}
+        <p>{t("AttentionInbox.bc9e8f10dd")}</p>
+      </GrantGate> : <p class="notification-empty">{t("AttentionInbox.c4b225a04e")}</p>)}
     {channels.map(channel=>{
       const items=data.channels[channel]||[]
       if(!items.length)return null
@@ -117,8 +113,8 @@ export function AttentionInbox({onOpenSession,project,visibleChannels}:{
       </div>
     })}
     <div class="drawer-actions">
-      <button aria-pressed={showDigest} onClick={()=>setShowDigest(value=>!value)}>{showDigest?'hide digest':'show digest'}</button>
-      <span class="attention-suppressed">{data.suppressed_total?`${data.suppressed_total} held back: ${Object.entries(data.suppressed).map(([reason,count])=>`${count} ${suppressedLabel(reason)}`).join(' · ')}`:'nothing held back'}</span>
+      <button aria-pressed={showDigest} onClick={()=>setShowDigest(value=>!value)}>{showDigest ? t("AttentionInbox.8cae6bb0cf") : t("AttentionInbox.c4145e3dc0")}</button>
+      <span class="attention-suppressed">{data.suppressed_total ? t("AttentionInbox.f8ecd23a26", { suppressed_total: data.suppressed_total, value2: Object.entries(data.suppressed).map(([reason,count])=>`${count} ${suppressedLabel(reason)}`).join(' · ') }) : t("AttentionInbox.2903c02fbf")}</span>
     </div>
   </section>
 }
@@ -132,19 +128,19 @@ function AttentionRow({item,busy,onOpenSession,onFeedback}:{
     <div>
       <strong>{item.title}</strong>
       <span>{item.summary}</span>
-      {item.action&&<span class="attention-action">{item.action}</span>}
-      {item.narration&&<span class="attention-narration">{item.narration}</span>}
+      {item.action && <span class="attention-action">{item.action}</span>}
+      {item.narration && <span class="attention-narration">{item.narration}</span>}
       <small>
-        {new Date(item.created_at*1000).toLocaleString()} · {item.kinds.join(', ')}
-        {item.contributions>1?` · ${item.contributions} findings, one slot`:''}
-        {item.suppressed_reason?` · ${suppressedLabel(item.suppressed_reason)}`:''}
-        {` · confidence ${Math.round(item.confidence*100)}%`}
+        {new Date(item.created_at*1000).toLocaleString(uiLocale.value)} · {item.kinds.join(', ')}
+        {item.contributions>1 ? t("AttentionInbox.064e80f8f6", { contributions: item.contributions }) : ''}
+        {item.suppressed_reason ? t("AttentionInbox.f6b53f9c8a", { value1: suppressedLabel(item.suppressed_reason) }) : ''}
+        {t("AttentionInbox.d49112ef99", { value1: Math.round(item.confidence*100) })}
       </small>
     </div>
     <div class="notification-row-actions">
-      {item.session_id&&<button onClick={()=>onOpenSession(item.session_id!)}>Open session</button>}
-      <button disabled={busy} onClick={()=>onFeedback('acted')}>Mark handled</button>
-      <button disabled={busy} onClick={()=>onFeedback('dismissed')}>dismiss</button>
+      {item.session_id && <button onClick={()=>onOpenSession(item.session_id!)}>{t("AttentionInbox.b205bb47f8")}</button>}
+      <button disabled={busy} onClick={()=>onFeedback('acted')}>{t("AttentionInbox.27ac061b7a")}</button>
+      <button disabled={busy} onClick={()=>onFeedback('dismissed')}>{t("AttentionInbox.5880072b27")}</button>
     </div>
   </article>
 }

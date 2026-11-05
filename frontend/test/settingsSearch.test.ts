@@ -308,3 +308,10 @@ test('an alias ranks its entry like a name, just below a label that says it outr
 test('normalizeSearchText collapses case and whitespace', () => {
   assert.equal(normalizeSearchText('  Read   aloud\n(TTS) '), 'read aloud (tts)')
 })
+
+
+test('Chinese labels are searchable without Latin characters',()=>{
+  const entries=tab(h('h3',{},'外观'),h('label',{},'渲染器',h('input',{})))
+  assert.equal(entries[1].label,'渲染器')
+  assert.equal(searchSettings(entries,'渲染器')[0]?.label,'渲染器')
+})

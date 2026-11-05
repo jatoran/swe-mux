@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { LazyGitDiff } from './LazyGitDiff'
@@ -27,7 +28,7 @@ export function GitFileRow(props:Props) {
       const raw=await api<unknown>('GET',`/api/git/diff?${patchRequestQuery(props.projectId,props.locator,props.file.path)}`,undefined,{timeoutMs:20000})
       if(mine!==generation.current)return
       const parsed=parsePatchSnapshot(raw)
-      if(!parsed)throw new Error('The daemon returned an invalid patch snapshot.')
+      if(!parsed)throw new Error(t("GitFileRow.ef475920ea"))
       setSnapshot(parsed)
     }catch(cause){if(mine===generation.current)setError(cause instanceof Error?cause.message:String(cause))}
     finally{if(mine===generation.current)setLoading(false)}
@@ -45,22 +46,22 @@ export function GitFileRow(props:Props) {
   const previewId=`git-inline-${encodeURIComponent(props.openRoot)}-${encodeURIComponent(props.file.path)}`
   return <div class={`git-review-file-row ${props.expanded?'expanded':''}`}>
     <div class="git-review-file-main">
-      <button class="git-file-caret" aria-label={`${props.expanded?'Collapse':'Preview'} ${props.file.path}`} aria-expanded={props.expanded} aria-controls={previewId} onClick={event=>{event.stopPropagation();props.onToggle()}}>{props.expanded?'▾':'▸'}</button>
+      <button class="git-file-caret" aria-label={t("GitFileRow.0143669521", { value1: (props.expanded) ? 'yes' : 'no', path: props.file.path })} aria-expanded={props.expanded} aria-controls={previewId} onClick={event=>{event.stopPropagation();props.onToggle()}}>{props.expanded ? '▾' : '▸'}</button>
       <b class="git-file-status">{changeStatusLabel(props.file.status)}</b>
-      <button class="git-file-name" title={props.file.oldPath?`${props.file.oldPath} -> ${props.file.path}`:props.file.path} onClick={event=>{event.stopPropagation();props.onReview()}}>
-        {props.file.oldPath&&<del>{props.file.oldPath}</del>}{props.file.oldPath&&<span> → </span>}{props.file.path}
+      <button class="git-file-name" title={props.file.oldPath ? t("GitFileRow.8e20ea9a85", { oldPath: props.file.oldPath, path: props.file.path }) : props.file.path} onClick={event=>{event.stopPropagation();props.onReview()}}>
+        {props.file.oldPath && <del>{props.file.oldPath}</del>}{props.file.oldPath && <span> → </span>}{props.file.path}
       </button>
       <span class="git-file-stat">{fileStatLabel(props.file)}</span>
-      <button class="git-file-open" disabled={unavailable} title={deleted?'Deleted files have no current working copy.':props.file.currentExists===false?'This historical path is absent from the current working copy.':`Open current file in ${props.openRoot}`} onClick={event=>{event.stopPropagation();props.onOpenCurrent()}}>open</button>
+      <button class="git-file-open" disabled={unavailable} title={deleted ? t("GitFileRow.78d2001d3f") : props.file.currentExists===false ? t("GitFileRow.5980a2d722") : t("GitFileRow.4777e84d69", { openRoot: props.openRoot })} onClick={event=>{event.stopPropagation();props.onOpenCurrent()}}>{t("GitFileRow.2348f99874")}</button>
     </div>
-    {props.expanded&&<div class="git-inline-diff" id={previewId}>
-      {loading&&<p class="git-diff-state">Loading preview…</p>}
-      {error&&<div class="git-diff-state error"><p>{error}</p><button onClick={()=>void load()}>Retry</button></div>}
-      {!loading&&!error&&snapshot?.binary&&<p class="git-diff-state">Binary file - no textual preview.</p>}
-      {!loading&&!error&&snapshot?.tooLarge&&<p class="git-diff-state">Patch exceeds the preview limit.</p>}
-      {!loading&&!error&&snapshot?.unavailableReason&&<p class="git-diff-state">{snapshot.unavailableReason}</p>}
-      {!loading&&!error&&snapshot?.patch&&<LazyGitDiff patch={snapshot.patch} viewType="unified" wrap={false} rowLimit={INLINE_DIFF_ROW_LIMIT}/>}
-      <button class="git-open-full-diff" onClick={props.onReview}>Open full diff</button>
+    {props.expanded && <div class="git-inline-diff" id={previewId}>
+      {loading && <p class="git-diff-state">{t("GitFileRow.c4cf2b2ccb")}</p>}
+      {error && <div class="git-diff-state error"><p>{error}</p><button onClick={()=>void load()}>{t("GitFileRow.942087cc2d")}</button></div>}
+      {!loading&&!error&&snapshot?.binary && <p class="git-diff-state">{t("GitFileRow.a12c9c1a0f")}</p>}
+      {!loading&&!error&&snapshot?.tooLarge && <p class="git-diff-state">{t("GitFileRow.fef3d41c44")}</p>}
+      {!loading&&!error&&snapshot?.unavailableReason && <p class="git-diff-state">{snapshot.unavailableReason}</p>}
+      {!loading&&!error&&snapshot?.patch && <LazyGitDiff patch={snapshot.patch} viewType="unified" wrap={false} rowLimit={INLINE_DIFF_ROW_LIMIT}/>}
+      <button class="git-open-full-diff" onClick={props.onReview}>{t("GitFileRow.02f81ff227")}</button>
     </div>}
   </div>
 }

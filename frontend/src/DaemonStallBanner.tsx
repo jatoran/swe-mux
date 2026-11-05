@@ -1,6 +1,7 @@
+import { rich } from './localization/index.ts'
 import { useEffect, useState } from 'preact/hooks'
 import {
-  DAEMON_STALL_HEADING, DAEMON_STALL_PROMISE, daemonStallText, stallSeconds, useDaemonLiveness,
+  daemonStallHeading, daemonStallPromise, daemonStallText, stallSeconds, useDaemonLiveness,
 } from './daemonLiveness'
 
 /** A non-blocking status strip. Recovery belongs to the desktop process, since
@@ -30,9 +31,9 @@ export function DaemonStallBanner({ suppressed = false }: { suppressed?: boolean
       data-testid="daemon-stall-banner"
       title={daemonStallText(stalledSince, now)}
     >
-      <strong>{DAEMON_STALL_HEADING}</strong>
-      <em class="daemon-stall-clock" aria-live="off">{stallSeconds(stalledSince, now)}s</em>
-      <span>{DAEMON_STALL_PROMISE}</span>
+      <strong>{daemonStallHeading()}</strong>
+      <em class="daemon-stall-clock" aria-live="off">{rich("DaemonStallBanner.6732456ec2", { value1: stallSeconds(stalledSince, now) })}</em>
+      <span>{daemonStallPromise()}</span>
     </div>
   )
 }

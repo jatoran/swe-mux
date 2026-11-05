@@ -17,6 +17,7 @@ from .. import (
 )
 from ..git_projects import ProjectIdentity
 from ..harness import is_agent_harness
+from ..ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -63,13 +64,7 @@ def refuse_agent_session_caller(request: web.Request, *, operation: str) -> None
     raise web.HTTPForbidden(
         text=json.dumps(
             {
-                "error": (
-                    f"{operation} is operator surface. This request came from "
-                    "an agent session's pane; use the mux MCP tools or "
-                    "`swemux agent` instead - they take the same actions "
-                    "through the queues, budgets, and provenance that make "
-                    "agent-to-agent acts reviewable."
-                ),
+                "error": (ui_message("support.79680f1438", value1=operation)),
                 "code": "operator_route",
             }
         ),
@@ -99,14 +94,14 @@ async def _optional_json(request: web.Request) -> dict[str, Any]:
 def _request_project(request: web.Request):  # type: ignore[no-untyped-def]
     project = request.app[keys.PROJECTS].projects.get(request.match_info["project_id"])
     if not project:
-        raise ValueError("unknown project")
+        raise ValueError(ui_message("support.e222820974"))
     return project
 
 
 def _observations_project(request: web.Request):  # type: ignore[no-untyped-def]
     project = request.app[keys.PROJECTS].projects.get(request.match_info["project_id"])
     if not project:
-        raise ValueError("unknown project")
+        raise ValueError(ui_message("support.e222820974"))
     return project
 
 
@@ -122,7 +117,7 @@ def _config_identity(request: web.Request, project_id: str) -> ProjectIdentity |
         return None
     project = request.app[keys.PROJECTS].projects.get(project_id)
     if not project:
-        raise ValueError("unknown project")
+        raise ValueError(ui_message("support.e222820974"))
     return _registered_identity(project)
 
 

@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // How a session's read-aloud participation resolves, in one place.
 //
 // Three surfaces need the same answer and must never disagree: the voice panel's
@@ -40,4 +41,4 @@ export function resolveVoiceMode(
 }
 
 export const voiceModeLabel = (mode: VoiceMode): string =>
-  mode === 'on_demand' ? 'on demand' : mode === 'auto' ? 'auto on reply' : 'off'
+  mode === 'on_demand' ? t("voiceMode.cfa1f74b1c") : mode === 'auto' ? t("voiceMode.d1b3a2a6d7") : t("voiceMode.b4dc66dde8")

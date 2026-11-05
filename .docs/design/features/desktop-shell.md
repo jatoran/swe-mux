@@ -1000,3 +1000,11 @@ person with no shortcut, no tray, and no idea where anything went.
 - `sessions.md`: daemon-owned terminals survive viewport closure.
 - `remote-access.md`: tailnet access remains separate from loopback desktop shutdown.
 - `ui.md`: the same browser UI runs inside WebView2.
+
+
+## UI language resources
+
+The desktop bundle includes `assets/locales/en.json` and `assets/locales/zh-Hans.json` through its existing assets collection.
+The separate console client explicitly includes these two files because imported config validation constructs catalog-backed messages.
+Its bundle gate admits only these locale files and the embedded skills subtree as package data.
+The PTY supervisor and terminal gateway remain independent of localization catalogs.

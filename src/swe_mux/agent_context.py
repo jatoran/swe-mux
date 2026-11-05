@@ -28,6 +28,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from .harness import HARNESSES, descriptor, instruction_harnesses
+from .ui_messages import ui_message
 
 MAX_SOURCE_BYTES = 512 * 1024
 MAX_MEMORY_ITEMS = 128
@@ -153,24 +154,26 @@ def _decode_text(data: bytes, *, label: str) -> str:
     try:
         return data.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
-        raise ValueError(f"{label} is not UTF-8 text") from exc
+        raise ValueError(ui_message("agent_context.c6494cdbe3", value1=label)) from exc
 
 
 def _bounded_bytes(path: Path, *, label: str) -> bytes:
     if path.is_symlink():
-        raise ValueError(f"{label} is a symbolic link and cannot be read here")
+        raise ValueError(ui_message("agent_context.c6adad04a1", value1=label))
     try:
         info = path.stat()
     except OSError as exc:
-        raise ValueError(f"{label} is unreadable: {exc}") from exc
+        raise ValueError(ui_message("agent_context.57d4eff125", value1=label, value2=exc)) from exc
     if not stat.S_ISREG(info.st_mode):
-        raise ValueError(f"{label} is not a regular file")
+        raise ValueError(ui_message("agent_context.7006881bad", value1=label))
     if info.st_size > MAX_SOURCE_BYTES:
-        raise ValueError(f"{label} is larger than {MAX_SOURCE_BYTES // 1024} KiB")
+        raise ValueError(
+            ui_message("agent_context.2b0d3414f2", value1=label, value2=MAX_SOURCE_BYTES // 1024)
+        )
     try:
         return path.read_bytes()
     except OSError as exc:
-        raise ValueError(f"{label} is unreadable: {exc}") from exc
+        raise ValueError(ui_message("agent_context.57d4eff125", value1=label, value2=exc)) from exc
 
 
 def _source_token(filename: str) -> str:
@@ -180,14 +183,14 @@ def _source_token(filename: str) -> str:
 
 def _source_filename(token: str) -> str:
     if not token or not re.fullmatch(r"[A-Za-z0-9_-]+", token):
-        raise ValueError("unknown agent context source")
+        raise ValueError(ui_message("agent_context.dec8fc07b7"))
     padded = token + "=" * (-len(token) % 4)
     try:
         filename = base64.urlsafe_b64decode(padded).decode("utf-8")
     except (ValueError, UnicodeDecodeError) as exc:
-        raise ValueError("unknown agent context source") from exc
+        raise ValueError(ui_message("agent_context.dec8fc07b7")) from exc
     if Path(filename).name != filename or not filename.casefold().endswith(".md"):
-        raise ValueError("unknown agent context source")
+        raise ValueError(ui_message("agent_context.dec8fc07b7"))
     return filename
 
 
@@ -258,21 +261,27 @@ class AgentContextService:
         try:
             raw_target = os.readlink(path)
         except OSError as exc:
-            raise ValueError(f"{path.name} is an unreadable symbolic link: {exc}") from exc
+            raise ValueError(
+                ui_message("agent_context.59d3c443cd", value1=path.name, value2=exc)
+            ) from exc
         source_id = _instruction_id_for_filename(raw_target)
         if source_id is None or raw_target == path.name:
-            raise ValueError(f"{path.name} links outside the declared Project instruction files")
+            raise ValueError(ui_message("agent_context.31cd50de52", value1=path.name))
         target = root / raw_target
         if target.is_symlink():
-            raise ValueError(f"{path.name} links to another symbolic link")
+            raise ValueError(ui_message("agent_context.3b11e344dc", value1=path.name))
         if not target.exists():
-            raise ValueError(f"{path.name} links to missing {raw_target}")
+            raise ValueError(
+                ui_message("agent_context.74f1e34558", value1=path.name, value2=raw_target)
+            )
         try:
             info = target.stat()
         except OSError as exc:
-            raise ValueError(f"{path.name} link target is unreadable: {exc}") from exc
+            raise ValueError(
+                ui_message("agent_context.664233f8bf", value1=path.name, value2=exc)
+            ) from exc
         if not stat.S_ISREG(info.st_mode):
-            raise ValueError(f"{path.name} link target is not a regular file")
+            raise ValueError(ui_message("agent_context.21d029eab7", value1=path.name))
         return source_id, target, raw_target
 
     def _instruction_entry(self, root: Path, path: Path) -> InstructionEntry:
@@ -355,7 +364,7 @@ class AgentContextService:
         }
         if path.is_symlink():
             if scope != "project":
-                item.update(status="unsupported", detail="Symbolic links are not followed.")
+                item.update(status="unsupported", detail=ui_message("agent_context.20eb188e99"))
             else:
                 try:
                     target_id, target, raw_target = self._managed_link_target(root, path)
@@ -365,14 +374,18 @@ class AgentContextService:
                         link_target_id=target_id,
                         link_target=raw_target,
                         revealable=True,
-                        detail=f"Relative link to {raw_target}.",
+                        detail=ui_message("agent_context.5125db8adf", value1=raw_target),
                     )
                     if info.st_size > MAX_SOURCE_BYTES:
                         item.update(
                             status="too_large",
                             size=info.st_size,
                             modified_at=info.st_mtime,
-                            detail=f"{raw_target} exceeds {MAX_SOURCE_BYTES // 1024} KiB.",
+                            detail=ui_message(
+                                "agent_context.78ad172ac2",
+                                value1=raw_target,
+                                value2=MAX_SOURCE_BYTES // 1024,
+                            ),
                         )
                     else:
                         data = target.read_bytes()
@@ -394,7 +407,7 @@ class AgentContextService:
             try:
                 info = path.stat()
                 if not stat.S_ISREG(info.st_mode):
-                    item.update(status="unsupported", detail="This path is not a regular file.")
+                    item.update(status="unsupported", detail=ui_message("agent_context.aa7b0315ea"))
                 else:
                     item["revealable"] = True
                     if info.st_size > MAX_SOURCE_BYTES:
@@ -403,7 +416,9 @@ class AgentContextService:
                             size=info.st_size,
                             modified_at=info.st_mtime,
                             revision="too_large",
-                            detail=f"The file exceeds {MAX_SOURCE_BYTES // 1024} KiB.",
+                            detail=ui_message(
+                                "agent_context.1ceae5a926", value1=MAX_SOURCE_BYTES // 1024
+                            ),
                         )
                     else:
                         data = path.read_bytes()
@@ -455,7 +470,7 @@ class AgentContextService:
             "id": "claude",
             "label": descriptor("claude").display_name,
             "status": "missing",
-            "detail": "No learned project memory directory was found.",
+            "detail": ui_message("agent_context.0642333e6c"),
             "items": [],
             "item_count": 0,
             "truncated": False,
@@ -464,14 +479,12 @@ class AgentContextService:
             provider.update(status="unreadable", detail=settings_error)
             return provider
         if directory.is_symlink():
-            provider.update(status="unsupported", detail="The learned memory directory is a link.")
+            provider.update(status="unsupported", detail=ui_message("agent_context.d36bdbbc84"))
             return provider
         if not directory.exists():
             return provider
         if not directory.is_dir():
-            provider.update(
-                status="unreadable", detail="The learned memory path is not a directory."
-            )
+            provider.update(status="unreadable", detail=ui_message("agent_context.5fdad70a6c"))
             return provider
         try:
             paths = sorted(
@@ -479,7 +492,9 @@ class AgentContextService:
                 key=lambda item: (item.name.casefold() != "memory.md", item.name.casefold()),
             )
         except OSError as exc:
-            provider.update(status="unreadable", detail=f"Learned memory is unreadable: {exc}")
+            provider.update(
+                status="unreadable", detail=ui_message("agent_context.83a14fdfbc", value1=exc)
+            )
             return provider
         provider["truncated"] = len(paths) > MAX_MEMORY_ITEMS
         for path in paths[:MAX_MEMORY_ITEMS]:
@@ -499,12 +514,14 @@ class AgentContextService:
                 "entrypoint_kind": "entrypoint" if path.name.casefold() == "memory.md" else "topic",
             }
             if path.is_symlink():
-                item.update(status="unsupported", detail="Symbolic links are not followed.")
+                item.update(status="unsupported", detail=ui_message("agent_context.20eb188e99"))
             else:
                 try:
                     info = path.stat()
                     if not stat.S_ISREG(info.st_mode):
-                        item.update(status="unsupported", detail="This is not a regular file.")
+                        item.update(
+                            status="unsupported", detail=ui_message("agent_context.3b95bfff22")
+                        )
                     else:
                         item["revealable"] = True
                         if info.st_size > MAX_SOURCE_BYTES:
@@ -512,7 +529,9 @@ class AgentContextService:
                                 status="too_large",
                                 size=info.st_size,
                                 modified_at=info.st_mtime,
-                                detail=f"The file exceeds {MAX_SOURCE_BYTES // 1024} KiB.",
+                                detail=ui_message(
+                                    "agent_context.1ceae5a926", value1=MAX_SOURCE_BYTES // 1024
+                                ),
                             )
                         else:
                             data = path.read_bytes()
@@ -523,7 +542,10 @@ class AgentContextService:
                                 revision=_revision(data),
                             )
                 except (OSError, ValueError) as exc:
-                    item.update(status="unreadable", detail=f"Unreadable: {exc}")
+                    item.update(
+                        status="unreadable",
+                        detail=ui_message("agent_context.a77513cd13", value1=exc),
+                    )
             provider["items"].append(item)
         provider["item_count"] = len(paths)
         provider.update(
@@ -550,7 +572,7 @@ class AgentContextService:
                     "id": "codex",
                     "label": descriptor("codex").display_name,
                     "status": "unreadable",
-                    "detail": f"Codex memory configuration is unreadable: {exc}",
+                    "detail": ui_message("agent_context.cfacffda5f", value1=exc),
                     "items": [],
                     "item_count": 0,
                     "truncated": False,
@@ -577,7 +599,7 @@ class AgentContextService:
                 "id": harness_name,
                 "label": harness.display_name,
                 "status": "unsupported",
-                "detail": "This harness declares no stable learned-memory file inventory.",
+                "detail": ui_message("agent_context.6404ebe4a9"),
                 "items": [],
                 "item_count": 0,
                 "truncated": False,
@@ -713,11 +735,11 @@ class AgentContextService:
         elif source_id.startswith("memory:"):
             parts = source_id.split(":", 2)
             if len(parts) != 3 or parts[1] not in HARNESSES:
-                raise ValueError("unknown agent context source")
+                raise ValueError(ui_message("agent_context.dec8fc07b7"))
             provider = parts[1]
             capability = descriptor(provider).memory_inventory
             if capability is None or capability.kind != "claude_project_markdown":
-                raise ValueError("unknown agent context source")
+                raise ValueError(ui_message("agent_context.dec8fc07b7"))
             filename = _source_filename(parts[2])
             directory, settings_error = self._claude_memory_directory(project_root)
             if settings_error:
@@ -727,7 +749,7 @@ class AgentContextService:
             scope = "project"
             label = filename
         else:
-            raise ValueError("unknown agent context source")
+            raise ValueError(ui_message("agent_context.dec8fc07b7"))
         return path, provider, kind, scope, label, filename
 
     def source_path(self, root: str | Path, source_id: str) -> Path:
@@ -736,16 +758,18 @@ class AgentContextService:
         path, _provider, kind, scope, _label, filename = self._source_descriptor(root, source_id)
         if path.is_symlink():
             if kind != "instructions" or scope != "project":
-                raise ValueError(f"{filename} is a symbolic link and cannot be revealed here")
+                raise ValueError(ui_message("agent_context.c0cdf54f74", value1=filename))
             _target_id, path, _raw_target = self._managed_link_target(Path(root).resolve(), path)
         if not path.exists():
-            raise ValueError(f"{filename} is missing")
+            raise ValueError(ui_message("agent_context.ded5e38d39", value1=filename))
         try:
             info = path.stat()
         except OSError as exc:
-            raise ValueError(f"{filename} is unreadable: {exc}") from exc
+            raise ValueError(
+                ui_message("agent_context.57d4eff125", value1=filename, value2=exc)
+            ) from exc
         if not stat.S_ISREG(info.st_mode):
-            raise ValueError(f"{filename} is not a regular file")
+            raise ValueError(ui_message("agent_context.7006881bad", value1=filename))
         return path.resolve()
 
     def read_source(self, root: str | Path, source_id: str) -> dict[str, Any]:
@@ -754,14 +778,14 @@ class AgentContextService:
         link_fields: dict[str, Any] = {}
         if path.is_symlink():
             if kind != "instructions" or scope != "project":
-                raise ValueError(f"{filename} is a symbolic link and cannot be read here")
+                raise ValueError(ui_message("agent_context.c6adad04a1", value1=filename))
             target_id, read_path, raw_target = self._managed_link_target(Path(root).resolve(), path)
             link_fields = {
                 "link_target_id": target_id,
                 "link_target": raw_target,
             }
         if not read_path.exists():
-            raise ValueError(f"{filename} is missing")
+            raise ValueError(ui_message("agent_context.ded5e38d39", value1=filename))
         data = _bounded_bytes(read_path, label=filename)
         if link_fields:
             link_fields["content_revision"] = _revision(data)
@@ -808,7 +832,7 @@ class AgentContextService:
         options = {item["direction"]: item for item in _sync_options()}
         option = options.get(direction)
         if option is None:
-            raise ValueError("direction must name two declared instruction sources")
+            raise ValueError(ui_message("agent_context.bd2c690fa6"))
         source_name = option["source"]
         target_name = option["target"]
         return root / source_name, root / target_name
@@ -816,19 +840,19 @@ class AgentContextService:
     def _sync_snapshot(self, root: Path, direction: str) -> tuple[Path, Path, bytes, bytes | None]:
         source, target = self._sync_paths(root, direction)
         if source.is_symlink():
-            raise ValueError(f"{source.name} is a symbolic link and cannot be copied")
+            raise ValueError(ui_message("agent_context.005e3b9319", value1=source.name))
         if not source.exists():
-            raise ValueError(f"{source.name} is missing")
+            raise ValueError(ui_message("agent_context.ded5e38d39", value1=source.name))
         if not source.is_file():
-            raise ValueError(f"{source.name} is not a regular file")
+            raise ValueError(ui_message("agent_context.7006881bad", value1=source.name))
         source_data = _bounded_bytes(source, label=source.name)
         _decode_text(source_data, label=source.name)
         target_data: bytes | None = None
         if target.is_symlink():
-            raise ValueError(f"{target.name} is a symbolic link and cannot be replaced")
+            raise ValueError(ui_message("agent_context.ce07b73337", value1=target.name))
         if target.exists():
             if not target.is_file():
-                raise ValueError(f"{target.name} is not a regular file")
+                raise ValueError(ui_message("agent_context.7006881bad", value1=target.name))
             target_data = _bounded_bytes(target, label=target.name)
             _decode_text(target_data, label=target.name)
         return source, target, source_data, target_data
@@ -871,7 +895,7 @@ class AgentContextService:
     ) -> dict[str, Any]:
         directory = self._project_backup_dir(project_id)
         if directory.is_symlink():
-            raise ValueError("agent context backup directory cannot be a symbolic link")
+            raise ValueError(ui_message("agent_context.db58c50c85"))
         directory.mkdir(parents=True, exist_ok=True)
         backup_id = uuid4().hex
         manifest = {
@@ -905,7 +929,11 @@ class AgentContextService:
             if path.is_symlink():
                 continue
             try:
-                item = json.loads(_bounded_bytes(path, label="backup manifest").decode("utf-8"))
+                item = json.loads(
+                    _bounded_bytes(path, label=ui_message("agent_context.6f70352512")).decode(
+                        "utf-8"
+                    )
+                )
                 if (
                     isinstance(item, dict)
                     and item.get("id") == path.stem
@@ -949,7 +977,7 @@ class AgentContextService:
                 else ""
             )
             raise ValueError(
-                f"Could not create a symbolic link in {path.parent}.{hint} {exc}"
+                ui_message("agent_context.1b6a9f7a39", value1=path.parent, value2=hint, value3=exc)
             ) from exc
         return temp
 
@@ -1002,15 +1030,13 @@ class AgentContextService:
         source_entry = self._instruction_entry(root, source)
         if source_entry.kind != "regular" or source_entry.data is None:
             if source_entry.kind == "symlink":
-                raise ValueError(
-                    f"{source.name} is already a link; unlink it before making it canonical"
-                )
-            raise ValueError(f"{source.name} must be an existing regular file")
+                raise ValueError(ui_message("agent_context.ee6d60949f", value1=source.name))
+            raise ValueError(ui_message("agent_context.2ad62047e7", value1=source.name))
         _decode_text(source_entry.data, label=source.name)
         target_entry = self._instruction_entry(root, target)
         already_linked = target_entry.kind == "symlink" and target_entry.link_target == source.name
         if target_entry.kind == "symlink" and not already_linked:
-            raise ValueError(f"{target.name} is linked to a different instruction file")
+            raise ValueError(ui_message("agent_context.5743716905", value1=target.name))
         if target_entry.data is not None:
             _decode_text(target_entry.data, label=target.name)
         return source, target, source_entry.data, target_entry, already_linked
@@ -1068,7 +1094,9 @@ class AgentContextService:
         if _revision(source_data) != source_revision or target_entry.revision != target_revision:
             raise AgentContextConflict("instruction files changed since the link preview")
         if already_linked:
-            raise ValueError(f"{target.name} already links to {source.name}")
+            raise ValueError(
+                ui_message("agent_context.f70306c9b0", value1=target.name, value2=source.name)
+            )
         temp = self._stage_symlink(target, source.name)
         try:
             backup = self._create_backup(project_id, target, target_entry)
@@ -1094,11 +1122,11 @@ class AgentContextService:
         target_revision: str,
     ) -> dict[str, Any]:
         if source_id not in INSTRUCTION_SOURCES:
-            raise ValueError("source_id must name a Project instruction file")
+            raise ValueError(ui_message("agent_context.2a4a74422b"))
         project_root = Path(root).resolve()
         target = project_root / INSTRUCTION_SOURCES[source_id][1]
         if not target.is_symlink():
-            raise ValueError(f"{target.name} is not a managed instruction link")
+            raise ValueError(ui_message("agent_context.ed32a226fa", value1=target.name))
         target_entry = self._instruction_entry(project_root, target)
         if target_entry.revision != target_revision:
             raise AgentContextConflict("instruction link changed before it was unlinked")
@@ -1117,19 +1145,21 @@ class AgentContextService:
 
     def _backup_manifest(self, project_id: str, backup_id: str) -> dict[str, Any]:
         if not re.fullmatch(r"[0-9a-f]{32}", backup_id):
-            raise ValueError("unknown agent context backup")
+            raise ValueError(ui_message("agent_context.bef5bef6cd"))
         path = self._project_backup_dir(project_id) / f"{backup_id}.json"
         try:
-            raw: Any = json.loads(_bounded_bytes(path, label="backup manifest").decode("utf-8"))
+            raw: Any = json.loads(
+                _bounded_bytes(path, label=ui_message("agent_context.6f70352512")).decode("utf-8")
+            )
         except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError("unknown agent context backup") from exc
+            raise ValueError(ui_message("agent_context.bef5bef6cd")) from exc
         if not isinstance(raw, dict):
-            raise ValueError("invalid agent context backup")
+            raise ValueError(ui_message("agent_context.dd5f6cf499"))
         manifest: dict[str, Any] = {str(key): value for key, value in raw.items()}
         if manifest.get("id") != backup_id or manifest.get("target") not in set(
             instruction_filenames()
         ):
-            raise ValueError("invalid agent context backup")
+            raise ValueError(ui_message("agent_context.dd5f6cf499"))
         return manifest
 
     def _backup_entry(self, project_id: str, manifest: dict[str, Any]) -> InstructionEntry:
@@ -1140,14 +1170,14 @@ class AgentContextService:
         mode = raw_mode if isinstance(raw_mode, int) else None
         if raw_kind == "missing":
             if manifest.get("revision") != "missing":
-                raise ValueError("agent context backup is corrupt")
+                raise ValueError(ui_message("agent_context.6def1db108"))
             return InstructionEntry(kind="missing", revision="missing")
         if raw_kind == "regular":
             backup_id = str(manifest["id"])
             data_path = self._project_backup_dir(project_id) / f"{backup_id}.bin"
-            data = _bounded_bytes(data_path, label="backup")
+            data = _bounded_bytes(data_path, label=ui_message("agent_context.54d00d8677"))
             if _revision(data) != manifest.get("revision"):
-                raise ValueError("agent context backup is corrupt")
+                raise ValueError(ui_message("agent_context.6def1db108"))
             return InstructionEntry(
                 kind="regular",
                 revision=_revision(data),
@@ -1163,13 +1193,13 @@ class AgentContextService:
                 or link_target == target_name
                 or _link_revision(link_target) != manifest.get("revision")
             ):
-                raise ValueError("agent context backup is corrupt")
+                raise ValueError(ui_message("agent_context.6def1db108"))
             return InstructionEntry(
                 kind="symlink",
                 revision=_link_revision(link_target),
                 link_target=link_target,
             )
-        raise ValueError("agent context backup has an invalid entry kind")
+        raise ValueError(ui_message("agent_context.e5951c04e1"))
 
     def restore(
         self,
@@ -1190,7 +1220,9 @@ class AgentContextService:
             canonical = project_root / desired.link_target
             if canonical.is_symlink() or not canonical.is_file():
                 raise ValueError(
-                    f"Cannot restore {target.name}: {desired.link_target} is not a regular file"
+                    ui_message(
+                        "agent_context.a5ffd43522", value1=target.name, value2=desired.link_target
+                    )
                 )
             staged_link = self._stage_symlink(target, desired.link_target)
         try:

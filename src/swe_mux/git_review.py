@@ -17,6 +17,7 @@ from typing import Any, Literal, NotRequired, TypedDict
 
 from .bounded_subprocess import LANE_INTERACTIVE, run_bounded
 from .git_readonly import READ_ONLY_GIT_OPTIONS
+from .ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -172,7 +173,7 @@ async def _run_git_bytes(
     try:
         outcome = await run_bounded(
             _git_argv(cwd, args),
-            label="git-review",
+            label=ui_message("git_review.6fc4ae488b"),
             timeout_seconds=timeout_seconds,
             output_limit=GIT_QUERY_OUTPUT_LIMIT,
             stderr_limit=GIT_STDERR_LIMIT,
@@ -207,7 +208,7 @@ async def _run_patch(
     try:
         outcome = await run_bounded(
             _git_argv(cwd, args),
-            label="git-review-patch",
+            label=ui_message("git_review.518a15ff6d"),
             timeout_seconds=timeout_seconds,
             output_limit=GIT_DIFF_MAX_BYTES + 1,
             stderr_limit=GIT_STDERR_LIMIT,
@@ -250,9 +251,7 @@ async def repository_identity(project_root: str | Path) -> tuple[str, str]:
     with itself about whether this folder is a repository at all, which two concurrent
     processes racing a `git init` could.
     """
-    result = await _run_git_bytes(
-        project_root, "rev-parse", "--show-toplevel", "--git-common-dir"
-    )
+    result = await _run_git_bytes(project_root, "rev-parse", "--show-toplevel", "--git-common-dir")
     # "This folder is not a repository yet" is a state the Git tab offers an action for
     # (`git_init.initialize_repository`), so it has to arrive as its own code rather than
     # as Git's generic `fatal:`. Narrow on purpose: 128 is Git's fatal exit, so a missing
@@ -264,20 +263,14 @@ async def repository_identity(project_root: str | Path) -> tuple[str, str]:
         and Path(project_root).is_dir()
         and not (Path(project_root) / ".git").exists()
     ):
-        raise GitReviewError(
-            "not_git_repository", "Project folder is not a Git repository", 404
-        )
+        raise GitReviewError("not_git_repository", "Project folder is not a Git repository", 404)
     lines = (
-        _require_success(result, "resolving the repository")
-        .decode("utf-8", "replace")
-        .splitlines()
+        _require_success(result, "resolving the repository").decode("utf-8", "replace").splitlines()
     )
     root = lines[0].strip() if lines else ""
     common_raw = lines[1].strip() if len(lines) > 1 else ""
     if not common_raw:
-        raise GitReviewError(
-            "git_error", "Git did not report the repository's common directory"
-        )
+        raise GitReviewError("git_error", "Git did not report the repository's common directory")
     if not root:
         raise GitReviewError("not_git_repository", "Project is not inside a Git repository")
     common = Path(common_raw)
@@ -463,7 +456,7 @@ async def resolve_comparison_ref(
             "display": override,
             "source": "project_override",
             "available": False,
-            "reason": "configured comparison ref is invalid or no longer resolves to a commit",
+            "reason": ui_message("git_review.a2040878cc"),
         }
 
     origin = await _run_git_bytes(
@@ -517,7 +510,7 @@ async def resolve_comparison_ref(
         "display": None,
         "source": "none",
         "available": False,
-        "reason": "no symbolic remote default or local main/master ref resolves",
+        "reason": ui_message("git_review.ad0f9b0558"),
     }
 
 
@@ -737,9 +730,7 @@ def parse_porcelain_v2(
     return staged, unstaged, conflicted
 
 
-def _measure_untracked(
-    worktree: str, item: GitFileChange, remaining_bytes: int
-) -> int:
+def _measure_untracked(worktree: str, item: GitFileChange, remaining_bytes: int) -> int:
     if remaining_bytes <= 0:
         return 0
     root = Path(worktree).resolve()
@@ -924,9 +915,7 @@ def _memoize_commit_date(oid: str, stamp: int) -> None:
         _commit_date_memo.popitem(last=False)
 
 
-async def head_commit_dates(
-    repository: str | Path, oids: Sequence[str]
-) -> dict[str, int]:
+async def head_commit_dates(repository: str | Path, oids: Sequence[str]) -> dict[str, int]:
     """Committer date (Unix seconds) of each given commit, keyed by the oid asked for.
 
     This is how "when was this worktree last active" is answered, and the alternative
@@ -1159,8 +1148,7 @@ async def worktree_overview(
         # A path Git does not list is not a worktree of this repository, whatever it is
         # on disk. Refused rather than measured, because the caller supplied it.
         if not any(
-            isinstance(listed := item.get("worktree"), str)
-            and _same_path(listed, wanted)
+            isinstance(listed := item.get("worktree"), str) and _same_path(listed, wanted)
             for item in items
         ):
             raise GitReviewError("worktree_not_found", "unknown worktree for this Project", 404)
@@ -1206,11 +1194,7 @@ async def worktree_overview(
         # both have to be distinguishable from "the field is not served yet".
         row["head_committed_at"] = tip_dates.get(head) if isinstance(head, str) else None
         worktree = row.get("worktree")
-        if (
-            not isinstance(worktree, str)
-            or row.get("bare")
-            or "prunable" in row
-        ):
+        if not isinstance(worktree, str) or row.get("bare") or "prunable" in row:
             return unmeasured(row)
         try:
             exact_root = os.path.normcase(os.path.normpath(str(Path(worktree).resolve())))
@@ -1306,8 +1290,7 @@ async def worktree_overview(
         # numbers because the two memos fail independently: `reused` is the branch
         # half, `identities` the per-checkout guard whose key is the worktree listing.
         result=(
-            f"ok reused={reused}/{len(worktrees)} "
-            f"identities={identities_reused}/{len(worktrees)}"
+            f"ok reused={reused}/{len(worktrees)} identities={identities_reused}/{len(worktrees)}"
         ),
         count=len(worktrees),
         truncated=any(
@@ -1382,9 +1365,7 @@ def invalidate_overview_cache(project_id: str | None = None) -> None:
     Land and Remove controls on a registration Git no longer has. Ordinary drift (a
     commit, an edit) is not invalidated here; that is what revalidation is for.
     """
-    for key in [
-        key for key in _overview_cache if project_id is None or key[0] == project_id
-    ]:
+    for key in [key for key in _overview_cache if project_id is None or key[0] == project_id]:
         _overview_cache.pop(key, None)
 
 

@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { useEffect, useState } from 'preact/hooks'
 import { rendererRecovery } from './rendererRecovery'
 
@@ -10,9 +11,9 @@ export function RecoveryBanner({ previewIds }: { previewIds: string[] }) {
   return (
     <div class="recovery-banner" role="status" aria-live="polite" data-testid="recovery-banner">
       <strong>{notice.message}</strong>
-      <span>Previews stay paused until you load them, so the tab that caused this cannot do it again.</span>
-      <button type="button" onClick={() => rendererRecovery.resumeAll(previewIds)}>Load previews</button>
-      <button type="button" aria-label="Dismiss" onClick={() => rendererRecovery.dismiss()}>×</button>
+      <span>{t("RecoveryBanner.6c5cb8259e")}</span>
+      <button type="button" onClick={() => rendererRecovery.resumeAll(previewIds)}>{t("RecoveryBanner.726ef317f6")}</button>
+      <button type="button" aria-label={t("RecoveryBanner.48845bff33")} onClick={() => rendererRecovery.dismiss()}>×</button>
     </div>
   )
 }

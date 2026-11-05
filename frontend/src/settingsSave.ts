@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // What a Settings save is allowed to claim after it fails.
 //
 // Save was two requests — `PATCH /api/config` and `PUT /api/keybindings` — fired together,
@@ -24,8 +25,8 @@ export type SettingsApplyResponse<C, K = unknown> = {
 }
 
 const SECTION_LABELS: Readonly<Record<string, string>> = {
-  config: 'settings',
-  keybindings: 'shortcuts',
+  get config() { return t("settingsSave.cde0fb0dec") },
+  get keybindings() { return t("settingsSave.104330feb5") },
 }
 
 const label = (section: string) => SECTION_LABELS[section] || section
@@ -53,9 +54,9 @@ export function saveFailureStatus(error: ApiError): string {
     const failed = (Array.isArray(error.detail?.failed) ? error.detail.failed : [])
       .filter((section): section is string => typeof section === 'string')
     const landed = committed.map(label).join(' and ')
-    const missing = failed.length ? ` · ${failed.map(label).join(' and ')} did not` : ''
-    return `partly saved · ${landed} committed${missing} · ${error.message}`
+    const missing = failed.length ? t("settingsSave.4d4b8d2d10", { value1: failed.map(label).join(' and ') }) : ''
+    return t("settingsSave.454c673bfa", { value1: landed, value2: missing, value3: error.message })
   }
-  if (error.status) return 'invalid · nothing was changed'
-  return `save failed · the daemon did not answer, so nothing is confirmed · ${error.message}`
+  if (error.status) return t("settingsSave.d223c2909c")
+  return t("settingsSave.6c880661c1", { value1: error.message })
 }

@@ -30,6 +30,7 @@ from ..project_files import (
     project_path,
 )
 from ..projects import ProjectManager
+from ..ui_messages import ui_message
 from .support import _project_file_root
 
 log = logging.getLogger(__name__)
@@ -44,7 +45,7 @@ async def list_processes(request: web.Request) -> web.Response:
     unique_memory = request.query.get("unique_memory", "").lower() in {"1", "true", "yes"}
     inspector: ProcessInspector = request.app[keys.PROCESS_INSPECTOR]
     if summary and (session_id or include_ended or unique_memory):
-        raise ValueError("summary cannot be combined with session, include_ended, or unique_memory")
+        raise ValueError(ui_message("processes.d2fac2bade"))
     if session_id:
         payload = await inspector.snapshot(session_id, include_ended=include_ended)
     elif summary:
@@ -89,14 +90,14 @@ async def _register_static_preview(request: web.Request, body: dict[str, Any]) -
     projects: ProjectManager = request.app[keys.PROJECTS]
     project = projects.projects.get(str(body.get("project_id") or ""))
     if project is None:
-        raise ValueError("unknown project")
+        raise ValueError(ui_message("processes.e222820974"))
     root = await _project_file_root(project.root, body.get("worktree"))
     relative = str(body.get("path") or "")
     if not is_static_preview_entry(relative):
-        raise ValueError("a static preview entry must be an .html, .htm, or .xhtml file")
+        raise ValueError(ui_message("processes.f6df4a5618"))
     target = await asyncio.to_thread(project_path, root, relative)
     if not await asyncio.to_thread(target.is_file):
-        raise ValueError("static preview target is not a file")
+        raise ValueError(ui_message("processes.d2bfe88c36"))
     # The served directory, not the file. A page's own `./style.css` and
     # `../assets/x.png` are the normal case, and serving one file would 404 every
     # one of them. `project` widens it to the whole checkout for a page whose
@@ -197,15 +198,15 @@ async def preview_revision(request: web.Request) -> web.Response:
     previews: PreviewRegistry = request.app[keys.PREVIEWS]
     item = previews.items.get(request.match_info["preview_id"])
     if item is None:
-        raise ValueError("unknown preview")
+        raise ValueError(ui_message("processes.390da776a0"))
     if item.kind != "loopback":
-        raise ValueError("a static preview follows file changes through the Project watcher")
+        raise ValueError(ui_message("processes.3905901ec1"))
     if item.session_id not in request.app[keys.SESSIONS].sessions:
-        raise ValueError("preview session is no longer live")
+        raise ValueError(ui_message("processes.c5858bcc4c"))
     body = await request.json()
     paths = body.get("paths") if isinstance(body, dict) else None
     if not isinstance(paths, list):
-        raise ValueError("paths must be a list")
+        raise ValueError(ui_message("processes.b814a49854"))
     return json_response(await preview_transport.preview_revision(item, paths))
 
 
@@ -246,7 +247,7 @@ async def capture_preview(request: web.Request) -> web.Response:
     config: Config = request.app[keys.CONFIG]
     item = previews.items.get(request.match_info["preview_id"])
     if not item:
-        raise ValueError("unknown preview")
+        raise ValueError(ui_message("processes.390da776a0"))
     body = await request.json() if request.can_read_body else {}
     capability = capture_capability()
     if not capability.ready:
@@ -299,7 +300,9 @@ async def capture_preview(request: web.Request) -> web.Response:
     except Exception as exc:  # noqa: BLE001 - a capture failure must not 500
         log.exception("preview capture failed for %s", url)
         message = str(exc).splitlines()[0][:300] if str(exc).strip() else exc.__class__.__name__
-        return json_response({"available": True, "error": f"Capture failed: {message}"}, 502)
+        return json_response(
+            {"available": True, "error": ui_message("processes.3793311348", value1=message)}, 502
+        )
     return json_response(
         {
             "available": True,

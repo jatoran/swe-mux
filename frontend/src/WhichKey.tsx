@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // The overlay that makes a leader key learnable instead of a memory test.
 //
 // With ~200 commands behind one prefix, a leader without this is worse than no
@@ -32,7 +33,7 @@ type Props = {
 /** The group heading a chord implies, when a chord leads to several bindings. */
 function optionLabel(option: TrieOption, labelFor: (id: string) => string): string {
   if (option.command) return labelFor(option.command)
-  return `${option.count} more…`
+  return t("WhichKey.8da7c46b35", { count: option.count })
 }
 
 export function WhichKey({ pending, options, platform, labelFor, immediate }: Props) {
@@ -48,7 +49,7 @@ export function WhichKey({ pending, options, platform, labelFor, immediate }: Pr
   return <div class="which-key" role="status" aria-live="polite">
     <div class="which-key-prefix">
       <kbd>{displayChord(pending.join(' '), platform)}</kbd>
-      <span>then…</span>
+      <span>{t("WhichKey.56b4368366")}</span>
     </div>
     <ul class="which-key-options">
       {options.map(option => <li key={option.chord} class={option.command ? 'leaf' : 'group'}>
@@ -56,6 +57,6 @@ export function WhichKey({ pending, options, platform, labelFor, immediate }: Pr
         <span>{optionLabel(option, labelFor)}</span>
       </li>)}
     </ul>
-    <p class="which-key-escape">Escape cancels.</p>
+    <p class="which-key-escape">{t("WhichKey.231c1e60cf")}</p>
   </div>
 }

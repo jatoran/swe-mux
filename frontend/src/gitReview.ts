@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import {
   provenanceAmbiguityNote,
   provenanceRoleLabel,
@@ -103,36 +104,36 @@ function lineExcerpt(patch:string,anchor:AnnotationAnchor):string {
     if(line[0]!=='-'&&line[0]!=='\\')newLine+=1
     if(picked.length>=40)break
   }
-  return picked.join('\n')||'(matching hunk context unavailable)'
+  return picked.join('\n')||t("gitReview.9cd94aef05")
 }
 
 function comparisonDescription(locator:ReviewLocator):string {
   if(locator.scope==='commit')return locator.parent
-    ? `commit ${locator.commit} compared with parent ${locator.parent}`
-    : `initial commit ${locator.commit}`
-  if(locator.scope==='branch')return `worktree HEAD compared with merge base of ${locator.comparisonRef||'(unavailable comparison ref)'}`
-  return `${locator.scope} changes in the selected worktree`
+    ? t("gitReview.3e935d395a", { value1: locator.commit, value2: locator.parent })
+    : t("gitReview.1eda6c509c", { value1: locator.commit })
+  if(locator.scope==='branch')return t("gitReview.399ef64664", { value1: locator.comparisonRef||t("gitReview.d395636b77") })
+  return t("gitReview.2800adaffa", { scope: locator.scope })
 }
 
 export function generateReviewPacket(context:ReviewPacketContext):{text:string;truncated:boolean} {
   const lines=[
-    '# Git review packet',
+    t("gitReview.a00872f81e"),
     '',
     `Project: ${context.projectName} (${context.projectId})`,
     `Repository: ${context.repositoryRoot}`,
     ...(context.locator.worktree?[`Worktree: ${context.locator.worktree}`]:[]),
     `Scope: ${context.locator.scope}`,
     `Comparison: ${comparisonDescription(context.locator)}`,
-    ...(context.locator.comparisonRef?[`Comparison ref: ${context.locator.comparisonRef}`]:[]),
+    ...(context.locator.comparisonRef?[t("gitReview.d75e9121ff", { value1: context.locator.comparisonRef })]:[]),
     ...(context.locator.commit?[`Commit: ${context.locator.commit}`]:[]),
-    ...((context.locator.scope==='commit')?[`Parent: ${context.locator.parent||'(initial commit)'}`]:[]),
+    ...((context.locator.scope==='commit')?[`Parent: ${context.locator.parent||t("gitReview.2cbd8cc89a")}`]:[]),
     ...(context.headOid?[`HEAD: ${context.headOid}`]:[]),
-    `Snapshot state: ${context.stale?'stale - changes updated after this review opened':'current when loaded'}`,
-    `File list: ${context.fileListTruncated?'truncated to the bounded API result':'complete'}`,
+    t("gitReview.d6796d5d61", { value1: (context.stale) ? 'yes' : 'no' }),
+    t("gitReview.71d913a97b", { value1: (context.fileListTruncated) ? 'yes' : 'no' }),
     '',
   ]
   if(context.provenance?.length){
-    lines.push('## Session provenance','')
+    lines.push(t("gitReview.44bc47679b"),'')
     for(const item of context.provenance){
       const files=item.contributedPaths.length?` [${item.contributedPaths.slice(0,10).join(', ')}${item.contributedPaths.length>10?', …':''}]`:''
       lines.push(`- ${item.sessionName} (${item.sessionId}${item.agentRunId?`, run ${item.agentRunId}`:''}): ${provenanceRoleLabel(item)}, ${item.confidence}${item.ambiguous?` (${provenanceAmbiguityNote(item)})`:''}${files}`)
@@ -140,33 +141,33 @@ export function generateReviewPacket(context:ReviewPacketContext):{text:string;t
     lines.push('')
   }
   const annotations=[...context.annotations].sort(compareAnnotations)
-  if(!annotations.length)lines.push('No annotations.','')
+  if(!annotations.length)lines.push(t("gitReview.821ccb6e96"),'')
   let activePath=''
   for(const annotation of annotations){
     if(annotation.anchor.path!==activePath){activePath=annotation.anchor.path;lines.push(`## ${activePath}`,'')}
     const snapshot=context.snapshots.get(activePath)
     const range=annotation.anchor.start===annotation.anchor.end?String(annotation.anchor.start):`${annotation.anchor.start}-${annotation.anchor.end}`
     lines.push(`- ${annotation.anchor.side} line${annotation.anchor.start===annotation.anchor.end?'':'s'} ${range}`)
-    lines.push(`  Patch SHA-256: ${annotation.anchor.patchHash}`)
+    lines.push(t("gitReview.a46b498fce", { value1: annotation.anchor.patchHash }))
     lines.push(`  Comment: ${annotation.text}`)
     lines.push('')
-    lines.push('```diff',snapshot?.patch?lineExcerpt(snapshot.patch,annotation.anchor):'(patch not loaded)','```','')
+    lines.push('```diff',snapshot?.patch?lineExcerpt(snapshot.patch,annotation.anchor):t("gitReview.b680abb4d2"),'```','')
   }
   const loaded=[...context.snapshots.entries()].sort(([first],[second])=>first.localeCompare(second))
-  lines.push('## Loaded snapshots','')
+  lines.push(t("gitReview.4959967979"),'')
   for(const [path,snapshot] of loaded){
     lines.push(`- ${path}: ${snapshot.patchSha256}${snapshot.tooLarge?' (oversized)':''}${snapshot.unavailableReason?` (${snapshot.unavailableReason})`:''}`)
   }
-  if(context.files.length>loaded.length)lines.push(`- ${context.files.length-loaded.length} file patch(es) were not loaded.`)
+  if(context.files.length>loaded.length)lines.push(t("gitReview.7f390791b3", { value1: context.files.length-loaded.length }))
   if(context.includeFullPatches){
-    lines.push('','## Full loaded patches','')
+    lines.push('',t("gitReview.98f3fedd3c"),'')
     for(const [path,snapshot] of loaded){
       if(!snapshot.patch)continue
       lines.push(`### ${path}`,'','```diff',snapshot.patch,'```','')
     }
-  }else lines.push('','Full patches omitted. Enable "Include full loaded patches" to add bounded loaded patches.')
+  }else lines.push('',t("gitReview.db8f16fcd1"))
   const text=lines.join('\n')
   if(text.length<=REVIEW_PACKET_MAX_CHARS)return {text,truncated:false}
-  const notice='\n\n[Review packet truncated at the size limit. Some loaded patch material was omitted.]\n'
+  const notice=t("gitReview.8a384e739f")
   return {text:text.slice(0,REVIEW_PACKET_MAX_CHARS-notice.length)+notice,truncated:true}
 }

@@ -12,6 +12,7 @@
 // model ids, which `model-picker.spec.ts` resolves against a stubbed catalog, so a default
 // that moves in `config.py` surfaces there as a failed assertion rather than as drift.
 export const SETTINGS_CONFIG_FIXTURE = {
+  "ui_language": "",
   "access_mode": "local+tailnet",
   "agent_interject_enabled": true,
   "agent_interject_hourly_budget": 10,

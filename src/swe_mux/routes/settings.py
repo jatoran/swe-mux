@@ -35,6 +35,7 @@ from ..project_files import (
     read_project_config,
 )
 from ..runtime_config import apply_runtime_config
+from ..ui_messages import ui_message
 from . import automation, projects
 
 log = logging.getLogger(__name__)
@@ -103,7 +104,7 @@ async def settings_bundle(request: web.Request) -> web.Response:
         if unknown:
             return json_response(
                 {
-                    "error": f"unknown settings bundle part(s): {', '.join(unknown)}",
+                    "error": ui_message("settings.8b4291d376", value1=", ".join(unknown)),
                     "code": "unknown_bundle_part",
                     "known": list(BUNDLE_PARTS),
                 },
@@ -162,12 +163,18 @@ async def patch_config(request: web.Request) -> web.Response:
         detail = exc.args[0]
         return json_response(
             {
-                "error": "invalid configuration",
+                "error": ui_message("settings.e734625aa1"),
                 "fields": detail if isinstance(detail, dict) else {},
             },
             422,
         )
     apply_runtime_config(request.app, hot)
+    if "ui_language" in hot:
+        log.info(
+            "ui_language_changed locale=%s revision=%s",
+            config.ui_language or "auto",
+            config.revision,
+        )
     await request.app[keys.EVENTS].emit(
         "configuration_changed", source="settings", changed=sorted(hot | restart)
     )
@@ -248,7 +255,10 @@ async def apply_experience_tier(request: web.Request) -> web.Response:
     tier = body.get("tier")
     if tier not in TIERS:
         return json_response(
-            {"error": "invalid configuration", "fields": {"tier": f"must be one of {TIERS}"}},
+            {
+                "error": ui_message("settings.e734625aa1"),
+                "fields": {"tier": f"must be one of {TIERS}"},
+            },
             422,
         )
     changes = tier_changes(
@@ -261,7 +271,7 @@ async def apply_experience_tier(request: web.Request) -> web.Response:
         if autonomy not in AUTONOMY_LEVELS:
             return json_response(
                 {
-                    "error": "invalid configuration",
+                    "error": ui_message("settings.e734625aa1"),
                     "fields": {"autonomy": f"must be one of {AUTONOMY_LEVELS}"},
                 },
                 422,
@@ -272,7 +282,7 @@ async def apply_experience_tier(request: web.Request) -> web.Response:
         if not isinstance(overrides, dict):
             return json_response(
                 {
-                    "error": "invalid configuration",
+                    "error": ui_message("settings.e734625aa1"),
                     "fields": {"overrides": "must be an object of tier keys to booleans"},
                 },
                 422,
@@ -281,7 +291,7 @@ async def apply_experience_tier(request: web.Request) -> web.Response:
         if unknown:
             return json_response(
                 {
-                    "error": "invalid configuration",
+                    "error": ui_message("settings.e734625aa1"),
                     "fields": {key: "not an overridable tier key" for key in unknown},
                 },
                 422,
@@ -292,9 +302,7 @@ async def apply_experience_tier(request: web.Request) -> web.Response:
         if not readiness.ready or readiness.code == "unknown":
             return json_response(
                 {
-                    "error": (
-                        "Set up and verify a model provider first, or continue with Deterministic."
-                    ),
+                    "error": (ui_message("settings.3782980d5c")),
                     "code": "provider_required",
                     "llm": readiness.as_dict(),
                 },
@@ -308,10 +316,7 @@ async def apply_experience_tier(request: web.Request) -> web.Response:
         ):
             return json_response(
                 {
-                    "error": (
-                        "Choose and approve the cheap and standard models before enabling "
-                        "Automations."
-                    ),
+                    "error": (ui_message("settings.ec1255355c")),
                     "code": "models_required",
                 },
                 409,
@@ -324,9 +329,7 @@ async def apply_experience_tier(request: web.Request) -> web.Response:
         ):
             return json_response(
                 {
-                    "error": (
-                        "Approve and test the selected model roles in guided model setup first."
-                    ),
+                    "error": (ui_message("settings.b29f9a86a6")),
                     "code": "model_verification_required",
                 },
                 409,
@@ -364,11 +367,11 @@ def _revision_conflict(
     supplied = request.headers.get("If-Match", "").strip('"')
     if supplied and supplied != str(config.revision):
         return json_response(
-            {"error": "configuration changed externally", "revision": config.revision}, 409
+            {"error": ui_message("settings.1cc0c319ea"), "revision": config.revision}, 409
         )
     if body_revision is not None and int(body_revision) != config.revision:
         return json_response(
-            {"error": "configuration changed externally", "revision": config.revision}, 409
+            {"error": ui_message("settings.1cc0c319ea"), "revision": config.revision}, 409
         )
     return None
 
@@ -401,18 +404,18 @@ async def apply_settings(request: web.Request) -> web.Response:
     saved_host, saved_platform = _host_of(request)
     body = await request.json()
     if not isinstance(body, dict):
-        raise ValueError("body must be an object")
+        raise ValueError(ui_message("settings.fe2741b182"))
 
     changes = body.get("config")
     if changes is None:
         changes = {}
     if not isinstance(changes, dict):
-        raise ValueError("config must be an object")
+        raise ValueError(ui_message("settings.bd945ccbaa"))
     changes = dict(changes)
 
     supplied = body.get("keybindings")
     if supplied is not None and not isinstance(supplied, dict):
-        raise ValueError("keybindings must be an object")
+        raise ValueError(ui_message("settings.9221897953"))
 
     body_revision = body.get("_revision", changes.pop("_revision", None))
     conflict = _revision_conflict(config, request, body_revision)
@@ -427,7 +430,7 @@ async def apply_settings(request: web.Request) -> web.Response:
         if rejected:
             return json_response(
                 {
-                    "error": "invalid keybindings",
+                    "error": ui_message("settings.1bf68b0f1f"),
                     "section": "keybindings",
                     "fields": rejected,
                     "committed": [],
@@ -447,7 +450,7 @@ async def apply_settings(request: web.Request) -> web.Response:
         detail = exc.args[0]
         return json_response(
             {
-                "error": "invalid configuration",
+                "error": ui_message("settings.e734625aa1"),
                 "section": "config",
                 "fields": detail if isinstance(detail, dict) else {},
                 "committed": [],
@@ -473,7 +476,7 @@ async def apply_settings(request: web.Request) -> web.Response:
             )
             return json_response(
                 {
-                    "error": f"settings saved, but the shortcuts could not be written: {exc}",
+                    "error": ui_message("settings.6db4a03551", value1=exc),
                     "section": "keybindings",
                     "committed": committed,
                     "failed": ["keybindings"],
@@ -564,7 +567,7 @@ def _read_document(config: Config) -> tuple[str, list[Rule], dict[str, str]]:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        raise ValueError(f"invalid keybindings.json: {exc}") from exc
+        raise ValueError(ui_message("settings.add9eb0629", value1=exc)) from exc
     preset, rules, rejected = parse_document(raw)
     if rejected:
         log.warning(
@@ -673,7 +676,7 @@ def _normalize_rules(raw: object) -> tuple[list[Rule], dict[str, str]]:
     committed the config half.
     """
     if not isinstance(raw, list):
-        raise ValueError("rules must be a list")
+        raise ValueError(ui_message("settings.71c20afbf4"))
     rejected: dict[str, str] = {}
     normalized: list[Rule] = []
     for index, entry in enumerate(raw):
@@ -706,10 +709,10 @@ def _publish_keybindings(config: Config, temporary: Path) -> None:
 async def put_keybindings(request: web.Request) -> web.Response:
     body = await request.json()
     if not isinstance(body, dict):
-        raise ValueError("body must be an object")
+        raise ValueError(ui_message("settings.fe2741b182"))
     normalized, rejected = _normalize_rules(body.get("rules"))
     if rejected:
-        return json_response({"error": "invalid keybindings", "fields": rejected}, 422)
+        return json_response({"error": ui_message("settings.1bf68b0f1f"), "fields": rejected}, 422)
     if request.query.get("validate") == "1":
         return json_response({"ok": True})
     config: Config = request.app[keys.CONFIG]
@@ -742,7 +745,10 @@ async def apply_keymap_preset(request: web.Request) -> web.Response:
         rules = preset_rules(preset)
     except ValueError:
         return json_response(
-            {"error": "invalid configuration", "fields": {"preset": f"must be one of {known}"}},
+            {
+                "error": ui_message("settings.e734625aa1"),
+                "fields": {"preset": f"must be one of {known}"},
+            },
             422,
         )
     _publish_keybindings(config, _stage_keybindings(config, preset, rules))
@@ -786,7 +792,9 @@ async def put_hooks(request: web.Request) -> web.Response:
     try:
         parse_hook_rules(text)
     except ValueError as exc:
-        return json_response({"error": "invalid hooks TOML", "fields": {"text": str(exc)}}, 422)
+        return json_response(
+            {"error": ui_message("settings.f79201f6ab"), "fields": {"text": str(exc)}}, 422
+        )
     if request.query.get("validate") == "1":
         return json_response({"ok": True})
     path = request.app[keys.CONFIG].data_dir / "hooks.toml"

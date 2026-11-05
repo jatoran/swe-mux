@@ -50,6 +50,7 @@ from pathlib import Path
 from .config import Config
 from .lifecycle import ledger
 from .subprocess_flags import popen_outside_job
+from .ui_messages import ui_message
 
 #: How long a daemon may take to answer before this gives up waiting. Matches the
 #: reasoning in `desktop.DAEMON_HEALTH_TIMEOUT_SECONDS` but not its value: the
@@ -192,16 +193,14 @@ def start_daemon(
                 config.data_dir,
                 f"daemon pid {child.pid} answered health after {elapsed:.1f}s",
             )
-            return StartOutcome(
-                status="started", url=url, pid=child.pid, log_path=str(log_path)
-            )
+            return StartOutcome(status="started", url=url, pid=child.pid, log_path=str(log_path))
         code = child.poll()
         if code is not None:
             return StartOutcome(
                 status="failed",
                 url=url,
                 pid=child.pid,
-                detail=f"the daemon exited with code {code} during startup",
+                detail=ui_message("daemon_start.09daf01ce6", value1=code),
                 log_path=str(log_path),
             )
         time.sleep(POLL_SECONDS)
@@ -209,11 +208,7 @@ def start_daemon(
         status="starting",
         url=url,
         pid=child.pid,
-        detail=(
-            f"the daemon has not answered {url}/api/health after "
-            f"{timeout_seconds:.0f}s and is still running; it may still be "
-            "opening databases or reattaching sessions"
-        ),
+        detail=(ui_message("daemon_start.803eab59f5", value1=url, value2=timeout_seconds)),
         log_path=str(log_path),
     )
 

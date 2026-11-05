@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .project_files import revision
+from .ui_messages import error_text, ui_message
 
 log = logging.getLogger(__name__)
 
@@ -49,9 +50,9 @@ class ProjectContextService:
         control = project_root / ".swe-mux"
         target = control / "project-context.md"
         if control.is_symlink() or (control.exists() and not control.is_dir()):
-            raise ValueError("Project control directory is unsafe")
+            raise ValueError(ui_message("project_context.6593b63f01"))
         if target.is_symlink() or (target.exists() and not target.is_file()):
-            raise ValueError("Project context path is unsafe")
+            raise ValueError(ui_message("project_context.65cda116fd"))
         return control, target
 
     @staticmethod
@@ -62,12 +63,12 @@ class ProjectContextService:
             data = handle.read(MAX_PROJECT_CONTEXT_BYTES + 1)
         if len(data) > MAX_PROJECT_CONTEXT_BYTES:
             raise ValueError(
-                f"Project context exceeds the {MAX_PROJECT_CONTEXT_BYTES}-byte limit"
+                ui_message("project_context.7bb31e5b35", value1=MAX_PROJECT_CONTEXT_BYTES)
             )
         try:
             data.decode("utf-8")
         except UnicodeDecodeError as exc:
-            raise ValueError("Project context must be UTF-8 Markdown") from exc
+            raise ValueError(ui_message("project_context.8a2a83506e")) from exc
         return data
 
     def read(self, context: ProjectContext) -> dict[str, Any]:
@@ -88,7 +89,7 @@ class ProjectContextService:
         control, target = self._paths(context.project_root)
         control.mkdir(parents=True, exist_ok=True)
         if control.is_symlink() or not control.is_dir():
-            raise ValueError("Project control directory is unsafe")
+            raise ValueError(ui_message("project_context.6593b63f01"))
         try:
             with target.open("x", encoding="utf-8", newline="\n"):
                 pass
@@ -120,7 +121,7 @@ class ProjectContextService:
                 "markdown": "",
                 "max_bytes": MAX_PROJECT_CONTEXT_BYTES,
                 "generation_prompt": generation_prompt(),
-                "error": str(exc),
+                "error": error_text(exc),
             }
 
     def write(
@@ -130,19 +131,19 @@ class ProjectContextService:
         expected_revision: str,
     ) -> dict[str, Any]:
         if not isinstance(markdown, str):
-            raise ValueError("markdown must be a string")
+            raise ValueError(ui_message("project_context.f6e8c80f49"))
         data = markdown.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
         if len(data) > MAX_PROJECT_CONTEXT_BYTES:
             raise ValueError(
-                f"Project context exceeds the {MAX_PROJECT_CONTEXT_BYTES}-byte limit"
+                ui_message("project_context.7bb31e5b35", value1=MAX_PROJECT_CONTEXT_BYTES)
             )
         control, target = self._paths(context.project_root)
         current = self._read_bytes(target)
         if revision(current) != expected_revision:
-            raise ValueError("Project context changed externally; reload before saving")
+            raise ValueError(ui_message("project_context.22b97693fb"))
         control.mkdir(parents=True, exist_ok=True)
         if control.is_symlink() or not control.is_dir():
-            raise ValueError("Project control directory is unsafe")
+            raise ValueError(ui_message("project_context.6593b63f01"))
         temporary = target.with_name(f".{target.name}.tmp")
         try:
             with temporary.open("wb") as handle:

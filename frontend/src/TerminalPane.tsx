@@ -1,3 +1,5 @@
+import { locale as uiLocale } from './localization/index.ts'
+import { rich, t } from './localization/index.ts'
 import { deviceMode, mobileLayout, touchInput, watchDeviceMode } from './deviceMode'
 import type { ComponentChildren, VNode } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
@@ -434,7 +436,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const [findOpen, setFindOpen] = useState(false)
   const [findQuery, setFindQuery] = useState('')
   const [findCase, setFindCase] = useState(false)
-  const [findResult, setFindResult] = useState<string>('')
+  const [findResult, setFindResult] = useState<'' | 'match' | 'missing'>('')
   const [connectionState,setConnectionState]=useState<'connecting'|'connected'|'reconnecting'|'ended'>('connecting')
   const [preparedClipboard,setPreparedClipboard]=useState('')
   const [manualClipboard,setManualClipboard]=useState(false)
@@ -775,10 +777,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const decision=remountDecision(remountAttemptsRef.current,Date.now())
     remountAttemptsRef.current=decision.attempts
     if(!decision.allow){
-      reportError('The terminal renderer failed repeatedly for this session; its output may be stale until you reopen the pane.')
+      reportError(t("TerminalPane.f1a037b0c0"))
       return
     }
-    reportError('The terminal renderer stalled; rebuilding this pane.')
+    reportError(t("TerminalPane.3b8af720dd"))
     setRemountEpoch(epoch=>epoch+1)
   }
   const requestPaneRemountRef=useRef(requestPaneRemount)
@@ -856,7 +858,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
    *  for as long as the selection lives. A drag keeps refreshing it, so it stays up for the
    *  whole gesture and fades from where the gesture ended. */
   const showSelectionStatus = (text:string) => {
-    showClipboardStatus(`${text.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`,'selection')
+    showClipboardStatus(t("TerminalPane.fe486d58c1", { value1: text.length.toLocaleString(uiLocale.value), value2: (mobileInput.autoCopySelection) ? 'yes' : 'no' }), 'selection')
   }
   /** Withdraw the readout when the selection clears, but never a clipboard confirmation. */
   const clearSelectionStatus = () => {
@@ -867,24 +869,24 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
 
   attachFilesRef.current=async(files:Blob[])=>{
     if(!acceptsTerminalAttachments(session)){
-      reportError('Attach files to an open agent session.')
+      reportError(t("TerminalPane.4b0243ed64"))
       return
     }
     if(['exited','crashed'].includes(session.state)){
-      reportError('Files cannot be attached to an ended session.')
+      reportError(t("TerminalPane.b2be09fde0"))
       return
     }
     if(!canInsertTerminalAttachment(session.state,attachmentReadyRef.current)||!termRef.current){
-      reportError('The terminal is still restoring. Wait for it to reconnect and try again.')
+      reportError(t("TerminalPane.c18b7c133d"))
       return
     }
     if(!files.length)return
     if(files.length>MAX_ATTACHMENTS_PER_ACTION){
-      reportError(`Attach at most ${MAX_ATTACHMENTS_PER_ACTION} files at once.`)
+      reportError(t("TerminalPane.e74ac74b6b", { value1: MAX_ATTACHMENTS_PER_ACTION }))
       return
     }
     if(attachmentBusyRef.current){
-      reportError('Another attachment upload is still running.')
+      reportError(t("TerminalPane.dcaa52d678"))
       return
     }
     const operation=++attachmentOperationRef.current
@@ -898,7 +900,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         const file=files[index] as File
         const subtype=file.type.split('/',2)[1]||'bin'
         const filename=file.name?.trim()||`clipboard.${subtype}`
-        showClipboardStatus(`Attaching ${index+1}/${files.length}…`)
+        showClipboardStatus(t("TerminalPane.f42e9ba91c", { value1: index+1, length: files.length }))
         const form=new FormData()
         form.append('file',file,filename)
         try{
@@ -915,8 +917,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       }
       const pathText=attachmentReferenceText(pathReferences)
       if(pathText)pasteAttachmentRef.current(pathText,false)
-      if(uploaded.length)showClipboardStatus(`${uploaded.length} file${uploaded.length===1?'':'s'} attached`)
-      if(failures.length)reportError(`${failures.length} attachment${failures.length===1?'':'s'} failed: ${failures.at(-1)}`)
+      if(uploaded.length)showClipboardStatus(t("TerminalPane.b652aebf6f", { length: uploaded.length, value2: (uploaded.length===1) ? 'yes' : 'no' }))
+      if(failures.length)reportError(t("TerminalPane.6bd1e6b5f1", { value1: failures.length, value2: (failures.length===1) ? 'yes' : 'no', value3: failures.at(-1) }))
     }finally{
       if(attachmentOperationRef.current===operation){
         attachmentBusyRef.current=false
@@ -2367,7 +2369,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       // request the branch existed to change.
       const seed = takeBranchSeed(session.id)
       if (seed) window.dispatchEvent(new CustomEvent('mux:terminal-action', {
-        detail: { sessionId: session.id, action: 'insertText', text: seed },
+        detail: { sessionId: session.id, get action() { return t("TerminalPane.8ed40ba303") }, text: seed },
       }))
     }
     const handleMessage=(event:MessageEvent, source:WebSocket)=>{
@@ -2548,7 +2550,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           }
           if (!exitWritten) {
             exitWritten = true
-            term.writeln('\r\n\x1b[38;5;243m[process exited]\x1b[0m')
+            term.writeln(t("TerminalPane.107037c843"))
           }
         }
       }
@@ -2706,7 +2708,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         if (pendingInputDecision(pendingUserInputLength, data.length) === 'overflow') {
           // Losing input without saying so is what made this look like the terminal
           // "eating" pastes; past the ceiling the pane owes the user an explanation.
-          reportError('Input dropped: the terminal was still restoring its buffer.')
+          reportError(t("TerminalPane.b74f06bee7"))
           return
         }
         pendingUserInputLength += data.length
@@ -3538,12 +3540,12 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       event.stopPropagation()
       setFileDropActive(false)
       if (!isAgentBackend(backendRef.current)) {
-        reportError('Drop files into an open agent session.')
+        reportError(t("TerminalPane.f868eec493"))
         return
       }
       const files=Array.from(event.dataTransfer?.files||[])
       if (!files.length) {
-        reportError('No readable files were dropped.')
+        reportError(t("TerminalPane.9741f0741d"))
         return
       }
       void attachFilesRef.current(files)
@@ -3699,7 +3701,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const copy = async () => {
     const term = termRef.current
     if (!term?.hasSelection()) {
-      const problem = 'Copy requires a terminal selection.'
+      const problem = t("TerminalPane.d6a6f3c077")
       reportError(problem)
       setMenu(null)
       throw new Error(problem)
@@ -3715,29 +3717,29 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     } else {
       prepareClipboardFallback(text)
       setMenu(null)
-      throw new Error('Clipboard access was blocked. Manual copy is ready in the terminal.')
+      throw new Error(t("TerminalPane.4d1be04cce"))
     }
     setMenu(null)
   }
   const paste = async (textOnly=false) => {
     const term = termRef.current
-    if(!term)throw new Error('The target terminal is not mounted.')
+    if(!term)throw new Error(t("TerminalPane.c863ec631b"))
     try {
       const pasted=textOnly
         ?(pasteIntoTerminal(term,inputBackendRef.current,await navigator.clipboard.readText(),'rail'),'text' as const)
         :await pasteBrowserClipboard(term, session, inputBackendRef.current, files=>attachFilesRef.current(files))
       focusAfterTerminalActionRef.current()
-      if(pasted==='text')showClipboardStatus('Pasted')
+      if(pasted==='text')showClipboardStatus(t("TerminalPane.a86670dbd1"))
     } catch {
       setManualPaste(true)
       requestAnimationFrame(()=>manualPasteRef.current?.focus())
-      throw new Error('Clipboard access was blocked. Manual paste is open in the terminal.')
+      throw new Error(t("TerminalPane.1f05483111"))
     }
     setMenu(null)
   }
   const copyLastReply = async () => {
     if(session.backend==='shell')return
-    showClipboardStatus('Loading latest reply…')
+    showClipboardStatus(t("TerminalPane.28e001a931"))
     try {
       const result=await replyCopyRef.current.load(session,()=>api<ReplySnapshot>('GET',`/api/sessions/${session.id}/last-reply`))
       if(!result)return
@@ -3745,12 +3747,12 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       const copied=await copyPreparedText(result.text)
       if(copied){
         setPreparedClipboard('');setManualClipboard(false)
-        showClipboardStatus(result.previous_answer?'Copied previous answer':'Copied reply')
+        showClipboardStatus(result.previous_answer?t("TerminalPane.6710bdb18a"):t("TerminalPane.3b4a8a1e95"))
       }else prepareClipboardFallback(result.text)
       const {text:_text,previous_answer:_previous,...receipt}=result
       void api('POST',`/api/sessions/${session.id}/reply-copy`,{...receipt,outcome:copied?'copied':'manual'}).catch(()=>{})
     } catch(cause) {
-      reportError(cause instanceof Error?cause.message:'No completed assistant answer is available yet.')
+      reportError(cause instanceof Error?cause.message:t("TerminalPane.dcee5d5c55"))
     }
   }
 
@@ -3766,15 +3768,15 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     if(!term||!composerIsReadable(session.backend))return null
     return readComposerDraft(session.backend,terminalCaretSnapshot(term))
   }
-  const composerUnreadable = 'The composer could not be read from this screen. It may be showing a dialog, a picker, or output rather than a draft.'
+  const composerUnreadable = t("TerminalPane.a082b82b32")
   const copyComposerInput = async () => {
     const text=readComposer()
-    if(text===null){reportError(composerIsReadable(session.backend)?composerUnreadable:`Reading the composer is not implemented for ${harnessDisplayName(session.backend)} sessions.`);return}
-    if(!text){showClipboardStatus('The composer is empty');return}
+    if(text===null){reportError(composerIsReadable(session.backend)?composerUnreadable:t("TerminalPane.10379cf12a", { value1: harnessDisplayName(session.backend) }));return}
+    if(!text){showClipboardStatus(t("TerminalPane.3334b4255e"));return}
     captureCopy(text,'composer')
     if(await copyPreparedText(text)){
       setPreparedClipboard('');setManualClipboard(false)
-      showClipboardStatus(`Copied ${text.length.toLocaleString()} chars`)
+      showClipboardStatus(t("TerminalPane.3eb9e4c0f4", { value1: text.length.toLocaleString(uiLocale.value) }))
     }else prepareClipboardFallback(text)
   }
   // There is deliberately no Clear counterpart to the copy above. It sent the
@@ -3798,9 +3800,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     setApproveBusy(true)
     try {
       const result=await api<{operation:string}>('POST',`/api/sessions/${session.id}/approvals/approve-once`)
-      showClipboardStatus(`Approved ${result.operation}`)
+      showClipboardStatus(t("TerminalPane.5e4436a55c", { operation: result.operation }))
     } catch(cause) {
-      reportError(cause instanceof Error?cause.message:'The approval could not be answered.')
+      reportError(cause instanceof Error?cause.message:t("TerminalPane.563374edd7"))
     } finally {
       setApproveBusy(false)
     }
@@ -3815,7 +3817,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const found = previous
       ? searchRef.current?.findPrevious(findQuery, { caseSensitive: findCase })
       : searchRef.current?.findNext(findQuery, { caseSensitive: findCase })
-    setFindResult(found ? 'match' : 'no match')
+    setFindResult(found ? 'match' : 'missing')
   }
 
   const closeFind = () => {
@@ -3850,7 +3852,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       // the pane stays the single owner of terminal writes, so broadcast, replay,
       // and read/select mode still apply.
       else if (detail.action === 'sendKey' && detail.text) perform(()=>{
-        if(!termRef.current)throw new Error('The target terminal is not mounted.')
+        if(!termRef.current)throw new Error(t("TerminalPane.c863ec631b"))
         sendKey(detail.text!)
       })
       else if (detail.action === 'copyReply') void copyLastReply()
@@ -3991,13 +3993,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const refusal=insertionRefusal(session)
     if(refusal)throw new Error(refusal)
     const target=termRef.current
-    if(!target)throw new Error('The target terminal is not ready. Draft kept.')
+    if(!target)throw new Error(t("TerminalPane.acdb7870e1"))
     await settleTerminalInsertion(
       text,
       !!submit,
       value=>pasteIntoTerminal(target,inputBackendRef.current,value,'insert'),
       ()=>{
-        if(termRef.current!==target)throw new Error('The target terminal changed before submit. Draft kept.')
+        if(termRef.current!==target)throw new Error(t("TerminalPane.3daede5726"))
         sendKey('\r')
       },
       undefined,
@@ -4075,10 +4077,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const mobileInputModeIcon=mobileInputModeState==='live'?'⌨':mobileInputModeState==='read'?'↕':'✎'
   const nextInputMode=nextMobileTerminalInputMode(mobileInputModeState,acceptsTerminalAttachments(session))
   const mobileInputModeTitle=mobileInputModeState==='live'
-    ?'Live input. Tap for read/select mode.'
+    ?t("TerminalPane.af0fce1440")
     :mobileInputModeState==='read'
-      ?acceptsTerminalAttachments(session)?'Read/select mode. Tap for persistent Draft.':'Read/select mode. Tap for live input.'
-      :'Persistent Draft. Tap for live input; text stays saved.'
+      ?acceptsTerminalAttachments(session)?t("TerminalPane.f0d1161206"):t("TerminalPane.0a5f744134")
+      :t("TerminalPane.37226b5691")
   const railConfig=loadRailConfig(session.project_id)
   // Kept beside the rows because a pad's slots name catalog ids rather than carrying
   // their own behaviour, so resolving one means a lookup the rows themselves do not do.
@@ -4228,22 +4230,22 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       case 'attach':{
         if(!acceptsTerminalAttachments(session))return null
         const view=actionPresentation(item)
-        return {...view,run:()=>attachmentInputRef.current?.click(),disabled:attachmentBusy||!canInsertTerminalAttachment(session.state,attachmentReady),ariaLabel:attachmentBusy?'Attaching files':'Attach files',title:attachmentBusy?'Attaching files…':!attachmentReady?'Terminal restoring…':item.title||'Attach files to this chat without sending'}
+        return {...view,run:()=>attachmentInputRef.current?.click(),disabled:attachmentBusy||!canInsertTerminalAttachment(session.state,attachmentReady),ariaLabel:attachmentBusy?t("TerminalPane.ba34171692"):t("TerminalPane.e697cc1e45"),title:attachmentBusy?t("TerminalPane.b4179f2536"):!attachmentReady?t("TerminalPane.3746a12aeb"):item.title||t("TerminalPane.6f80c351f6")}
       }
       case 'relaunch':{
         if(!isTask)return null
         const view=actionPresentation(item)
-        return {...view,className:`term-relaunch ${view.className||''}`.trim(),run:()=>runCommand('session.relaunch'),title:'Relaunch this task terminal - stops it and re-runs the same command'}
+        return {...view,className:`term-relaunch ${view.className||''}`.trim(),run:()=>runCommand('session.relaunch'),get title() { return t("TerminalPane.a846fbfcb9") }}
       }
       case 'copyReply':{
         if(isTask)return null
         const view=actionPresentation(item)
-        return {...view,run:()=>void copyLastReply(),disabled:!isAgentBackend(session.backend),ariaLabel:session.state==='working'?'Copy previous answer':'Copy last reply',title:!isAgentBackend(session.backend)?'Copy reply is available in agent sessions':session.state==='working'?'Copy previous answer':'Copy the latest completed answer',padLabel:'Reply'}
+        return {...view,run:()=>void copyLastReply(),disabled:!isAgentBackend(session.backend),ariaLabel:session.state==='working'?t("TerminalPane.ccb71e32d4"):t("TerminalPane.95c90044b2"),title:!isAgentBackend(session.backend)?t("TerminalPane.d0f65b87ef"):session.state==='working'?t("TerminalPane.ccb71e32d4"):t("TerminalPane.cc7436c9c0"),padLabel:'Reply'}
       }
       case 'copyResume':{
         if(isTask)return null
         const view=actionPresentation(item)
-        return {...view,run:()=>void copyResumeCommand(),disabled:!resumeCmd,title:resumeCmd?`Copy “${resumeCmd}” to resume this conversation in any terminal${resolvesTranscriptByCwd(session.backend)?` (run it from ${session.run_cwd||session.cwd})`:''}`:isAgentBackend(session.backend)&&!assignsConversationId(session.backend)?`${harnessDisplayName(session.backend)} has not reported its session id yet`:'Resume commands are available in agent sessions',padLabel:'Resume'}
+        return {...view,run:()=>void copyResumeCommand(),disabled:!resumeCmd,title:resumeCmd?t("TerminalPane.77cb0c4317", { value1: resumeCmd, value2: resolvesTranscriptByCwd(session.backend)?t("TerminalPane.ef267c9e0a", { value1: session.run_cwd||session.cwd }):'' }):isAgentBackend(session.backend)&&!assignsConversationId(session.backend)?t("TerminalPane.afde0546d7", { value1: harnessDisplayName(session.backend) }):t("TerminalPane.9790b2588a"),padLabel:'Resume'}
       }
       case 'branch':{
         if(!onBranch)return null
@@ -4254,7 +4256,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         const branchable=supportsBranch(session.backend)
         const ready=branchable&&(assignsConversationId(session.backend)||(!!session.native_session_id&&session.native_session_id!==session.id))
         const view=actionPresentation(item)
-        return {...view,run:()=>onBranch(),disabled:!ready,ariaLabel:'Branch this conversation',title:ready?'Fork this conversation into a sibling pane, keeping the original open':branchable?`${harnessDisplayName(session.backend)} has not reported its session id yet - branch is available shortly`:`Branching is not implemented for ${harnessDisplayName(session.backend)} sessions`}
+        return {...view,run:()=>onBranch(),disabled:!ready,ariaLabel:t("TerminalPane.cac3667f95"),title:ready?t("TerminalPane.555808ef82"):branchable?t("TerminalPane.70339d0c37", { value1: harnessDisplayName(session.backend) }):t("TerminalPane.3d61619779", { value1: harnessDisplayName(session.backend) })}
       }
       case 'approveOnce':{
         // Enabled only while this session is actually showing an approval. The
@@ -4263,28 +4265,28 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         // is always clickable and usually 409s teaches nothing.
         const showing=session.state==='awaiting'&&session.awaiting_reason==='approval'
         const view=actionPresentation(item)
-        return {...view,className:`rail-approve ${view.className||''}`.trim(),content:approveBusy?'…':view.content,run:()=>void approveOnce(),disabled:!showing||approveBusy,ariaLabel:'Approve the pending request',title:showing?'Approve the request this session is showing':'Available while this session is waiting for an approval'}
+        return {...view,className:`rail-approve ${view.className||''}`.trim(),content:approveBusy?'…':view.content,run:()=>void approveOnce(),disabled:!showing||approveBusy,ariaLabel:t("TerminalPane.eafaf7e51f"),title:showing?t("TerminalPane.8819818f28"):t("TerminalPane.97e884717c")}
       }
       case 'paste':{
         const view=actionPresentation(item)
-        return {...view,run:()=>void paste(),ariaLabel:'Paste into terminal',title:'Paste the clipboard into this terminal'}
+        return {...view,run:()=>void paste(),ariaLabel:t("TerminalPane.e19e0f35b4"),get title() { return t("TerminalPane.a930526eb7") }}
       }
       // The two pickers open a drop-up of the most recent/relevant few rather than
       // the drawer section outright. The section is still one tap away, from the
       // sticky row inside the drop-up, so nothing became less reachable.
       case 'clipboardHistory':{
         const view=actionPresentation(item)
-        return {...railPickerView(view,'clipboard'),title:'Recent clipboard - tap an entry to insert it here',padLabel:'Clip'}
+        return {...railPickerView(view,'clipboard'),get title() { return t("TerminalPane.559f361e11") },padLabel:'Clip'}
       }
       // `agentOnly` already keeps this off shells, where the endpoint 409s.
       case 'skills':{
         const view=actionPresentation(item)
-        return {...railPickerView(view,'skills'),title:item.title||'Insert one of this session’s skills'}
+        return {...railPickerView(view,'skills'),title:item.title||t("TerminalPane.c44f8e85f2")}
       }
       // Every template, not only those with dedicated configured buttons.
       case 'prompts':{
         const view=actionPresentation(item)
-        return {...railPickerView(view,'prompts'),title:item.title||'Insert one of your prompt templates'}
+        return {...railPickerView(view,'prompts'),title:item.title||t("TerminalPane.733b701f51")}
       }
       case 'copyInput':{
         // Disabled rather than absent on an unmeasured harness: a button that is
@@ -4292,7 +4294,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         // "not here yet", which is the true answer.
         const readable=composerIsReadable(session.backend)
         const view=actionPresentation(item)
-        return {...view,run:()=>void copyComposerInput(),disabled:!readable,ariaLabel:'Copy composer text',title:readable?item.title||'Copy the text sitting unsent in this composer':`Reading the composer is not implemented for ${harnessDisplayName(session.backend)} sessions`,padLabel:'Input'}
+        return {...view,run:()=>void copyComposerInput(),disabled:!readable,ariaLabel:t("TerminalPane.7be75f59c1"),title:readable?item.title||t("TerminalPane.902e4f8250"):t("TerminalPane.61c36b5769", { value1: harnessDisplayName(session.backend) }),padLabel:'Input'}
       }
       case 'actionsDrawer':{
         const view=actionPresentation(item)
@@ -4302,15 +4304,15 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         // Ended sessions keep the button: the same command removes their row from the
         // sidebar, which is the only remaining thing left to do with them.
         const ended=session.state==='exited'||session.state==='crashed'
-        const verb=ended?'Remove':'End session'
+        const verb=ended?'Remove':t("TerminalPane.f00b921ff3")
         const view=actionPresentation(item,ended?'Remove':item.label)
-        return {...view,className:`rail-danger ${killArmed?'confirming ':''}${view.className||''}`.trim(),content:killArmed?'Confirm ✓':view.content,run:()=>runCommand('session.kill'),ariaLabel:killArmed?`Confirm ${verb.toLowerCase()}`:verb,title:killArmed?'Click again to confirm':ended?'Remove this ended session from the sidebar (click twice to confirm)':'End this session (click twice to confirm)'}
+        return {...view,className:`rail-danger ${killArmed?'confirming ':''}${view.className||''}`.trim(),content:killArmed?'Confirm ✓':view.content,run:()=>runCommand('session.kill'),ariaLabel:killArmed?t("TerminalPane.6c62776391", { value1: verb.toLowerCase() }):verb,title:killArmed?t("TerminalPane.1f8c950362"):ended?t("TerminalPane.dabb53d0f6"):t("TerminalPane.b2a891d12c")}
       }
       case 'kbdToggle':return {
         className:`term-key kbd-toggle mode-${mobileInputModeState} ${mobileDraftText?'has-draft':''}`,
         content:railItemDisplayLabel(item,mobileInputModeIcon),
         run:()=>cycleMobileInputMode(),
-        ariaLabel:`Mobile input mode: ${mobileInputModeState}. Tap for ${nextInputMode}.`,
+        ariaLabel:t("TerminalPane.325489d7e7", { value1: mobileInputModeState, value2: nextInputMode }),
         title:mobileInputModeTitle,
       }
     }
@@ -4320,12 +4322,12 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       // label so the chip's width never changes as it is armed and locked.
       const phase=railModifierPhase(railModifiers,modifier)
       const view=actionPresentation(item)
-      return {...view,className:`${item.className||'term-key'} rail-modifier-${phase}`,run:()=>setRailModifiers(current=>toggleRailModifier(current,modifier)),ariaLabel:`${item.label}: ${phase==='off'?'off':phase==='armed'?'armed for the next key':'locked'}`,title:phase==='locked'?`${item.label} is locked. Tap to clear.`:phase==='armed'?`${item.label} applies to the next key. Tap to lock.`:item.title}
+      return {...view,className:`${item.className||'term-key'} rail-modifier-${phase}`,run:()=>setRailModifiers(current=>toggleRailModifier(current,modifier)),ariaLabel:`${item.label}: ${phase===t("TerminalPane.b4dc66dde8")?t("TerminalPane.b4dc66dde8"):phase==='armed'?t("TerminalPane.955c4c9276"):t("TerminalPane.14493f5f54")}`,title:phase===t("TerminalPane.14493f5f54")?t("TerminalPane.8ae2b9d04c", { value1: item.label }):phase==='armed'?t("TerminalPane.084aa296ea", { value1: item.label }):item.title}
     }
     if(item.type==='key'){
       const label=railItemDisplayLabel(item)
       const sequence=modifiedSequence(item)
-      return {className:item.className||'term-key',content:label,run:()=>sendRailKey(sequence),title:`${modifierPrefix?`${modifierPrefix}+`:''}${item.title||label}`,padLabel:label}
+      return {className:item.className||'term-key',content:label,run:()=>sendRailKey(sequence),get title() { return t("TerminalPane.9989fa2d2c", { value1: modifierPrefix?`${modifierPrefix}+`:'', value2: item.title||label }) },padLabel:label}
     }
     if(item.type==='action'||item.type==='pad')return null
     // Prompt templates resolve over the network at click time (see promptRail.ts), so
@@ -4335,7 +4337,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // wording is fixed and its even widths are the row's rhythm (see style.css).
     if(item.type==='prompt'){
       const label=railItemDisplayLabel(item,railItemLabel(item,promptTitles))
-      return {className:`rail-text ${item.className||''}`.trim(),content:label,padLabel:label,run:()=>void runPromptItem(item),title:item.title||'Insert this prompt template into the composer'}
+      return {className:`rail-text ${item.className||''}`.trim(),content:label,padLabel:label,run:()=>void runPromptItem(item),title:item.title||t("TerminalPane.e463e4fb59")}
     }
     const payload=railPayload(item,session.backend as RailBackend)
     return {
@@ -4391,7 +4393,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     }
     if(item.type==='key'&&isRepeatableRailKey(item.id)){
       const label=railItemDisplayLabel(item)
-      return <RailRepeatKey key={key} slot={index} reorderId={key} railItem={item.id} repeat={railKeyRepeat} sequence={modifiedSequence(item)} label={label} title={`${modifierPrefix?`${modifierPrefix}+`:''}${item.title||label}`} className={item.className||'term-key'}/>
+      return <RailRepeatKey key={key} slot={index} reorderId={key} railItem={item.id} repeat={railKeyRepeat} sequence={modifiedSequence(item)} label={label} title={t("TerminalPane.9989fa2d2c", { value1: modifierPrefix?`${modifierPrefix}+`:'', value2: item.title||label })} className={item.className||'term-key'}/>
     }
     const view=railItemView(item)
     if(!view)return null
@@ -4483,47 +4485,38 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     '--peek-offset':`${peekOffset}px`,
     '--terminal-keyboard-reserve':`${keyboardReserved?reservePxRef.current:0}px`,
   } as Record<string,string>
-    return <div class={`terminal-surface${utilityPane?' plugin-utility-surface':''}${peekOffset>0?' keyboard-peek':''}${peekAnimated?' keyboard-peek-animated':''}${keyboardReserved?' keyboard-reserved':''}`} style={surfaceStyle}><div class={`terminal-host${letterboxActive?' letterboxed':''}`} style={claudeHostStyle} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label="Choose files to attach" onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/>{mobileDraftOpen&&<MobileTerminalDraft sessionName={sessionDisplayName(session)||session.id} text={mobileDraftText} busy={mobileDraftInserting} error={mobileDraftError} onInput={setMobileDraftText} onInsert={()=>void insertMobileDraft()} onClear={()=>setMobileDraftText('')}/>} {!utilityPane&&railOn&&<div ref={railRef} class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}${arrange.arranging?' rail-arranging':''}${railHoverOn?' rail-hover':''}${railHoverOn&&railShown?' rail-hover-shown':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>{if(arrange.arranging)return;pulseRail(event.currentTarget,event.target)}}>{arrange.arranging&&<RailArrangePanel device={railDevice} rows={arrangeRows} catalog={arrangeCatalog} catalogOpen={arrange.catalogOpen} onToggleCatalog={arrange.toggleCatalog} scopeLabel={railArrangeScopeLabel(arrangeScope)} scopeDetail={railArrangeScopeDetail(arrangeScope)} preview={arrange.preview} canUndo={arrange.canUndo} onUndo={arrange.undo} onDone={arrange.exit} onChipPointerDown={arrange.beginChipDrag} onCatalogPointerDown={arrange.beginCatalogDrag}/>}<div class="terminal-action-rows" data-rail-arrange-surface={arrange.arranging?'rail':undefined} onPointerDown={event=>arrange.beginChipDrag(event as unknown as PointerEvent)}>{renderedRailRows.map((row,index)=><RailStrip key={row.id} chips={row.nodes} label={renderedRailRows.length>1?`Actions, row ${index+1}`:'Actions'} onConfigure={()=>onConfigureRail?.()} device={railDevice} rowId={row.id} arranging={arrange.arranging} caretAt={arrange.caretFor(row.id)} onArrange={arrange.enter} openRequest={railPopoverRequest?.rowId===row.id?railPopoverRequest.seq:0}/>)}</div>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}><SendIcon/></button>}</div>}{peekToggleVisible(effectiveKeyboardInset,peekOffset>0,offTail,appOffTail)&&<button class={`terminal-peek-top${peekOffset>0?' active':''}`} aria-pressed={peekOffset>0} title={peekOffset>0?"Back to the composer":"Look at the top of the screen, the keyboard is covering it"} aria-label={peekOffset>0?"Back to the composer":"Show the top of the terminal"} onMouseDown={holdSoftKeyboard} onClick={()=>applyPeekRef.current('toggle')}>{peekOffset>0?'↓':'↑'}</button>}{clipboardStatus&&<div class="terminal-clip-toast" role="status">{clipboardStatus}</div>}{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onMouseDown={holdSoftKeyboard} onClick={jumpToLatest}>↓</button>}{fileDropActive&&<div class="terminal-image-drop" role="status">Drop files to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
+    return <div class={`terminal-surface${utilityPane?' plugin-utility-surface':''}${peekOffset>0?' keyboard-peek':''}${peekAnimated?' keyboard-peek-animated':''}${keyboardReserved?' keyboard-reserved':''}`} style={surfaceStyle}><div class={`terminal-host${letterboxActive?' letterboxed':''}`} style={claudeHostStyle} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label={t("TerminalPane.2aa93c2f61")} onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label={t("TerminalPane.c6b7117c60")} autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/>{mobileDraftOpen && <MobileTerminalDraft sessionName={sessionDisplayName(session)||session.id} text={mobileDraftText} busy={mobileDraftInserting} error={mobileDraftError} onInput={setMobileDraftText} onInsert={()=>void insertMobileDraft()} onClear={()=>setMobileDraftText('')}/>} {!utilityPane&&railOn && <div ref={railRef} class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}${arrange.arranging?' rail-arranging':''}${railHoverOn?' rail-hover':''}${railHoverOn&&railShown?' rail-hover-shown':''}`} role="toolbar" aria-label={t("TerminalPane.c9df2f3989")} onClick={event=>{if(arrange.arranging)return;pulseRail(event.currentTarget,event.target)}}>{arrange.arranging && <RailArrangePanel device={railDevice} rows={arrangeRows} catalog={arrangeCatalog} catalogOpen={arrange.catalogOpen} onToggleCatalog={arrange.toggleCatalog} scopeLabel={railArrangeScopeLabel(arrangeScope)} scopeDetail={railArrangeScopeDetail(arrangeScope)} preview={arrange.preview} canUndo={arrange.canUndo} onUndo={arrange.undo} onDone={arrange.exit} onChipPointerDown={arrange.beginChipDrag} onCatalogPointerDown={arrange.beginCatalogDrag}/>}<div class="terminal-action-rows" data-rail-arrange-surface={arrange.arranging?'rail':undefined} onPointerDown={event=>arrange.beginChipDrag(event as unknown as PointerEvent)}>{renderedRailRows.map((row,index)=><RailStrip key={row.id} chips={row.nodes} label={renderedRailRows.length>1 ? t("TerminalPane.946cba5963", { value1: index+1 }) : t("TerminalPane.ff8059dc67")} onConfigure={()=>onConfigureRail?.()} device={railDevice} rowId={row.id} arranging={arrange.arranging} caretAt={arrange.caretFor(row.id)} onArrange={arrange.enter} openRequest={railPopoverRequest?.rowId===row.id?railPopoverRequest.seq:0}/>)}</div>{mobilePinnedSend && <button class="terminal-mobile-send" title={t("TerminalPane.2d9187118c")} aria-label={t("TerminalPane.cc46c03a42")} onClick={()=>sendKey('\r')}><SendIcon/></button>}</div>}{peekToggleVisible(effectiveKeyboardInset,peekOffset>0,offTail,appOffTail) && <button class={`terminal-peek-top${peekOffset>0?' active':''}`} aria-pressed={peekOffset>0} title={peekOffset>0 ? t("TerminalPane.de7eee2dfa") : t("TerminalPane.9c82c13443")} aria-label={peekOffset>0 ? t("TerminalPane.de7eee2dfa") : t("TerminalPane.9d50f35db1")} onMouseDown={holdSoftKeyboard} onClick={()=>applyPeekRef.current('toggle')}>{peekOffset>0 ? '↓' : '↑'}</button>}{clipboardStatus && <div class="terminal-clip-toast" role="status">{clipboardStatus}</div>}{(offTail||appOffTail) && <button class="terminal-jump-latest" title={t("TerminalPane.54e9d8f727")} aria-label={t("TerminalPane.41608597bf")} onMouseDown={holdSoftKeyboard} onClick={jumpToLatest}>↓</button>}{fileDropActive && <div class="terminal-image-drop" role="status">{rich("TerminalPane.df939cadfc", { backend: session.backend })}</div>}{findOpen && <div class="terminal-find" role="search">
     <input value={findQuery} onInput={event => { setFindQuery(event.currentTarget.value); setFindResult('') }} onKeyDown={event => {
       // Stopped here so the keypress is one pop, on this bar's own level.
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); dismissStack.pop() }
       if (event.key === 'Enter') { event.preventDefault(); search(event.shiftKey) }
-    }} placeholder="find in terminal" aria-label="Find in terminal" autofocus />
-    <button title="Previous match" onClick={() => search(true)}>↑</button>
-    <button title="Next match" onClick={() => search(false)}>↓</button>
-    <button class={findCase ? 'active' : ''} title="Match case" aria-pressed={findCase} onClick={() => { setFindCase(value => !value); setFindResult('') }}>Aa</button>
-    <span class={findResult === 'no match' ? 'missing' : ''}>{findResult}</span>
-    <button title="Close find" onClick={closeFind}>×</button>
-  </div>}{contentionNotice
-    ?<div class="terminal-input-owner console-contention-notice" role="alert" title={contentionNotice.hint}><span>{contentionNotice.text}</span><SettingLink variant="link" target="terminals.agentShims" title="How agents launched from a shell reach this terminal">Why?</SettingLink></div>
-    :ownerNotice
-    ?<div class="terminal-input-owner" role="status"><span>{ownerNotice}{letterboxActive?` · showing its ${letterboxSize}`:''}</span><button title="Take terminal input on this device" onClick={()=>{resizeToPaneRef.current();focusTerminalInputRef.current()}}>Take over</button></div>
-    /* Letterboxed with nobody else visibly holding input. `inputOwnerNotice` only speaks
-       when this pane was *refused*, so the case that looks most broken — a grid drawn at
-       a size this pane never chose, with no explanation anywhere — was the one case that
-       said nothing at all. Claiming input is the fix as well as the explanation: the owner
-       dictates geometry, so taking it resizes the session to this pane. */
-    :letterboxActive&&letterboxSettled&&<div class="terminal-input-owner letterbox-notice" role="status"><span>Showing {letterboxSize} · sized elsewhere</span><button title="Size this session to this pane" onClick={()=>{resizeToPaneRef.current();focusTerminalInputRef.current()}}>Resize</button></div>}{/* Three notices share one slot at the top of the pane, so they are ordered by
+    }} placeholder={t("TerminalPane.4d06700c8c")} aria-label={t("TerminalPane.382564abd4")} autofocus />
+    <button title={t("TerminalPane.daa2f8c3fc")} onClick={() => search(true)}>↑</button>
+    <button title={t("TerminalPane.825e5abd07")} onClick={() => search(false)}>↓</button>
+    <button class={findCase ? 'active' : ''} title={t("TerminalPane.6198801124")} aria-pressed={findCase} onClick={() => { setFindCase(value => !value); setFindResult('') }}>{t("TerminalPane.81acaafba9")}</button>
+    <span class={findResult === 'missing' ? 'missing' : ''}>{findResult === 'missing' ? t("TerminalPane.9bc94ab9b3") : findResult === 'match' ? t("terminalSearch.match") : ''}</span>
+    <button title={t("TerminalPane.eb903c9fde")} onClick={closeFind}>×</button>
+  </div>}{contentionNotice ? <div class="terminal-input-owner console-contention-notice" role="alert" title={contentionNotice.hint}><span>{contentionNotice.text}</span><SettingLink variant="link" target="terminals.agentShims" title={t("TerminalPane.cbcb934e1f")}>{t("TerminalPane.5d8a995a6f")}</SettingLink></div> : ownerNotice ? <div class="terminal-input-owner" role="status"><span>{ownerNotice}{letterboxActive ? t("TerminalPane.09c2613114", { letterboxSize: letterboxSize }) : ''}</span><button title={t("TerminalPane.972773be09")} onClick={()=>{resizeToPaneRef.current();focusTerminalInputRef.current()}}>{t("TerminalPane.66abfef02c")}</button></div> : letterboxActive&&letterboxSettled && <div class="terminal-input-owner letterbox-notice" role="status"><span>{rich("TerminalPane.63fe47edaf", { letterboxSize: letterboxSize })}</span><button title={t("TerminalPane.42ebe11f77")} onClick={()=>{resizeToPaneRef.current();focusTerminalInputRef.current()}}>{t("TerminalPane.2956e06ac0")}</button></div>}{/* Three notices share one slot at the top of the pane, so they are ordered by
        how much they explain: who has input beats an unexplained grid, which beats a
        grid the user can widen from Settings. A pane that is both letterboxed and
        capped is showing another device's size, and naming this device's envelope
        would be describing something that is not on screen. */}
-  {!contentionNotice&&!ownerNotice&&!letterboxActive&&widthCapNotice>0&&<div class="terminal-input-owner width-cap-notice" role="status"><span>Claude panes stop at {widthCapNotice} columns</span><SettingLink variant="link" target="terminals.claudeWidth" title="Change or remove the Claude width limit">Change…</SettingLink></div>}{connectionState!=='connected'&&<div class={`terminal-connection ${connectionState}`} role="status"><span>{connectionState==='ended'?'session ended':connectionState==='connecting'?'connecting…':'reconnecting…'}</span>{connectionState!=='ended'&&<button class="terminal-connection-retry" title="Reconnect now" onClick={()=>reconnectNowRef.current()}>retry</button>}</div>}{manualPaste&&<div class="manual-terminal-paste" role="dialog" aria-label="Paste into terminal"><span>Clipboard read was blocked. Focus here and use your device’s Paste.</span><textarea ref={manualPasteRef} aria-label="Paste terminal text here" onPaste={event=>{
+  {!contentionNotice&&!ownerNotice&&!letterboxActive&&widthCapNotice>0 && <div class="terminal-input-owner width-cap-notice" role="status"><span>{rich("TerminalPane.3fb4d9ae08", { widthCapNotice: widthCapNotice })}</span><SettingLink variant="link" target="terminals.claudeWidth" title={t("TerminalPane.f0eaa8c7ae")}>{t("TerminalPane.a6b4705c68")}</SettingLink></div>}{connectionState!=='connected' && <div class={`terminal-connection ${connectionState}`} role="status"><span>{connectionState==='ended' ? t("TerminalPane.b807c1f679") : connectionState==='connecting' ? t("TerminalPane.4b6394535d") : t("TerminalPane.9e2607d856")}</span>{connectionState!=='ended' && <button class="terminal-connection-retry" title={t("TerminalPane.f786f0ee47")} onClick={()=>reconnectNowRef.current()}>{t("TerminalPane.06b29bb318")}</button>}</div>}{manualPaste && <div class="manual-terminal-paste" role="dialog" aria-label={t("TerminalPane.e19e0f35b4")}><span>{t("TerminalPane.87820fb478")}</span><textarea ref={manualPasteRef} aria-label={t("TerminalPane.922aa6b921")} onPaste={event=>{
     const data=event.clipboardData
     const image=data&&clipboardImage(Array.from(data.items))
     if(image){event.preventDefault();void attachFilesRef.current([image]).then(()=>setManualPaste(false));return}
     const text=data?.getData('text/plain')||''
-    if(text){event.preventDefault();if(termRef.current)pasteIntoTerminal(termRef.current,inputBackendRef.current,text,'manual');focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}
-  }} onInput={event=>{const text=event.currentTarget.value;if(!text)return;if(termRef.current)pasteIntoTerminal(termRef.current,inputBackendRef.current,text,'manual');event.currentTarget.value='';focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}}/><button aria-label="Cancel paste" onClick={()=>{setManualPaste(false);focusTerminalInputRef.current()}}>×</button></div>}{preparedClipboard&&<div class="prepared-clipboard" role="status"><span>Clipboard write was blocked. Copy the prepared text once.</span><button onClick={()=>void retryPreparedCopy()}>Copy</button><button aria-label="Dismiss prepared clipboard" onClick={()=>{setPreparedClipboard('');setManualClipboard(false)}}>×</button><textarea ref={manualClipboardRef} class={manualClipboard?'manual':''} readOnly value={preparedClipboard} aria-label="Prepared terminal clipboard text" onFocus={event=>event.currentTarget.select()} /></div>}{dropup?.kind==='clipboard'&&<ClipboardDropup anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('clipboard.open')}/>}{dropup?.kind==='skills'&&<SkillsDropup sessionId={session.id} harness={harnessDisplayName(session.backend)} anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('drawer.actions.skills')}/>}{dropup?.kind==='prompts'&&<PromptsDropup projectId={session.project_id} backend={session.backend} anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('drawer.actions.prompts')} onCreate={()=>runCommand('prompts.new')}/>}{menu && <div ref={el=>fitMenuInViewport(el)} class="terminal-menu rail-menu" role="menu" aria-label="Action rail" style={{ left: clampContextMenuLeft(menu.x, innerWidth), top: Math.min(menu.y, innerHeight - 130) }}>
+    if(text){event.preventDefault();if(termRef.current)pasteIntoTerminal(termRef.current,inputBackendRef.current,text,'manual');focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus(t("TerminalPane.a86670dbd1"))}
+  }} onInput={event=>{const text=event.currentTarget.value;if(!text)return;if(termRef.current)pasteIntoTerminal(termRef.current,inputBackendRef.current,text,'manual');event.currentTarget.value='';focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus(t("TerminalPane.a86670dbd1"))}}/><button aria-label={t("TerminalPane.91afc34ece")} onClick={()=>{setManualPaste(false);focusTerminalInputRef.current()}}>×</button></div>}{preparedClipboard && <div class="prepared-clipboard" role="status"><span>{t("TerminalPane.4e3aa17177")}</span><button onClick={()=>void retryPreparedCopy()}>{t("TerminalPane.e21f935f11")}</button><button aria-label={t("TerminalPane.830e289a91")} onClick={()=>{setPreparedClipboard('');setManualClipboard(false)}}>×</button><textarea ref={manualClipboardRef} class={manualClipboard?'manual':''} readOnly value={preparedClipboard} aria-label={t("TerminalPane.5573ac430f")} onFocus={event=>event.currentTarget.select()} /></div>}{dropup?.kind==='clipboard' && <ClipboardDropup anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('clipboard.open')}/>}{dropup?.kind==='skills' && <SkillsDropup sessionId={session.id} harness={harnessDisplayName(session.backend)} anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('drawer.actions.skills')}/>}{dropup?.kind==='prompts' && <PromptsDropup projectId={session.project_id} backend={session.backend} anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('drawer.actions.prompts')} onCreate={()=>runCommand('prompts.new')}/>}{menu && <div ref={el=>fitMenuInViewport(el)} class="terminal-menu rail-menu" role="menu" aria-label={t("TerminalPane.f73cf84043")} style={{ left: clampContextMenuLeft(menu.x, innerWidth), top: Math.min(menu.y, innerHeight - 130) }}>
     {/* The row the menu was opened on, or the first one when the press landed on no row
         (the rail's own edge) or on a row that has since been re-rendered away. */}
     <button role="menuitem" onClick={() => {
       const rowId = renderedRailRows.some(row => row.id === menu.rowId) ? menu.rowId! : renderedRailRows[0].id
       setMenu(null)
       setRailPopoverRequest(current => ({ rowId, seq: (current?.seq ?? 0) + 1 }))
-    }}>Open all actions</button>
-    <button role="menuitem" onClick={() => { setMenu(null); onConfigureRail?.() }}>Configure actions…</button>
-    <button role="menuitemcheckbox" aria-checked={railHover} onClick={() => { setMenu(null); onRailHoverChange?.(!railHover) }}>{railHover ? '✓ ' : ''}Only show on hover</button>
+    }}>{t("TerminalPane.f8592fb934")}</button>
+    <button role="menuitem" onClick={() => { setMenu(null); onConfigureRail?.() }}>{t("TerminalPane.ce419f89f1")}</button>
+    <button role="menuitemcheckbox" aria-checked={railHover} onClick={() => { setMenu(null); onRailHoverChange?.(!railHover) }}>{t("TerminalPane.0edc306811", { value1: (railHover) ? 'yes' : 'no' })}</button>
   </div>}</div>
 }
 

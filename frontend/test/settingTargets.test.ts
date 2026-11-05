@@ -1,3 +1,4 @@
+import { withCatalogText } from './support/localizedSource.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -7,8 +8,8 @@ import { settingsTabs, tabForSection } from '../src/settingsTabs.ts'
 import { MODEL_ROUTES } from '../src/modelRouting.ts'
 
 const root = join(import.meta.dirname, '..')
-const source = (name: string) => readFileSync(join(root, 'src', name), 'utf8')
-const registry = readFileSync(join(root, '..', 'src', 'swe_mux', 'automation_registry.py'), 'utf8')
+const source = (name: string) => withCatalogText(readFileSync(join(root, 'src', name), 'utf8'))
+const registry = withCatalogText(readFileSync(join(root, '..', 'src', 'swe_mux', 'automation_registry.py'), 'utf8'))
 
 const ids = Object.keys(SETTING_TARGETS) as SettingTargetId[]
 
@@ -121,7 +122,7 @@ test('every grantable Project authority field has an owner in the policy matrix'
   // a Project is configured, and either surface naming a field satisfies this.
   const manager =
     source('ProjectsManager.tsx') + source('AutomationMatrix.tsx') + source('AutomationAuthority.tsx')
-  const grantsModule = readFileSync(join(root, '..', 'src', 'swe_mux', 'grants.py'), 'utf8')
+  const grantsModule = withCatalogText(readFileSync(join(root, '..', 'src', 'swe_mux', 'grants.py'), 'utf8'))
   // Split on the declaration, not the bare name: the module's own docstring names it too.
   const table = grantsModule.split('GRANTABLE_PROJECT_VALUES: Mapping')[1].split('\n}')[0]
   const fields = [...table.matchAll(/"([a-z_]+)":/g)].map(match => match[1])

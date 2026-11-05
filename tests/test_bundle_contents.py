@@ -135,9 +135,7 @@ def test_a_package_that_stopped_being_collected_fails_the_build(tmp_path: Path) 
     without it starts healthy and fails every timezone-naming schedule, in the
     frozen app only.
     """
-    packages = {
-        name: 1 for name in build_desktop.EXPECTED_BUNDLE_PACKAGES if name != "tzdata"
-    }
+    packages = {name: 1 for name in build_desktop.EXPECTED_BUNDLE_PACKAGES if name != "tzdata"}
     bundle = _bundle(tmp_path, packages)
 
     with pytest.raises(SystemExit) as failure:
@@ -343,6 +341,10 @@ def _cli_bundle(
             skill = package / "assets" / "skills" / "swe-mux"
             skill.mkdir(parents=True)
             (skill / "SKILL.md").write_bytes(b"x" * size)
+            locales = package / "assets" / "locales"
+            locales.mkdir()
+            for name in ("en.json", "zh-Hans.json"):
+                (locales / name).write_text("{}", encoding="utf-8")
         else:
             (package / "payload.bin").write_bytes(b"x" * size)
     for name in build_desktop.CLI_EXES if exes is None else exes:
@@ -355,9 +357,7 @@ def cli_spec_text() -> str:
 
 
 def test_a_client_bundle_matching_its_manifest_passes(tmp_path: Path) -> None:
-    bundle = _cli_bundle(
-        tmp_path, {name: 1 for name in build_desktop.EXPECTED_CLI_BUNDLE_PACKAGES}
-    )
+    bundle = _cli_bundle(tmp_path, {name: 1 for name in build_desktop.EXPECTED_CLI_BUNDLE_PACKAGES})
     build_desktop.verify_cli_bundle_contents(bundle)  # does not raise
 
 
@@ -392,9 +392,7 @@ def test_a_client_dependency_that_stopped_being_collected_fails_the_build(
     with no traceback anywhere - the same shape as the app bundle's
     missing-package half, and it needs the same gate.
     """
-    packages = {
-        name: 1 for name in build_desktop.EXPECTED_CLI_BUNDLE_PACKAGES if name != "psutil"
-    }
+    packages = {name: 1 for name in build_desktop.EXPECTED_CLI_BUNDLE_PACKAGES if name != "psutil"}
     bundle = _cli_bundle(tmp_path, packages)
 
     with pytest.raises(SystemExit, match="psutil"):
@@ -406,9 +404,7 @@ def test_client_code_arriving_beside_the_skill_fails_the_build(tmp_path: Path) -
     name must not blunt the gate: anything in that directory other than the
     embedded skill subtree - a module materialised as data, a second asset - is
     the same class of leak the membership check catches for third parties."""
-    bundle = _cli_bundle(
-        tmp_path, {name: 1 for name in build_desktop.EXPECTED_CLI_BUNDLE_PACKAGES}
-    )
+    bundle = _cli_bundle(tmp_path, {name: 1 for name in build_desktop.EXPECTED_CLI_BUNDLE_PACKAGES})
     (bundle / "_internal" / "swe_mux" / "server.pyc").write_bytes(b"code")
 
     with pytest.raises(SystemExit, match="server.pyc"):
@@ -459,9 +455,7 @@ def test_the_client_excludes_the_stdlib_door_to_pywin32() -> None:
     assert {"win32evtlog", "win32evtlogutil"} <= excluded
     # And the manifest agrees: declaring the pair would have encoded one runner's
     # shape instead of removing the difference.
-    assert not (
-        {"win32", "pywin32_system32"} & set(build_desktop.EXPECTED_CLI_BUNDLE_PACKAGES)
-    )
+    assert not ({"win32", "pywin32_system32"} & set(build_desktop.EXPECTED_CLI_BUNDLE_PACKAGES))
 
 
 def test_the_stdlib_import_the_client_excludes_is_the_guarded_one() -> None:
@@ -510,9 +504,7 @@ def test_the_launchers_are_the_client_commands_the_package_looks_for() -> None:
     """
     from swe_mux.install_location import CLIENT_COMMANDS
 
-    assert {name.removesuffix(".exe") for name in build_desktop.CLI_EXES} == set(
-        CLIENT_COMMANDS
-    )
+    assert {name.removesuffix(".exe") for name in build_desktop.CLI_EXES} == set(CLIENT_COMMANDS)
 
 
 def test_the_client_is_a_console_program_and_the_app_is_not() -> None:
@@ -522,9 +514,7 @@ def test_the_client_is_a_console_program_and_the_app_is_not() -> None:
     client built with `console=False` would print nothing while exiting 0.
     """
     assert "console=True" in cli_spec_text()
-    assert "console=False" in (REPO_ROOT / "packaging" / "swe_mux.spec").read_text(
-        encoding="utf-8"
-    )
+    assert "console=False" in (REPO_ROOT / "packaging" / "swe_mux.spec").read_text(encoding="utf-8")
 
 
 def test_the_frozen_entry_point_exits_with_the_code_main_returns() -> None:
@@ -624,3 +614,18 @@ def test_a_staged_redeploy_never_builds_the_client_bundle() -> None:
     """
     redeploy = (REPO_ROOT / "packaging" / "redeploy_desktop.py").read_text(encoding="utf-8")
     assert '"--app-distpath", str(STAGING_ROOT), "--skip-cli"' in redeploy
+
+
+def test_client_ui_catalogs_are_explicit_data_and_unrelated_assets_stay_excluded(
+    tmp_path: Path,
+) -> None:
+    spec = cli_spec_text()
+    assert '"locales" / "en.json"' in spec
+    assert '"locales" / "zh-Hans.json"' in spec
+    bundle = _cli_bundle(tmp_path, {name: 1 for name in build_desktop.EXPECTED_CLI_BUNDLE_PACKAGES})
+    build_desktop.verify_cli_bundle_contents(bundle)
+    (bundle / "_internal" / "swe_mux" / "assets" / "locales" / "extra.json").write_text(
+        "{}", encoding="utf-8"
+    )
+    with pytest.raises(SystemExit, match="extra.json"):
+        build_desktop.verify_cli_bundle_contents(bundle)

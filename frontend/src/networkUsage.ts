@@ -1,3 +1,5 @@
+import { locale as uiLocale } from './localization/index.ts'
+import { t } from './localization/index.ts'
 export type HttpTraffic = {
   requests:number
   request_bytes:number
@@ -44,25 +46,25 @@ export function snapshotTraffic(snapshot:NetworkUsageSnapshot):TrafficDirections
 }
 
 export function formatBytes(bytes:number):string {
-  if(!Number.isFinite(bytes)||bytes<=0)return'0 B'
+  if(!Number.isFinite(bytes)||bytes<=0)return t("networkUsage.4558e6463a")
   const units=['B','KiB','MiB','GiB','TiB']
   const index=Math.min(Math.floor(Math.log(bytes)/Math.log(1024)),units.length-1)
   const value=bytes/1024**index
   const maximumFractionDigits=value<10?2:value<100?1:0
-  return`${value.toLocaleString(undefined,{maximumFractionDigits})} ${units[index]}`
+  return t("networkUsage.4040b7c06c", { value1: value.toLocaleString(uiLocale.value,{maximumFractionDigits}), value2: units[index] })
 }
 
 export function formatByteRate(bytes:number,seconds:number):string {
-  if(!Number.isFinite(seconds)||seconds<=0)return'0 B/s'
-  return`${formatBytes(bytes/seconds)}/s`
+  if(!Number.isFinite(seconds)||seconds<=0)return t("networkUsage.943e47463b")
+  return t("networkUsage.8da0f8afab", { value1: formatBytes(bytes/seconds) })
 }
 
 export function formatElapsed(seconds:number):string {
   const whole=Math.max(0,Math.floor(Number.isFinite(seconds)?seconds:0))
-  if(whole<60)return`${whole}s`
-  if(whole<3600)return`${Math.floor(whole/60)}m ${whole%60}s`
-  if(whole<86400)return`${Math.floor(whole/3600)}h ${Math.floor((whole%3600)/60)}m`
-  return`${Math.floor(whole/86400)}d ${Math.floor((whole%86400)/3600)}h`
+  if(whole<60)return t("networkUsage.6732456ec2", { value1: whole })
+  if(whole<3600)return t("networkUsage.565fc0fdc0", { value1: Math.floor(whole/60), value2: whole%60 })
+  if(whole<86400)return t("networkUsage.bbceabb1db", { value1: Math.floor(whole/3600), value2: Math.floor((whole%3600)/60) })
+  return t("networkUsage.f071f6d893", { value1: Math.floor(whole/86400), value2: Math.floor((whole%86400)/3600) })
 }
 
 export function payloadKindLabel(kind:string):string {

@@ -1,3 +1,4 @@
+import { withCatalogText } from './support/localizedSource.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -24,8 +25,8 @@ import { SETTINGS_CONFIG_FIXTURE } from './renderer/settingsConfigFixture.ts'
  */
 
 const root = join(import.meta.dirname, '..')
-const source = (name: string) => readFileSync(join(root, 'src', name), 'utf8')
-const configPy = readFileSync(join(root, '..', 'src', 'swe_mux', 'config.py'), 'utf8')
+const source = (name: string) => withCatalogText(readFileSync(join(root, 'src', name), 'utf8'))
+const configPy = withCatalogText(readFileSync(join(root, '..', 'src', 'swe_mux', 'config.py'), 'utf8'))
 
 /** Every field name the `Config` dataclass declares, in declaration order. */
 export const configFields = (): string[] => {

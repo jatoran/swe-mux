@@ -1,3 +1,4 @@
+import { rich, t } from './localization/index.ts'
 import { useEffect, useState } from 'preact/hooks'
 import type { ComponentType } from 'preact'
 import type { CodeEditorProps } from './CodeEditor'
@@ -26,7 +27,7 @@ export function LazyCodeEditor(props: CodeEditorProps) {
       .catch(cause => { if (live) setError(cause instanceof Error ? cause.message : String(cause)) })
     return () => { live = false }
   }, [])
-  if (error) return <div class="code-editor code-editor-state error" role="alert">Source editor unavailable: {error}</div>
-  if (!Editor) return <div class="code-editor code-editor-state" aria-busy="true" aria-label={props.ariaLabel || props.filename}><span>Preparing editor…</span></div>
+  if (error) return <div class="code-editor code-editor-state error" role="alert">{rich("LazyCodeEditor.1643ed9844", { error: error })}</div>
+  if (!Editor) return <div class="code-editor code-editor-state" aria-busy="true" aria-label={props.ariaLabel || props.filename}><span>{t("LazyCodeEditor.20dc4d3d15")}</span></div>
   return <Editor {...props} />
 }

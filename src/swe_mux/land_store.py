@@ -40,6 +40,7 @@ from .sqlite_store import (
     run_sqlite_operation,
     write_schema_version,
 )
+from .ui_messages import ui_message
 
 LAND_SCHEMA_VERSION = 6
 
@@ -464,7 +465,7 @@ class LandStore:
         for; see `LandEvent`.
         """
         if kind not in REQUEST_KINDS:
-            raise ValueError(f"unknown land request kind: {kind}")
+            raise ValueError(ui_message("land_store.647fb8b133", value1=kind))
         moment = time.time() if now is None else now
         request_id = f"lnd_{uuid.uuid4().hex[:16]}"
 
@@ -641,7 +642,7 @@ class LandStore:
         there is no path that records an event for a move that did not happen.
         """
         if state not in LAND_STATES:
-            raise ValueError(f"unknown land state: {state}")
+            raise ValueError(ui_message("land_store.d52465b7ad", value1=state))
         moment = time.time() if now is None else now
 
         def op() -> dict[str, Any]:
@@ -731,7 +732,7 @@ class LandStore:
                     event=LandEvent(
                         step=str(row["state"]),
                         outcome="orphaned",
-                        reason="daemon restarted mid-step",
+                        reason=ui_message("land_store.630147ffb0"),
                     ),
                     moment=moment,
                 )
@@ -951,8 +952,7 @@ class LandStore:
 
         def op() -> int:
             row = self._db.execute(
-                "SELECT COUNT(*) n FROM land_requests"
-                " WHERE origin_session_id=? AND created_at>=?",
+                "SELECT COUNT(*) n FROM land_requests WHERE origin_session_id=? AND created_at>=?",
                 (origin_session_id, since),
             ).fetchone()
             return int(row["n"] or 0)

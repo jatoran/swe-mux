@@ -1,3 +1,5 @@
+import { locale as uiLocale } from './localization/index.ts'
+import { t } from './localization/index.ts'
 /**
  * The row model behind the modal process inspector.
  *
@@ -66,7 +68,7 @@ export type SessionRollup = {
 }
 
 export const memoryLabel = (bytes: number) =>
-  bytes >= 1073741824 ? `${(bytes / 1073741824).toFixed(1)} GiB` : `${(bytes / 1048576).toFixed(1)} MiB`
+  bytes >= 1073741824 ? t("processRows.60e6d84220", { value1: (bytes / 1073741824).toFixed(1) }) : t("processRows.2d95ec78b8", { value1: (bytes / 1048576).toFixed(1) })
 
 /** Stable across samples, so an expanded row stays expanded through the 2 s refresh. A PID
  *  alone is not stable enough — it is reused — which is why identity wins when it exists. */
@@ -101,7 +103,7 @@ const baseName = (path: string) => path.replace(/^"|"$/g, '').split(/[\\/]/).pop
 export function commandTail(process: RowProcess): string {
   const command = (process.command || '').trim()
   if (!command) {
-    return process.command_hash ? `fingerprint ${process.command_hash.slice(0, 12)}` : 'command unavailable'
+    return process.command_hash ? `fingerprint ${process.command_hash.slice(0, 12)}` : t("processRows.5a824ec210")
   }
   const head = commandHead(command)
   if (baseName(head).toLowerCase() !== (process.executable || '').toLowerCase()) return command
@@ -139,7 +141,7 @@ const networkDetail = (process: RowProcess): string => {
   return parts.join(' · ')
 }
 
-const defaultTime = (epoch: number) => new Date(epoch * 1000).toLocaleString()
+const defaultTime = (epoch: number) => new Date(epoch * 1000).toLocaleString(uiLocale.value)
 
 /**
  * Everything the collapsed line left out, in the order you read it before acting: what it is,
@@ -152,35 +154,35 @@ export function processDetails(process: RowProcess, formatTime: (epoch: number) 
   const details: ProcessDetail[] = []
   const command = (process.command || '').trim()
   details.push(command
-    ? { label: 'command', value: command }
-    : { label: 'command', value: process.command_hash ? `fingerprint ${process.command_hash.slice(0, 12)}` : 'unavailable' })
-  details.push({ label: 'parent', value: process.parent_pid ? `PID ${process.parent_pid}` : 'none observed' })
+    ? { get label() { return t("processRows.5d347fd948") }, value: command }
+    : { get label() { return t("processRows.5d347fd948") }, value: process.command_hash ? `fingerprint ${process.command_hash.slice(0, 12)}` : 'unavailable' })
+  details.push({ get label() { return t("processRows.e47125968b") }, value: process.parent_pid ? `PID ${process.parent_pid}` : t("processRows.05705fa0ab") })
   details.push({
-    label: 'evidence',
-    value: `${process.evidence_reason || 'live observation'} · confidence ${process.confidence || 'high'}`,
+    get label() { return t("processRows.ee8250fb76") },
+    value: `${process.evidence_reason || t("processRows.337f15aea9")} · confidence ${process.confidence || 'high'}`,
   })
   details.push({
-    label: 'attribution',
-    value: `${process.attribution_source || 'unknown'} v${process.attribution_version || 1} · ${process.job_assignment || 'job assignment unknown'}`,
+    get label() { return t("processRows.3ee591fcb2") },
+    value: `${process.attribution_source || 'unknown'} v${process.attribution_version || 1} · ${process.job_assignment || t("processRows.c077149961")}`,
   })
   const verified = process.last_verified_at || process.last_seen
-  if (verified) details.push({ label: 'checked', value: formatTime(verified) })
+  if (verified) details.push({ get label() { return t("processRows.e61a3d78c6") }, value: formatTime(verified) })
   if (process.first_seen) {
     details.push({
-      label: 'seen',
+      get label() { return t("processRows.7208794c98") },
       value: `first ${formatTime(process.first_seen)} · last ${formatTime(process.last_seen || process.first_seen)}`,
     })
   }
   if (process.exited_at) {
     details.push({
-      label: 'exited',
+      get label() { return t("processRows.b251994ca8") },
       value: `${formatTime(process.exited_at)}${process.exit_evidence ? ` · ${process.exit_evidence}` : ''}`,
     })
   }
   const network = networkDetail(process)
-  if (network) details.push({ label: 'network', value: network })
+  if (network) details.push({ get label() { return t("processRows.3009be769f") }, value: network })
   const conditions = process.conditions || []
-  if (conditions.length) details.push({ label: 'warnings', value: conditions.join(' · ') })
+  if (conditions.length) details.push({ get label() { return t("processRows.227690d7c3") }, value: conditions.join(' · ') })
   return details
 }
 

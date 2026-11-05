@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .harness import HARNESSES
+from .ui_messages import ui_message
 
 #: The environment variable stamped into agent panes: a comma-joined subset of
 #: {"mcp", "cli"} in this order, or the empty string for "neither".
@@ -114,12 +115,7 @@ def coherence_warnings(config: Any) -> list[SurfaceWarning]:
                 SurfaceWarning(
                     backend=backend,
                     code="skill_without_capability",
-                    message=(
-                        f"{backend}: the skill is delivered but both fleet "
-                        "surfaces (MCP, CLI) are off, so it teaches commands "
-                        "that will fail. Turn a surface on or stop delivering "
-                        "the skill."
-                    ),
+                    message=(ui_message("agent_surfaces.d22f91e997", value1=backend)),
                 )
             )
         elif SURFACE_CLI in surfaces and SURFACE_MCP not in surfaces and not skill:
@@ -127,13 +123,7 @@ def coherence_warnings(config: Any) -> list[SurfaceWarning]:
                 SurfaceWarning(
                     backend=backend,
                     code="cli_without_instruction",
-                    message=(
-                        f"{backend}: the CLI surface is on but MCP and the "
-                        "skill are both off. The CLI does not advertise "
-                        "itself, so nothing tells this harness's sessions the "
-                        "commands exist - deliver the skill to make the "
-                        "capability discoverable."
-                    ),
+                    message=(ui_message("agent_surfaces.50ac6e06fc", value1=backend)),
                 )
             )
     return warnings

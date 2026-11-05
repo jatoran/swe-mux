@@ -41,6 +41,7 @@ from .plugin_manifest import (
 )
 from .plugin_store import PluginStore
 from .spawn_contract import base_session_env
+from .ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -261,9 +262,7 @@ class PluginManager:
             )
             raise PluginError("manifest_changed", diagnostic)
         if manifest.name != record["name"] or manifest.version != record["version"]:
-            await self.store.set_state(
-                record["id"], name=manifest.name, version=manifest.version
-            )
+            await self.store.set_state(record["id"], name=manifest.name, version=manifest.version)
         content_digest = await asyncio.to_thread(plugin_content_digest, manifest.path.parent)
         approval_digest = self._approval_digest(manifest, content_digest)
         if approval_digest != record["approved_digest"] and record["enabled"]:
@@ -325,9 +324,7 @@ class PluginManager:
             "checked": len(current),
             "changed": changed,
             "invalid": [item["id"] for item in current if item["lifecycle"] == "invalid"],
-            "incompatible": [
-                item["id"] for item in current if item["lifecycle"] == "incompatible"
-            ],
+            "incompatible": [item["id"] for item in current if item["lifecycle"] == "incompatible"],
         }
         log.info(
             "plugin registry refreshed checked=%s changed=%s invalid=%s incompatible=%s",
@@ -470,8 +467,7 @@ class PluginManager:
                                 and Path(existing["root"]).resolve() == child.resolve()
                             ),
                             "conflict": bool(
-                                existing
-                                and Path(existing["root"]).resolve() != child.resolve()
+                                existing and Path(existing["root"]).resolve() != child.resolve()
                             ),
                         }
                     )
@@ -621,7 +617,7 @@ class PluginManager:
                 argv += [repo, str(stage / "source")]
                 result = await run_bounded(
                     argv,
-                    label="plugin install",
+                    label=ui_message("plugins.3be9050c11"),
                     timeout_seconds=180,
                     output_limit=COMMAND_OUTPUT_LIMIT,
                     operation_id=operation,
@@ -633,7 +629,7 @@ class PluginManager:
                     )
                 head = await run_bounded(
                     ["git", "-C", str(stage / "source"), "rev-parse", "HEAD"],
-                    label="plugin revision",
+                    label=ui_message("plugins.baa489a5d7"),
                     timeout_seconds=15,
                     output_limit=4096,
                 )
@@ -809,9 +805,7 @@ class PluginManager:
         )
         return {"staged": True, "plugin_id": plugin_id, "stage": staged}
 
-    async def approve_update(
-        self, plugin_id: str, *, enable: bool | None = None
-    ) -> dict[str, Any]:
+    async def approve_update(self, plugin_id: str, *, enable: bool | None = None) -> dict[str, Any]:
         current = await self._record(plugin_id)
         stage = await self.store.get_update_stage(plugin_id)
         if not stage:
@@ -921,13 +915,11 @@ class PluginManager:
             }
         remote = self._git_remote(record["source_ref"])
         patterns = (
-            ["HEAD"]
-            if not requested
-            else [f"refs/heads/{requested}", f"refs/tags/{requested}*"]
+            ["HEAD"] if not requested else [f"refs/heads/{requested}", f"refs/tags/{requested}*"]
         )
         result = await run_bounded(
             ["git", "ls-remote", remote, *patterns],
-            label="plugin update check",
+            label=ui_message("plugins.05dc3ab736"),
             timeout_seconds=30,
             output_limit=16 * 1024,
             operation_id=uuid.uuid4().hex,
@@ -1198,7 +1190,7 @@ class PluginManager:
             # The PTY can outlive the daemon generation that issued its callback token.
             # Launching the tool again is an explicit request for a usable pane, so replace
             # that stale process instead of focusing a UI whose callbacks can only fail.
-            await self.sessions.stop(existing.record.id, reason="plugin pane reopened")
+            await self.sessions.stop(existing.record.id, reason=ui_message("plugins.ffff588b7a"))
         env, token = self._environment(record, manifest, "pane", pane.id, context, lifetime=None)
         command, cwd = self._resolve_command(manifest, pane.command)
         session = await self.sessions.spawn(
@@ -1290,7 +1282,7 @@ class PluginManager:
             for token, grant in tuple(self._tokens.items()):
                 if grant.session_id == old_id:
                     self._tokens.pop(token, None)
-            await self.sessions.stop(old_id, reason="plugin development restart")
+            await self.sessions.stop(old_id, reason=ui_message("plugins.073a750d16"))
             self.sessions.sessions.pop(old_id, None)
             opened = await self.open_pane(
                 plugin_id,
@@ -1497,7 +1489,9 @@ class PluginManager:
             async with self._global, semaphore:
                 outcome = await run_bounded(
                     command,
-                    label=f"plugin {manifest.id}/{contribution_id}",
+                    label=ui_message(
+                        "plugins.d5096f0022", value1=manifest.id, value2=contribution_id
+                    ),
                     timeout_seconds=spec.timeout_seconds,
                     output_limit=COMMAND_OUTPUT_LIMIT,
                     cwd=cwd,

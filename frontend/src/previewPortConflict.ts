@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 /**
  * What a Preview pane says when its port is held by more than one process.
  *
@@ -26,17 +27,17 @@ export type PortConflictNotice = {
 const COMMAND_CHARS = 120
 
 const describeProcess = (listener: PortConflictListener): string => {
-  const command = listener.command || listener.executable || 'unknown process'
+  const command = listener.command || listener.executable || t("previewPortConflict.5e695195cb")
   return command.length > COMMAND_CHARS ? `${command.slice(0, COMMAND_CHARS - 1)}…` : command
 }
 
 const describeRelation = (listener: PortConflictListener): string => {
-  if (listener.owner) return "this preview's session"
+  if (listener.owner) return t("previewPortConflict.9cca661d57")
   if (listener.evidence_state === 'suspected_orphan' || listener.evidence_state === 'escaped') {
-    return 'left behind by a session that has ended'
+    return t("previewPortConflict.87b31a7fb3")
   }
-  if (listener.session_id) return 'another session'
-  return 'not started by any live swe-mux session'
+  if (listener.session_id) return t("previewPortConflict.d885d2d3c4")
+  return t("previewPortConflict.c1a5e637b0")
 }
 
 /** The notice for a shared port, or `null` when there is nothing to say. */
@@ -49,18 +50,18 @@ export function portConflictNotice(conflict: PortConflict | null | undefined): P
   let headline: string
   if (conflict.answering_is_owner === false && answering) {
     severity = 'wrong_server'
-    headline = `Port ${port} is shared - this preview is showing PID ${answering.pid} (${answering.executable || 'unknown'}), not this session's server.`
+    headline = t("previewPortConflict.52d815d5cd", { value1: port, value2: answering.pid, value3: answering.executable || 'unknown' })
   } else if (conflict.answering_is_owner === true) {
     severity = 'shared'
-    headline = `Port ${port} is also held by ${others} other process${others === 1 ? '' : 'es'}. This preview reaches this session's server now, but the OS chooses per connection.`
+    headline = t("previewPortConflict.507f001f17", { value1: port, value2: others, value3: (others === 1) ? 'yes' : 'no' })
   } else {
     severity = 'unknown'
-    headline = `Port ${port} is held by ${conflict.listeners.length} processes, and swe-mux could not tell which one this preview reaches.`
+    headline = t("previewPortConflict.2ba3893eb1", { value1: port, value2: conflict.listeners.length })
   }
   return {
     severity,
     headline,
-    remedy: 'Stop the other process, or run this server on a free port. On Windows a Python server can bind a port that is already in use without reporting an error.',
+    get remedy() { return t("previewPortConflict.da3cc55509") },
     listeners: conflict.listeners.map(item => ({
       pid: item.pid,
       label: describeProcess(item),

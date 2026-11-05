@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import type { ClipboardSelectionType, IClipboardProvider } from '@xterm/addon-clipboard'
 
 export const MAX_TERMINAL_CLIPBOARD_CHARS = 1_000_000
@@ -139,7 +140,7 @@ export class ResilientClipboardProvider implements IClipboardProvider {
     if (selection !== 'c') return
     if (this.suppressWrite()) return
     if (text.length > MAX_TERMINAL_CLIPBOARD_CHARS) {
-      this.onRejected('Terminal clipboard content exceeded the 1,000,000 character safety limit.')
+      this.onRejected(t("terminalClipboard.f30a0067d0"))
       return
     }
     try {

@@ -25,6 +25,8 @@ and each catch site can narrow to `NotFound` later, one at a time, on purpose.
 
 from __future__ import annotations
 
+from .ui_messages import ui_message
+
 
 class NotFound(KeyError):
     """A deliberate "this id names nothing" refusal; the transport answers 404.
@@ -41,7 +43,7 @@ class NotFound(KeyError):
         super().__init__(key)
         self.key = key
         self.kind = kind
-        self.message = message or f"no such {kind}"
+        self.message = message or ui_message("errors.not_found", kind=kind)
 
     def __str__(self) -> str:
         # `KeyError.__str__` is `repr(args[0])`, so anything that formats this

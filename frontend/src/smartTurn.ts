@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import {
   N_FRAMES, N_MELS, SMART_TURN_SAMPLE_RATE, SMART_TURN_SAMPLES, WhisperFeatures,
 } from './smartTurnFeatures.ts'
@@ -83,8 +84,8 @@ export class SmartTurn {
     const response = await fetch(modelUrl)
     if (!response.ok) {
       throw new Error(
-        `Smart Turn weights are missing (${response.status} for ${modelUrl}). `
-        + 'Run: uv run python tools/fetch_smart_turn.py',
+        t("smartTurn.dd901fb64c", { value1: response.status, value2: modelUrl })
+        + t("smartTurn.64a3c543f1"),
       )
     }
     const weights = new Uint8Array(await response.arrayBuffer())
@@ -105,7 +106,7 @@ export class SmartTurn {
   async predict(audio: Float32Array): Promise<TurnVerdict> {
     const ort = this.ort
     const session = this.session
-    if (!ort || !session) throw new Error('Smart Turn is not loaded')
+    if (!ort || !session) throw new Error(t("smartTurn.16594c5326"))
     const featureStart = performance.now()
     const grid = this.features.compute(audio)
     const featuresMs = performance.now() - featureStart

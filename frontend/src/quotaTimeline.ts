@@ -1,3 +1,4 @@
+import { t, locale as uiLocale } from './localization/index.ts'
 // Time arithmetic and wording for the Quota surface's history chart and readouts.
 //
 // Pure, so the chart's claims about *when* a percentage was true are testable without a
@@ -28,9 +29,9 @@ const DAY = 86400
 
 /** One name per window, used by every Quota view so a window never has two names. */
 export const QUOTA_WINDOW_LABELS: Record<QuotaWindowName|'fable', string> = {
-  weekly: 'Weekly',
-  session: '5-hour',
-  fable: 'Fable weekly',
+  get weekly() { return t("quotaTimeline.2975132481") },
+  get session() { return t("quotaTimeline.7f6a29364b") },
+  get fable() { return t("quotaTimeline.a50981a78c") },
 }
 
 /** The label for a window name the daemon sent, keeping an unknown one readable rather than blank. */
@@ -41,26 +42,26 @@ export const quotaWindowLabel = (window: string): string =>
 export const QUOTA_SOURCES: readonly QuotaUsageSource[] = ['swe_mux', 'outside', 'elsewhere', 'uncertain']
 
 export const QUOTA_SOURCE_LABELS: Record<QuotaUsageSource, string> = {
-  swe_mux: 'swe-mux sessions',
-  outside: 'not swe-mux',
-  elsewhere: 'used elsewhere',
-  uncertain: 'unclear',
+  get swe_mux() { return t("quotaTimeline.c902e1f271") },
+  get outside() { return t("quotaTimeline.6cc997a7b7") },
+  get elsewhere() { return t("quotaTimeline.647bd7f349") },
+  get uncertain() { return t("quotaTimeline.66625d4dc2") },
 }
 
 /** What each source claims, worded for a legend or a tooltip. */
 export const QUOTA_SOURCE_DETAIL: Record<QuotaUsageSource, string> = {
-  swe_mux: 'swe-mux sessions billed to this account were running',
-  outside: 'the account was in use here, but swe-mux sessions do not explain the rise: another app on this computer, or use elsewhere at the same time',
-  elsewhere: 'this computer was not using the account: another device, the provider\'s own apps, or another login',
-  uncertain: 'the account was switched in a way the daemon did not record',
+  get swe_mux() { return t("quotaTimeline.44fb74fade") },
+  get outside() { return t("quotaTimeline.fa95ba6ecb") },
+  get elsewhere() { return t("quotaTimeline.d8748b586f") },
+  get uncertain() { return t("quotaTimeline.e6a8fa75e2") },
 }
 
 export const QUOTA_BILLING_LABELS: Record<QuotaUsageBilling, string> = {
-  selected: 'selected here throughout',
-  not_selected: 'not selected here',
-  switched: 'switched during the interval',
-  uncertain: 'switched without a record of when',
-  per_session: 'billed per session, by the account each was started under',
+  get selected() { return t("quotaTimeline.c8a8c59aed") },
+  get not_selected() { return t("quotaTimeline.1aca4c9076") },
+  get switched() { return t("quotaTimeline.f56452c3da") },
+  get uncertain() { return t("quotaTimeline.ef9c293fb5") },
+  get per_session() { return t("quotaTimeline.c1d5cd9bf4") },
 }
 
 /** A source of a window's current usage: the four attributed ones, and what came before attribution. */
@@ -68,11 +69,14 @@ export type QuotaShareSource = QuotaUsageSource | 'untracked'
 
 export const QUOTA_SHARE_SOURCES: readonly QuotaShareSource[] = [...QUOTA_SOURCES, 'untracked']
 
-export const QUOTA_SHARE_LABELS: Record<QuotaShareSource, string> = {...QUOTA_SOURCE_LABELS, untracked: 'untracked'}
+export const QUOTA_SHARE_LABELS: Record<QuotaShareSource, string> = {get swe_mux() { return QUOTA_SOURCE_LABELS.swe_mux }, get outside() { return QUOTA_SOURCE_LABELS.outside }, get elsewhere() { return QUOTA_SOURCE_LABELS.elsewhere }, get uncertain() { return QUOTA_SOURCE_LABELS.uncertain }, get untracked() { return t("quotaTimeline.86ed2df801") }}
 
 export const QUOTA_SHARE_DETAIL: Record<QuotaShareSource, string> = {
-  ...QUOTA_SOURCE_DETAIL,
-  untracked: 'used before swe-mux was attributing this window',
+  get swe_mux() { return QUOTA_SOURCE_DETAIL.swe_mux },
+  get outside() { return QUOTA_SOURCE_DETAIL.outside },
+  get elsewhere() { return QUOTA_SOURCE_DETAIL.elsewhere },
+  get uncertain() { return QUOTA_SOURCE_DETAIL.uncertain },
+  get untracked() { return t("quotaTimeline.6347260bbe") },
 }
 
 export type WindowShare = {source: QuotaShareSource; points: number}
@@ -344,13 +348,13 @@ export function readingAsOf(readings: QuotaReading[], instant: number, maxAge = 
 
 /** A percentage at the precision the provider gave it: `85%`, `38.2%`. */
 export function formatQuotaPercent(value: number|null|undefined): string {
-  if (value == null || !Number.isFinite(value)) return 'no reading'
+  if (value == null || !Number.isFinite(value)) return t("quotaTimeline.612a3d5f7e")
   const rounded = Math.round(value*10)/10
   return `${Number.isInteger(rounded) ? rounded : rounded.toFixed(1)}%`
 }
 
 const formatters = new Map<string, Intl.DateTimeFormat>()
-function formatter(options: Intl.DateTimeFormatOptions, locale?: string): Intl.DateTimeFormat {
+function formatter(options: Intl.DateTimeFormatOptions, locale: string = uiLocale.value): Intl.DateTimeFormat {
   const key = `${locale ?? ''}|${JSON.stringify(options)}`
   let cached = formatters.get(key)
   if (!cached) {
@@ -385,8 +389,8 @@ export function formatQuotaDay(day: string, now: number, locale?: string): strin
 /** What a chart's time axis spans, in the clock its points are labelled in. */
 export function quotaDomainLabel(start: number, end: number, daily: boolean, now: number, locale?: string): string {
   return daily
-    ? `${formatQuotaDay(utcDayOf(start+DAY/2), now, locale)} to ${formatQuotaDay(utcDayOf(end-DAY/2), now, locale)} (UTC days)`
-    : `${formatQuotaInstant(start, now, locale)} to ${formatQuotaInstant(end, now, locale)} (local time)`
+    ? t("quotaTimeline.f3248134f0", { value1: formatQuotaDay(utcDayOf(start+DAY/2), now, locale), value2: formatQuotaDay(utcDayOf(end-DAY/2), now, locale) })
+    : t("quotaTimeline.88b658b3c9", { value1: formatQuotaInstant(start, now, locale), value2: formatQuotaInstant(end, now, locale) })
 }
 
 export type TimeTick = {time: number; label: string}

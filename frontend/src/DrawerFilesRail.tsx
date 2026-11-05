@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
 import { OverflowRail } from './RailScroller'
@@ -121,8 +122,8 @@ export function DrawerFilesRail({ projectRoot, files, active, unsaved, onSelect,
     setMenu(null)
     const text = form === 'absolute' ? absoluteProjectPath(projectRoot, path) : path
     flash(await copyPreparedText(text, copyFallback.current)
-      ? `Copied ${form} path`
-      : 'Clipboard write was blocked')
+      ? t("DrawerFilesRail.e120d687da", { value1: form })
+      : t("DrawerFilesRail.0ca617ee73"))
   }
 
   /** Closing is guarded only while there is something to lose, so the ordinary close stays
@@ -153,7 +154,7 @@ export function DrawerFilesRail({ projectRoot, files, active, unsaved, onSelect,
       wrapperClassName="drawer-file-subtabs-rail"
       activeKey={active || ''}
       touchDrag
-      stripProps={{ role: 'tablist', 'aria-label': 'Files open in this panel' }}
+      stripProps={{ role: 'tablist', get 'aria-label'() { return t("DrawerFilesRail.b7778d6d5a") } }}
     >
       {files.map(file => {
         const path = file.path
@@ -166,7 +167,7 @@ export function DrawerFilesRail({ projectRoot, files, active, unsaved, onSelect,
             aria-selected={on}
             tabIndex={on ? 0 : -1}
             class={`drawer-file-tab ${on ? 'active' : ''}`}
-            title={`${path}${dirty ? ' · unsaved' : ''} · right-click or hold for actions`}
+            title={t("DrawerFilesRail.13d6b3c5e4", { path: path, value2: (dirty) ? 'yes' : 'no' })}
             data-path={path}
             onClick={() => onSelect(path)}
             onContextMenu={event => press.contextMenu(event, openMenu(path))}
@@ -179,10 +180,8 @@ export function DrawerFilesRail({ projectRoot, files, active, unsaved, onSelect,
           >{dirty && <i class="drawer-file-dirty" aria-hidden="true">•</i>}{labels.get(path) || path}</button>
           <button
             class={`drawer-file-close ${arming ? 'confirming' : ''}`}
-            aria-label={arming
-              ? `Confirm closing ${path} with unsaved edits`
-              : `Close ${path}${dirty ? ', which has unsaved edits' : ''}`}
-            title={arming ? 'Click again to close and discard the unsaved edits' : 'Close'}
+            aria-label={arming ? t("DrawerFilesRail.b768555817", { path: path }) : t("DrawerFilesRail.e960965ee8", { path: path, value2: (dirty) ? 'yes' : 'no' })}
+            title={arming ? t("DrawerFilesRail.9ece68caed") : t("DrawerFilesRail.7d9eb7acb1")}
             onBlur={() => setConfirmClose(current => current === path ? '' : current)}
             onClick={() => requestClose(path)}
           >{arming ? '×?' : '×'}</button>
@@ -195,8 +194,8 @@ export function DrawerFilesRail({ projectRoot, files, active, unsaved, onSelect,
         longer lands there. Disabled while the index is showing: there is no file to move. */}
     <button
       class="drawer-file-pop"
-      aria-label="Move the file being shown into a workspace pane"
-      title="Move the file being shown into a workspace pane"
+      aria-label={t("DrawerFilesRail.1fe8ff7781")}
+      title={t("DrawerFilesRail.1fe8ff7781")}
       disabled={!active}
       onClick={() => { if (active) onOpenInPane(active) }}
     >⇥</button>
@@ -206,22 +205,22 @@ export function DrawerFilesRail({ projectRoot, files, active, unsaved, onSelect,
       class="context-menu drawer-file-menu"
       ref={el => { menuPanel.current = el; fitMenuInViewport(el) }}
       role="menu"
-      aria-label={`Actions for ${menuLabel}`}
+      aria-label={t("DrawerFilesRail.5e066eeae9", { menuLabel: menuLabel })}
       style={{ left: clampContextMenuLeft(menu.x, window.innerWidth), top: Math.max(4, menu.y) }}
       onClickCapture={press.suppressMenuEcho}
     >
       <div class="context-title"><strong>{menuLabel}</strong></div>
-      <button role="menuitem" title="Move this file into a workspace pane, beside the terminal" onClick={() => { setMenu(null); onOpenInPane(menuPath) }}>Open in a pane</button>
-      <button role="menuitem" title={menuPath} onClick={() => void copyPath(menuPath, 'relative')}>Copy path from project root</button>
-      <button role="menuitem" title={absoluteProjectPath(projectRoot, menuPath)} onClick={() => void copyPath(menuPath, 'absolute')}>Copy full path</button>
+      <button role="menuitem" title={t("DrawerFilesRail.e15fccd504")} onClick={() => { setMenu(null); onOpenInPane(menuPath) }}>{t("DrawerFilesRail.45f90ec535")}</button>
+      <button role="menuitem" title={menuPath} onClick={() => void copyPath(menuPath, 'relative')}>{t("DrawerFilesRail.e8ed258811")}</button>
+      <button role="menuitem" title={absoluteProjectPath(projectRoot, menuPath)} onClick={() => void copyPath(menuPath, 'absolute')}>{t("DrawerFilesRail.efad9ee56e")}</button>
       <div class="context-rule" />
       <button
         role="menuitem"
         class={confirmClose === menuPath ? 'danger confirming' : ''}
         onClick={() => requestClose(menuPath)}
-      >{confirmClose === menuPath ? 'Confirm close' : 'Close'}</button>
-      <button role="menuitem" disabled={files.length < 2} onClick={() => { setMenu(null); onCloseOthers(menuPath) }}>Close others</button>
-      {menuUnsaved && <p class="context-note">This file has edits that are not on disk. Closing it discards them.</p>}
+      >{confirmClose === menuPath ? t("DrawerFilesRail.89ff78472a") : t("DrawerFilesRail.7d9eb7acb1")}</button>
+      <button role="menuitem" disabled={files.length < 2} onClick={() => { setMenu(null); onCloseOthers(menuPath) }}>{t("DrawerFilesRail.b587323220")}</button>
+      {menuUnsaved && <p class="context-note">{t("DrawerFilesRail.b2e71b829d")}</p>}
     </div>}
   </div>
 }

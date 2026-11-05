@@ -43,6 +43,7 @@ from ..project_files import (
 from ..projects import ProjectManager
 from ..runtime_config import apply_runtime_config
 from ..settings_store import SettingsStore
+from ..ui_messages import ui_message
 from . import diagnostics, sessions
 
 log = logging.getLogger(__name__)
@@ -156,19 +157,17 @@ def _configurator_resolve_project(app: web.Application, requested: str) -> Any:
     manager: ProjectManager = app[keys.PROJECTS]
     needle = requested.strip()
     if not needle:
-        raise ValueError("name a Project: this session is not owned by one")
+        raise ValueError(ui_message("configurator.51f2735d91"))
     if needle in manager.projects:
         return manager.projects[needle]
     matches = [item for item in manager.ordered_projects() if item.name == needle]
     if len(matches) == 1:
         return matches[0]
     known = ", ".join(sorted(item.name for item in manager.ordered_projects())[:20])
-    raise ValueError(f"no Project called {needle!r}; registered Projects: {known}")
+    raise ValueError(ui_message("configurator.f113132146", value1=repr(needle), value2=known))
 
 
-async def _configurator_project_settings(
-    app: web.Application, requested: str
-) -> dict[str, Any]:
+async def _configurator_project_settings(app: web.Application, requested: str) -> dict[str, Any]:
     """One Project's committed config, with its automation opt-ins resolved.
 
     The resolution is the part worth serving rather than the file: a consumer
@@ -203,9 +202,9 @@ async def _configurator_project_settings(
         "values": values,
         "error": stored.get("error"),
         "automations": {
-            "requested": sorted(
-                key for key, value in (opt_ins or {}).items() if value
-            ) if isinstance(opt_ins, dict) else [],
+            "requested": sorted(key for key, value in (opt_ins or {}).items() if value)
+            if isinstance(opt_ins, dict)
+            else [],
             "effective": sorted(resolution.enabled),
             "blocked": {key: list(value) for key, value in resolution.blocked.items()},
             "unverified": sorted(resolution.unverified),
@@ -248,9 +247,7 @@ async def _configurator_apply_project_settings(
         }
     merged = {**(stored["values"] or {}), **changes}
     try:
-        result = await write_project_config(
-            str(record.root), merged, str(stored["revision"])
-        )
+        result = await write_project_config(str(record.root), merged, str(stored["revision"]))
     except ValueError as exc:
         detail = exc.args[0] if exc.args else str(exc)
         return {
@@ -298,9 +295,7 @@ def build_configurator_service(app: web.Application) -> ConfiguratorService:
         settings_store=lambda: app[keys.SETTINGS_STORE],
         edit_device_settings=lambda **kwargs: _configurator_edit_device_settings(app, **kwargs),
         read_project_settings=lambda project: _configurator_project_settings(app, project),
-        apply_project_settings=lambda **kwargs: _configurator_apply_project_settings(
-            app, **kwargs
-        ),
+        apply_project_settings=lambda **kwargs: _configurator_apply_project_settings(app, **kwargs),
         version=__version__,
     )
 
@@ -407,10 +402,7 @@ async def launch_configurator(request: web.Request) -> web.Response:
     if project is None:
         return json_response(
             {
-                "error": (
-                    "the configurator runs inside a Project, and none is registered yet; "
-                    "add one first"
-                ),
+                "error": (ui_message("configurator.f8cca1a527")),
                 "code": "no_project",
             },
             409,

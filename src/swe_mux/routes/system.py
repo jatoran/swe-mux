@@ -60,6 +60,7 @@ from ..tailscale import (
 )
 from ..tool_locations import refresh_search_path
 from ..ui_build import ui_build_id_cached
+from ..ui_messages import error_text, ui_message
 from ..windows_firewall import (
     firewall_supported,
     inspect_firewall,
@@ -219,7 +220,7 @@ async def put_log_level(request: web.Request) -> web.Response:
     """
     body = await request.json()
     if not isinstance(body, dict) or not isinstance(body.get("level"), str):
-        raise ValueError("body must be an object with a string 'level'")
+        raise ValueError(ui_message("system.ffa1421d26"))
     level = set_log_level(body["level"])
     log.info("log level set to %s via /api/debug/log-level", level)
     return json_response({"level": level})
@@ -340,7 +341,7 @@ async def daemon_restart(request: web.Request) -> web.Response:
         return json_response(
             {
                 "error": "restart_unavailable",
-                "message": "this daemon was not started with a relaunchable entry point",
+                "message": ui_message("system.f9076f869a"),
             },
             409,
         )
@@ -360,13 +361,7 @@ async def daemon_restart(request: web.Request) -> web.Response:
                 # used to read "enable pty_supervisor_enabled", which sent a
                 # reader to turn on a setting that was already on and told them
                 # nothing about why their daemon has no supervisor.
-                "message": (
-                    "the PTY supervisor is not attached, so a daemon restart would "
-                    "kill every session. It is on by default, so this daemon "
-                    "either failed to start one (see supervisor-console.log in the "
-                    "data directory, and `swemux doctor`) or has pty_supervisor_enabled "
-                    "turned off. Pass force=true to restart anyway and accept the reap"
-                ),
+                "message": (ui_message("system.a6ce33603e")),
             },
             409,
         )
@@ -603,17 +598,14 @@ async def daemon_redeploy(request: web.Request) -> web.Response:
         return json_response(
             {
                 "error": "no_source_checkout",
-                "message": (
-                    "this daemon is not running from a source checkout, so it cannot "
-                    "rebuild itself; run the redeploy from the repo instead"
-                ),
+                "message": (ui_message("system.d5cc9380db")),
             },
             409,
         )
     uv = shutil.which("uv")
     if uv is None:
         return json_response(
-            {"error": "uv_not_found", "message": "uv is required to run the redeploy script"},
+            {"error": "uv_not_found", "message": ui_message("system.e19df821fc")},
             409,
         )
     try:
@@ -627,13 +619,7 @@ async def daemon_redeploy(request: web.Request) -> web.Response:
         return json_response(
             {
                 "error": "supervisor_not_attached",
-                "message": (
-                    "the PTY supervisor is not attached, so a redeploy would kill "
-                    "every session. It is on by default, so this daemon either "
-                    "failed to start one (see supervisor-console.log in the data "
-                    "directory, and `swemux doctor`) or has pty_supervisor_enabled "
-                    "turned off. Pass force=true to redeploy anyway and accept the reap"
-                ),
+                "message": (ui_message("system.8d166f01c5")),
             },
             409,
         )
@@ -642,7 +628,7 @@ async def daemon_redeploy(request: web.Request) -> web.Response:
         return json_response(
             {
                 "error": "redeploy_in_progress",
-                "message": f"a redeploy is already running (pid {in_flight})",
+                "message": ui_message("system.ac22101831", value1=in_flight),
             },
             409,
         )
@@ -662,14 +648,7 @@ async def daemon_redeploy(request: web.Request) -> web.Response:
             return json_response(
                 {
                     "error": "bundle_in_use",
-                    "message": (
-                        "the app bundle is held open, so the redeploy swap would "
-                        f"fail: {describe_holders(holders)}. This is usually a dev "
-                        "server or preview process, or a terminal whose working "
-                        "directory is inside dist/swe-mux — stop those processes "
-                        "(or close their tabs/sessions) and retry, or pass "
-                        "force=true to attempt anyway."
-                    ),
+                    "message": (ui_message("system.59514336fd", value1=describe_holders(holders))),
                     "holders": holders,
                 },
                 409,
@@ -683,7 +662,7 @@ async def daemon_redeploy(request: web.Request) -> web.Response:
         lock_path = claim_redeploy_lock(config)
     except RedeployInFlight as exc:
         return json_response(
-            {"error": "redeploy_in_progress", "message": str(exc)},
+            {"error": "redeploy_in_progress", "message": error_text(exc)},
             409,
         )
     log_path = config.data_dir / "redeploy.log"
@@ -731,7 +710,7 @@ async def daemon_redeploy_announce(request: web.Request) -> web.Response:
         return json_response(
             {
                 "error": "no_redeploy_in_flight",
-                "message": "redeploy.lock names no live process, so there is nothing to announce",
+                "message": ui_message("system.bb600488a4"),
             },
             409,
         )
@@ -823,11 +802,9 @@ async def remote_status(request: web.Request) -> web.Response:
 async def enable_mobile_voice(request: web.Request) -> web.Response:
     config: Config = request.app[keys.CONFIG]
     if request.headers.get("X-Mux-User-Gesture") != "mobile-voice-setup":
-        return json_response({"error": "mobile voice setup requires an explicit user action"}, 400)
+        return json_response({"error": ui_message("system.f3cd52a575")}, 400)
     if not config.tailnet_enabled:
-        return json_response(
-            {"error": "Enable the Tailscale listener in Settings before mobile voice."}, 409
-        )
+        return json_response({"error": ui_message("system.2e40826a3e")}, 409)
     result = await enable_mobile_voice_serve(config.port)
     if result.get("status") == "ready":
         # The terminal gateway rides on the same address, so the one-tap repair
@@ -916,7 +893,7 @@ async def firewall_repair(request: web.Request) -> web.Response:
     """
     config: Config = request.app[keys.CONFIG]
     if request.headers.get("X-Mux-User-Gesture") != "firewall-repair":
-        return json_response({"error": "firewall repair requires an explicit user action"}, 400)
+        return json_response({"error": ui_message("system.ff64b474ff")}, 400)
     if not firewall_supported():
         return json_response({"ok": False, "reason": "unsupported"}, 409)
     result = await repair_firewall(config.port, gateway_port=config.active_terminal_gateway_port())
@@ -953,18 +930,16 @@ async def wsl_bridge_install(request: web.Request) -> web.Response:
     trigger should modify a machine.
     """
     if request.headers.get("X-Mux-User-Gesture") != "wsl-bridge-install":
-        return json_response(
-            {"error": "installing the bridge requires an explicit user action"}, 400
-        )
+        return json_response({"error": ui_message("system.a749651d39")}, 400)
     body = await request.json()
     distro = str(body.get("distro") or "").strip()
     if not distro:
-        return json_response({"error": "distro is required"}, 400)
+        return json_response({"error": ui_message("system.c7c2355dc9")}, 400)
     config: Config = request.app[keys.CONFIG]
     try:
         status = await asyncio.to_thread(install_wsl_bridge, distro)
     except WslBridgeError as exc:
-        return json_response({"ok": False, "reason": str(exc)}, 409)
+        return json_response({"ok": False, "reason": error_text(exc)}, 409)
     # The freshly written bridge invalidates whatever the status cache held.
     await asyncio.to_thread(clear_wsl_status_cache)
     del config
@@ -980,7 +955,7 @@ async def wsl_bridge_firewall_repair(request: web.Request) -> web.Response:
     """
     config: Config = request.app[keys.CONFIG]
     if request.headers.get("X-Mux-User-Gesture") != "wsl-firewall-repair":
-        return json_response({"error": "firewall repair requires an explicit user action"}, 400)
+        return json_response({"error": ui_message("system.ff64b474ff")}, 400)
     subnet = await asyncio.to_thread(wsl_adapter_subnet)
     result = await repair_wsl_firewall(config.port, subnet)
     return json_response(result, 200 if result.get("ok") else 409)

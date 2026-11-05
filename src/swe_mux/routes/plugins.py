@@ -8,6 +8,7 @@ from aiohttp import web
 
 from .. import app_keys as keys
 from ..plugins import PluginError
+from ..ui_messages import error_text
 from .support import _optional_json
 
 
@@ -26,7 +27,7 @@ def _failure(error: PluginError) -> web.Response:
         in {"approval_required", "source_conflict", "manifest_changed", "approval_stale"}
         else 400
     )
-    return web.json_response({"error": str(error), "code": error.code}, status=status)
+    return web.json_response({"error": error_text(error), "code": error.code}, status=status)
 
 
 async def plugin_list(request: web.Request) -> web.Response:

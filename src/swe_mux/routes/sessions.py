@@ -85,6 +85,7 @@ from ..spawn_contract import (
     resolve_spawn_model,
 )
 from ..transcript_view import conversation_is_readable
+from ..ui_messages import ui_message
 from . import terminal, voice
 from .support import _optional_json, refuse_agent_session_caller
 
@@ -292,7 +293,7 @@ async def _spawn_from_body(
     projects: ProjectManager = app[keys.PROJECTS]
     project_id = spec.project_id
     if project_id not in projects.projects:
-        raise ValueError(f"unknown project: {project_id}")
+        raise ValueError(ui_message("sessions.5b235e325f", value1=project_id))
     owning_project = projects.projects[project_id]
     config: Config = app[keys.CONFIG]
     seed_cwd = owning_project.root
@@ -321,7 +322,7 @@ async def _spawn_from_body(
         or config.default_backend
     )
     if spec.completion_mode == "one_shot" and backend != "shell":
-        raise ValueError("one-shot completion is available only for shell sessions")
+        raise ValueError(ui_message("sessions.0405670e9b"))
     # A spawn may target a subdirectory of its own project (a task that runs in
     # ./frontend); the containment check is here because this is the only layer
     # that knows which project owns the request.
@@ -406,18 +407,14 @@ async def _spawn_from_body(
         # not stop every session in the Project from starting, so it falls back
         # to no flag with a diagnostic, where an explicitly requested model
         # still refuses below.
-        default_model = str(
-            (project_values.get("default_agent_models") or {}).get(backend) or ""
-        )
+        default_model = str((project_values.get("default_agent_models") or {}).get(backend) or "")
         if default_model:
             try:
                 resolve_spawn_model(backend, default_model)
             except ValueError as exc:
                 detail = exc.args[0] if exc.args else str(exc)
                 message = (
-                    detail.get("model", str(detail))
-                    if isinstance(detail, dict)
-                    else str(detail)
+                    detail.get("model", str(detail)) if isinstance(detail, dict) else str(detail)
                 )
                 log.warning(
                     "project_default_model_unavailable project_id=%s backend=%s model=%s reason=%s",
@@ -579,18 +576,18 @@ async def patch_session(request: web.Request) -> web.Response:
         session.record.name = str(body["name"]).strip() or session.record.name
         session.record.auto_named = False
     if "project_id" in body or "project" in body:
-        raise ValueError("a session's owning project cannot be changed")
+        raise ValueError(ui_message("sessions.0042ae4c14"))
     if "pin" in body:
         session.record.pinned_attention = bool(body["pin"])
     if "voice_mode" in body:
         mode = body["voice_mode"]
         if mode is not None and mode not in {"off", "on_demand", "auto"}:
-            raise ValueError("voice_mode must be off, on_demand, auto, or null to inherit")
+            raise ValueError(ui_message("sessions.8c1da4540d"))
         session.record.voice_mode = mode
     if "voice_content" in body:
         content = body["voice_content"]
         if content is not None and content not in {"summary", "verbatim"}:
-            raise ValueError("voice_content must be summary, verbatim, or null to inherit")
+            raise ValueError(ui_message("sessions.5a2c817d83"))
         session.record.voice_content = content
     await request.app[keys.HISTORY].update_session_metadata(session.record)
     session.publish_update()
@@ -621,13 +618,13 @@ async def mark_session_read(request: web.Request) -> web.Response:
     session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     body = await request.json() if request.body_exists else {}
     if not isinstance(body, dict):
-        raise ValueError("body must be an object")
+        raise ValueError(ui_message("sessions.fe2741b182"))
     raw = body.get("turn_seq")
     if raw is not None and (not isinstance(raw, int) or isinstance(raw, bool) or raw < 0):
-        raise ValueError("turn_seq must be a non-negative integer")
+        raise ValueError(ui_message("sessions.c9925d8005"))
     read = body.get("read")
     if read is not None and not isinstance(read, bool):
-        raise ValueError("read must be a boolean")
+        raise ValueError(ui_message("sessions.28653553ff"))
     changed = (
         mark_unread(session.record)
         if read is False
@@ -658,11 +655,11 @@ async def regenerate_session_title(request: web.Request) -> web.Response:
     session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     record = session.record
     if not has_observable_transcript(record.backend) or not record.agent_run_id:
-        raise ValueError("title regeneration requires an active agent run")
+        raise ValueError(ui_message("sessions.64b4bb6a16"))
     if record.state in {"exited", "crashed"}:
-        raise ValueError("an ended session cannot regenerate its title")
+        raise ValueError(ui_message("sessions.b87823bae5"))
     if record.auto_named is False:
-        raise ValueError("a manually named session keeps its user title")
+        raise ValueError(ui_message("sessions.565e0b8df1"))
     await request.app[keys.EVENTS].emit(
         "title_regenerate_requested",
         session_id=record.id,
@@ -697,7 +694,7 @@ async def clear_session_standing_activity(request: web.Request) -> web.Response:
     kind = str((body or {}).get("kind") or "").strip()
     if kind:
         if kind not in get_args(StandingActivityKind):
-            raise ValueError(f"unknown standing-activity kind: {kind}")
+            raise ValueError(ui_message("sessions.0577780fcc", value1=kind))
         cleared = clear_standing_activity(
             session, cast(StandingActivityKind, kind), evidence="manual"
         )
@@ -812,7 +809,10 @@ async def put_session_approvals(request: web.Request) -> web.Response:
     mode = str((body or {}).get("mode") or "").strip()
     if mode not in APPROVAL_MODES:
         return json_response(
-            {"error": f"mode must be one of {', '.join(APPROVAL_MODES)}", "code": "invalid_mode"},
+            {
+                "error": ui_message("sessions.a9352886d4", value1=", ".join(APPROVAL_MODES)),
+                "code": "invalid_mode",
+            },
             400,
         )
     context = await _approval_context(request.app, session)
@@ -837,7 +837,7 @@ async def put_session_approvals(request: web.Request) -> web.Response:
         if mode == "allowlisted" and not context["rules"]:
             return json_response(
                 {
-                    "error": "this Project's approval allowlist is empty",
+                    "error": ui_message("sessions.40c9736781"),
                     "code": "empty_allowlist",
                 },
                 409,
@@ -875,7 +875,7 @@ async def approve_pending_request(request: web.Request) -> web.Response:
     current = voice._current_voice_approval(session)
     if current is None:
         return json_response(
-            {"error": "this session is not showing an approval", "code": "no_approval"}, 409
+            {"error": ui_message("sessions.dc1d9f7c1b"), "code": "no_approval"}, 409
         )
     operation, fingerprint = current
     expected = str((await _optional_json(request)).get("fingerprint") or "")
@@ -883,7 +883,7 @@ async def approve_pending_request(request: web.Request) -> web.Response:
         # The dialog changed between render and click. Answering the new one
         # would be approving something the operator never read.
         return json_response(
-            {"error": "the approval changed; re-read it", "code": "fingerprint_changed"}, 409
+            {"error": ui_message("sessions.75083b9671"), "code": "fingerprint_changed"}, 409
         )
     operator_input.record_operator_input(
         request.app[keys.EVENTS], session, "\r", source="approve-once"
@@ -963,10 +963,10 @@ async def stand_down_session(request: web.Request) -> web.Response:
     if session.record.inactive:
         return json_response(session.record.snapshot())
     if session.record.state in {"exited", "crashed"}:
-        raise ValueError("only a live session can be stood down")
+        raise ValueError(ui_message("sessions.9dd9e9eb18"))
     recovery: SessionRecoveryStore | None = request.app.get(keys.SESSION_RECOVERY)
     if recovery is None:
-        raise RuntimeError("the durable session registry is unavailable")
+        raise RuntimeError(ui_message("sessions.7edf68a0fa"))
     started = time.monotonic()
     session.record.inactive = True
     session.record.inactive_since = time.time()
@@ -1066,7 +1066,7 @@ async def _write_replacement_layout(
     for attempt in range(1, REPLACEMENT_LAYOUT_ATTEMPTS + 1):
         project = projects.projects.get(old.record.project_id)
         if project is None:
-            raise ValueError("the session's owning Project is unavailable")
+            raise ValueError(ui_message("sessions.1ee7ee553c"))
         current_layout = project.layout
         next_layout = (
             replace_terminal(current_layout, old.record.id, session.record.id)
@@ -1123,17 +1123,17 @@ async def resume_retained_session(request: web.Request) -> web.Response:
     manager: SessionManager = request.app[keys.SESSIONS]
     old = manager.resolve(request.match_info["sid"])
     if old.record.state not in {"exited", "crashed"}:
-        raise ValueError("only an ended session can be resumed")
+        raise ValueError(ui_message("sessions.cc8d22feac"))
     if old.record.backend == "shell" and not old.record.inactive:
-        raise ValueError("only an inactive shell can be restarted through resume")
+        raise ValueError(ui_message("sessions.983cad928c"))
     if old.record.project_id not in request.app[keys.PROJECTS].projects:
-        raise ValueError("the session's owning Project is unavailable")
+        raise ValueError(ui_message("sessions.1ee7ee553c"))
 
     source_run_id = old.record.agent_run_id or old.record.id
     outcome = None
     if old.record.backend == "shell":
         if not old.record.exe:
-            raise ValueError("the inactive terminal has no recorded command")
+            raise ValueError(ui_message("sessions.10315d35ce"))
         body: dict[str, Any] = {
             "project_id": old.record.project_id,
             "backend": "shell",
@@ -1151,7 +1151,7 @@ async def resume_retained_session(request: web.Request) -> web.Response:
     else:
         row = await request.app[keys.HISTORY].history_entry(source_run_id)
         if row is None:
-            raise ValueError("the inactive session's history row is unavailable")
+            raise ValueError(ui_message("sessions.c040292d64"))
         try:
             outcome = await resume_run(
                 row,
@@ -1173,9 +1173,7 @@ async def resume_retained_session(request: web.Request) -> web.Response:
         discard_media=True,
     )
     event_type = (
-        "session_resumed_from_inactive"
-        if old.record.inactive
-        else "session_resumed_from_ended"
+        "session_resumed_from_inactive" if old.record.inactive else "session_resumed_from_ended"
     )
     duration_ms = round((time.monotonic() - started) * 1000)
     await request.app[keys.EVENTS].emit(
@@ -1189,8 +1187,7 @@ async def resume_retained_session(request: web.Request) -> web.Response:
         duration_ms=duration_ms,
     )
     log.info(
-        "retained session resumed session_id=%s replaced=%s backend=%s recovered=%s "
-        "duration_ms=%d",
+        "retained session resumed session_id=%s replaced=%s backend=%s recovered=%s duration_ms=%d",
         session.record.id,
         old.record.id,
         session.record.backend,
@@ -1224,11 +1221,11 @@ async def relaunch_session(request: web.Request) -> web.Response:
     # The recovered-agent case first, so it gets its own answer rather than the
     # generic refusal: the operator asked for a way back and there is one.
     if old.record.cold and not cold_shell:
-        raise ValueError("a recovered agent session is resumed, not relaunched")
+        raise ValueError(ui_message("sessions.2884747508"))
     if not old.record.relaunchable and not cold_shell:
-        raise ValueError("session is not relaunchable")
+        raise ValueError(ui_message("sessions.2e2509d413"))
     if not old.record.exe:
-        raise ValueError("no recorded command to relaunch")
+        raise ValueError(ui_message("sessions.223f9935d8"))
     body = {
         "project_id": old.record.project_id,
         "backend": "shell",
@@ -1287,9 +1284,7 @@ async def _restart_facts(
     def readable() -> bool:
         # A store-backed harness has no path and answers from its store either way.
         paths = [path for path in candidates if path is not None] or [None]
-        return any(
-            conversation_is_readable(path, str(record.backend), native_id) for path in paths
-        )
+        return any(conversation_is_readable(path, str(record.backend), native_id) for path in paths)
 
     transcript_readable, hosts_daemon = await asyncio.gather(
         asyncio.to_thread(readable),
@@ -1393,7 +1388,7 @@ async def restart_session(request: web.Request) -> web.Response:
             {"error": payload["reason"], "session_id": old.record.id, **payload}, 409
         )
     if row is None:  # `history_unavailable` is an identity refusal, so this cannot pass
-        raise RuntimeError("restart permitted without the conversation's history row")
+        raise RuntimeError(ui_message("sessions.1daba668c7"))
     old.restart_in_progress = True
     try:
         return await _restart_in_place(
@@ -1454,10 +1449,7 @@ async def _restart_in_place(
             old,
             operation_id=operation_id,
             code="restart_settle_timeout",
-            message=(
-                "the agent exited but its teardown did not finish in time; the pane shows "
-                "the ended session, and Resume reopens the conversation"
-            ),
+            message=(ui_message("sessions.83dd7496f2")),
             status=503,
         )
     settled_at = time.monotonic()
@@ -1512,7 +1504,7 @@ async def _restart_in_place(
             old,
             operation_id=operation_id,
             code="restart_replace_failed",
-            message=f"the resumed agent could not take the pane's place: {exc}",
+            message=ui_message("sessions.e53a6d3d16", value1=exc),
             status=500 if unexpected else 409,
         )
     finished = time.monotonic()
@@ -1616,23 +1608,23 @@ async def _upload_session_attachment(
     session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     adapter: BackendAdapter = request.app[keys.SESSIONS].adapters[session.record.backend]
     if not is_agent_harness(session.record.backend):
-        raise ValueError("attachments are supported only in registered agent sessions")
+        raise ValueError(ui_message("sessions.587e0704c6"))
     if session.record.state in {"exited", "crashed"}:
-        raise ValueError("attachments cannot be added to an ended session")
+        raise ValueError(ui_message("sessions.236bc99e80"))
     project = request.app[keys.PROJECTS].projects.get(session.record.project_id)
     if project is None:
-        raise ValueError("the session's owning Project is unavailable")
+        raise ValueError(ui_message("sessions.1ee7ee553c"))
     workspace = await asyncio.to_thread(
         attachment_workspace_root,
         project.root,
         session.record.spawn_cwd or session.record.cwd,
     )
     if not request.content_type.startswith("multipart/"):
-        raise ValueError("attachment upload must use multipart form data")
+        raise ValueError(ui_message("sessions.84deeee80e"))
     reader = await request.multipart()
     part = await reader.next()
     if not isinstance(part, BodyPartReader) or part.name != "file":
-        raise ValueError("multipart field 'file' is required")
+        raise ValueError(ui_message("sessions.94bb1bc481"))
     media_type = str(part.headers.get("Content-Type", "")).split(";", 1)[0].lower()
     data = bytearray()
     max_bytes = MAX_IMAGE_BYTES if image_only else MAX_ATTACHMENT_BYTES
@@ -1640,9 +1632,9 @@ async def _upload_session_attachment(
         data.extend(chunk)
         if len(data) > max_bytes:
             limit = "10 MiB" if image_only else "25 MiB"
-            raise ValueError(f"attachment exceeds the {limit} limit")
+            raise ValueError(ui_message("sessions.2808ab6598", value1=limit))
     if await reader.next() is not None:
-        raise ValueError("exactly one multipart file is required")
+        raise ValueError(ui_message("sessions.6de66335ae"))
     filename = part.filename or "attachment"
     lock_key = (str(workspace), session.record.id)
     lock = request.app[keys.ATTACHMENT_LOCKS].setdefault(lock_key, asyncio.Lock())
@@ -1751,9 +1743,7 @@ ROUTES: tuple[web.RouteDef, ...] = (
     web.patch("/api/sessions/{sid}", patch_session),
     web.post("/api/sessions/{sid}/read", mark_session_read),
     web.post("/api/sessions/{sid}/title/regenerate", regenerate_session_title),
-    web.post(
-        "/api/sessions/{sid}/standing-activity/clear", clear_session_standing_activity
-    ),
+    web.post("/api/sessions/{sid}/standing-activity/clear", clear_session_standing_activity),
     web.get("/api/sessions/{sid}/approvals", get_session_approvals),
     web.put("/api/sessions/{sid}/approvals", put_session_approvals),
     web.post("/api/sessions/{sid}/approvals/approve-once", approve_pending_request),

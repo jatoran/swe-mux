@@ -1,3 +1,4 @@
+import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import type { ComponentChildren } from 'preact'
 import { useMemo, useState } from 'preact/hooks'
 import { api } from './api'
@@ -88,13 +89,13 @@ const presetsSeen=():boolean=>{try{return !!localStorage.getItem(PRESETS_SEEN_KE
 const markPresetsSeen=():void=>{try{localStorage.setItem(PRESETS_SEEN_KEY,'1')}catch{/* private mode */}}
 
 const PRESET_COPY:Record<string,{name:string;description:string;cost:string}>={
-  recommended:{name:'Free basics',description:'Model-free health checks over what agents actually did: stuck loops, unverified claims, change provenance, doc debt, code structure.',cost:'free - never calls a model'},
+  recommended:{get name() { return t("AutomationMatrix.b8c6da5ce1") },get description() { return t("AutomationMatrix.8073f1c533") },get cost() { return t("AutomationMatrix.24178ad37a") }},
   // "re-titles", not "titles": naming a pane is the built-in Session titler, an
   // install-wide switch under Automation that runs whatever a Project opted into.
   // Two features whose descriptions both said "titles" made this preset read as
   // the one that turns titling on, so declining it looked like declining titles.
-  llm:{name:'AI timeline',description:'A model keeps a readable play-by-play of every session: the scan timeline armed per run, sessions re-titled when their scope changes, attention narration.',cost:'costs money - bounded by the global budget'},
-  autonomy:{name:'Agent autonomy',description:'Agents may interrupt or end sessions and land finished branches through the queue; whatever still drafts gets its review surface.',cost:'free - each act is bounded and logged'},
+  llm:{get name() { return t("AutomationMatrix.3b4e815042") },get description() { return t("AutomationMatrix.1179328682") },get cost() { return t("AutomationMatrix.a75bba51df") }},
+  autonomy:{get name() { return t("AutomationMatrix.97b459a443") },get description() { return t("AutomationMatrix.0e4f0f641a") },get cost() { return t("AutomationMatrix.4c92f08601") }},
 }
 
 export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,llmReady,onError,onChanged}:{
@@ -133,14 +134,14 @@ export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,l
       <button type="button" class="project-setting-name"
         aria-expanded={open} aria-controls={`automation-about-${id}`}
         onClick={()=>toggleRow(id)}>
-        <span class="project-setting-mark" aria-hidden="true">{open?'▾':'▸'}</span>
+        <span class="project-setting-mark" aria-hidden="true">{open ? '▾' : '▸'}</span>
         {label}
       </button>
-      {open&&<p class="project-automation-deps" id={`automation-about-${id}`}>{description}</p>}
+      {open && <p class="project-automation-deps" id={`automation-about-${id}`}>{description}</p>}
     </>
   }
   const [presetsOpen,setPresetsOpen]=useState(()=>!presetsSeen())
-  const byId=useMemo(()=>new Map(data.automations.map(item=>[item.id,item])),[data.automations])
+  const byId=useMemo(()=>new Map(data.automations.map(item=>[item.id,item])), [data.automations, uiLocale.value, catalogRevision.value])
   const project=data.projects.find(item=>item.project_id===projectId)||data.projects[0]
 
   // The transitive dependency closure, walked client-side for the write path
@@ -300,7 +301,7 @@ export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,l
   const setTitleRefinements=(value:number|null)=>writeQualifier({title_refinements:value})
   const refinementsMax=data.title_refinements_max??5
   const refinementsDefault=data.title_refinements_default??2
-  const refinementOptions=Array.from({length:refinementsMax+1},(_,count)=>({value:String(count),label:count===0?'0 · name once':String(count)}))
+  const refinementOptions=Array.from({length:refinementsMax+1},(_,count)=>({value:String(count),label:count===0?t("AutomationMatrix.15220407dc"):String(count)}))
 
   const fleetCount=(id:string)=>data.projects.filter(row=>row.enabled.includes(id)).length
   const unverified=new Set(project?.unverified||[])
@@ -324,19 +325,19 @@ export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,l
   // family the daemon sends that is not named here is drawn last rather than lost.
   const groups:[string,string,AutomationRegistryEntry[]][]=useMemo(()=>{
     const known:[string,string,string][]=[
-      ['facts','Foundations','record facts, never act'],
-      ['checks','Deterministic checks','model-free reads over the recorded facts'],
-      ['titling','Titling','name a pane, then keep the name honest'],
-      ['attention','Attention','what needs you, and why'],
-      ['timeline','Reads the timeline','distillations of the scan timeline'],
-      ['capabilities','Capabilities','what agents and schedules may do'],
+      ['facts','Foundations',t("AutomationMatrix.e803912404")],
+      ['checks',t("AutomationMatrix.e85b50ed08"),t("AutomationMatrix.56ff2be850")],
+      ['titling','Titling',t("AutomationMatrix.e28ea9f8e4")],
+      ['attention','Attention',t("AutomationMatrix.626401ffdd")],
+      ['timeline',t("AutomationMatrix.7b22ee2aa6"),t("AutomationMatrix.4bfbd85d1d")],
+      ['capabilities','Capabilities',t("AutomationMatrix.ba33ebf9d9")],
     ]
     const named=new Set(known.map(([family])=>family))
     const rows=known.map(([family,title,hint]):[string,string,AutomationRegistryEntry[]]=>
       [title,hint,data.automations.filter(item=>(item.family||'capabilities')===family)])
     const extra=data.automations.filter(item=>item.family&&!named.has(item.family))
     return extra.length?[...rows,['Other','',extra]]:rows
-  },[data.automations])
+  }, [data.automations, uiLocale.value, catalogRevision.value])
 
   const depth=(item:AutomationRegistryEntry):number=>{
     let level=0
@@ -409,43 +410,43 @@ export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,l
       <div class="automation-matrix-name" style={`--depth:${depth(item)}`}>
         {nameCell(item.id,<>
           <b>{item.label}</b>
-          {item.spends&&<em class="project-setting-chip spends">spends</em>}
-          {item.default_on&&<em class="project-setting-chip">on by default</em>}
-          {!item.implemented&&<em class="project-setting-chip">not built yet</em>}
+          {item.spends && <em class="project-setting-chip spends">{t("AutomationMatrix.1e59927704")}</em>}
+          {item.default_on && <em class="project-setting-chip">{t("AutomationMatrix.f8c10ded8f")}</em>}
+          {!item.implemented && <em class="project-setting-chip">{t("AutomationMatrix.f9fd7b9b0c")}</em>}
         </>,item.description||'')}
         {/* The permission is real and the thing it permits has no model to call;
             a row that showed only a tick would be a silent downstream failure.
             The daemon's sentence is rendered verbatim - it distinguishes
             never-verified from edited-since-verified, and a paraphrase would
             collapse the two. */}
-        {unverified.has(item.id)&&<p class="project-automation-deps">
-          <strong>On, and waiting on a model provider.</strong>{' '}
+        {unverified.has(item.id) && <p class="project-automation-deps">
+          <strong>{t("AutomationMatrix.afea9e374a")}</strong>{' '}
           {project?.llm?.reason}{' '}
-          <SettingLink target="accounts.llmProvider" variant="link">Choose or verify one</SettingLink>
+          <SettingLink target="accounts.llmProvider" variant="link">{t("AutomationMatrix.ffa2083f28")}</SettingLink>
         </p>}
       </div>
       <div class="automation-matrix-cell automation-authority-global">
-        <label class="check" title="What a Project that has not decided inherits">
+        <label class="check" title={t("AutomationMatrix.3dc0015cad")}>
           <input type="checkbox" disabled={busy||ceilingOff||upstreamBlocked(item)} checked={inherited&&!ceilingOff}
             onChange={()=>toggleDefault(item)}/>
-          <span>default</span>
+          <span>{t("AutomationMatrix.37a8eec1ce")}</span>
         </label>
         <div class="automation-authority-meta">
-          <label class="check" data-setting={item.install_switch||undefined} title="Off in every Project, whatever its file says">
+          <label class="check" data-setting={item.install_switch||undefined} title={t("AutomationMatrix.940120f229")}>
             <input type="checkbox" disabled={busy||upstreamBlocked(item)} checked={ceilingLocked}
               onChange={()=>toggleCeiling(item)}/>
-            <span>off everywhere</span>
+            <span>{t("AutomationMatrix.6a5b550c05")}</span>
           </label>
           <small>{reach}</small>
         </div>
       </div>
       <div class="automation-matrix-cell" data-setting={automationSetting(item.id)}>
-        <Dropdown ariaLabel={`${item.label} in this Project`} value={own==='inherit'?'':own}
+        <Dropdown ariaLabel={t("AutomationMatrix.1179160918", { value1: item.label })} value={own==='inherit'?'':own}
           disabled={busy||ceilingOff||!project||project.status==='read-only'}
           options={[
-            {value:'',label:`Follow global (${inherited?'on':'off'})`},
-            {value:'on',label:'On'},
-            {value:'off',label:'Off'},
+            {value:'',get label() { return t("AutomationMatrix.e22c3dcfd5", { value1: (inherited) ? 'yes' : 'no' }) }},
+            {value:'on',get label() { return t("AutomationMatrix.1300117561") }},
+            {value:'off',get label() { return t("AutomationMatrix.ca7981b46e") }},
           ]}
           onChange={value=>setProjectState(item,(value||'inherit') as 'inherit'|'on'|'off')}/>
       </div>
@@ -458,44 +459,39 @@ export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,l
       <label class="check automation-master-switch" data-setting="automation_enabled">
         <input type="checkbox" disabled={saving} checked={data.install_switches.automation_enabled}
           onChange={()=>void patchConfig({automation_enabled:!data.install_switches.automation_enabled})}/>
-        <strong>Global Automation</strong>
+        <strong>{t("AutomationMatrix.993cb28abd")}</strong>
       </label>
-      <button class="automation-preset-toggle" onClick={()=>setPresetsOpen(open=>!open)}>{presetsOpen?'Choose preset ▴':'Choose preset ▾'}</button>
+      <button class="automation-preset-toggle" onClick={()=>setPresetsOpen(open=>!open)}>{presetsOpen ? t("AutomationMatrix.c260bcd78e") : t("AutomationMatrix.4091150ce2")}</button>
       <div class="automation-project-toolbar">
-        <label>Project<Dropdown value={project?.project_id||''} onChange={onSelectProject} filter filterPlaceholder="Filter Projects…" options={projectDropdownOptions(data.projects,item=>({value:item.project_id,label:item.project_name}))}/></label>
+        <label>{rich("AutomationMatrix.5d3d71aabe", { value1: <Dropdown value={project?.project_id||''} onChange={onSelectProject} filter filterPlaceholder={t("AutomationMatrix.2e0060c45e")} options={projectDropdownOptions(data.projects,item=>({value:item.project_id,label:item.project_name}))}/> })}</label>
       </div>
     </div>
-    {presetsOpen&&<section class="usage-table automation-presets">
-      <h3>{presetsSeen()?`Presets for ${project?.project_name||'this Project'}`:`Welcome - pick a starting point for ${project?.project_name||'this Project'}`}</h3>
-      <p>Each bundle is one decision, dependencies included; any single switch below can be changed afterwards.</p>
+    {presetsOpen && <section class="usage-table automation-presets">
+      <h3>{presetsSeen() ? t("AutomationMatrix.cf04a28928", { value1: project?.project_name||t("AutomationMatrix.475ef7961e") }) : t("AutomationMatrix.93c524aa9d", { value1: project?.project_name||t("AutomationMatrix.475ef7961e") })}</h3>
+      <p>{t("AutomationMatrix.3df0faf656")}</p>
       <div class="automation-preset-cards">
         {(['recommended','llm','autonomy'] as const).map(setName=>{
           const copy=PRESET_COPY[setName]
           const state=presetState(setName)
           const blocked=presetBlocked(setName)
           return <article class={`automation-preset ${state}`} key={setName}>
-            <header><h4>{copy.name}</h4><span class="automation-pill">{state==='on'?'on':state==='partial'?'partial':'off'}</span></header>
+            <header><h4>{copy.name}</h4><span class="automation-pill">{state==='on' ? t("AutomationMatrix.b8d31e8527") : state==='partial' ? t("AutomationMatrix.9834a14ab9") : t("AutomationMatrix.b4dc66dde8")}</span></header>
             <p>{copy.description}</p>
-            <small>{copy.cost}{setName==='llm'&&llmReady===false?' · no verified model provider yet':''}</small>
-            {blocked&&<small class="automation-preset-blocked">Blocked: part of this set is disabled install-wide.</small>}
-            <button disabled={saving||!catalog||!project||blocked} onClick={()=>void applyPreset(setName)}>{state==='on'?'Turn off':'Turn on'}</button>
+            <small>{copy.cost}{setName==='llm'&&llmReady===false ? t("AutomationMatrix.fbda60f1b5") : ''}</small>
+            {blocked && <small class="automation-preset-blocked">{t("AutomationMatrix.5e729ed974")}</small>}
+            <button disabled={saving||!catalog||!project||blocked} onClick={()=>void applyPreset(setName)}>{state==='on' ? t("AutomationMatrix.06f0e210b2") : t("AutomationMatrix.5a1f096a0d")}</button>
           </article>
         })}
       </div>
-      <button class="automation-preset-dismiss" onClick={()=>{markPresetsSeen();setPresetsOpen(false)}}>{presetsSeen()?'close':"skip, I'll use the switches below"}</button>
+      <button class="automation-preset-dismiss" onClick={()=>{markPresetsSeen();setPresetsOpen(false)}}>{presetsSeen() ? t("AutomationMatrix.310ff20014") : t("AutomationMatrix.1d124b1670")}</button>
     </section>}
-    <p class="automation-matrix-legend">
-      <b>default</b> = what a Project that has not decided inherits · <b>off everywhere</b> = the ceiling, whatever a Project's file says ·
-      <b>{project?.project_name||'Project'}</b> = this Project's own answer, or <i>Follow global</i> to keep inheriting ·
-      a greyed Project control is blocked by the ceiling and keeps the Project's own choice ·
-      <em class="project-setting-chip spends">spends</em> = uses a paid model
-    </p>
-    <div class="automation-matrix-grid" role="table" aria-label="Automation policy matrix" data-setting="automation_global_allow">
+    <p class="automation-matrix-legend">{rich("AutomationMatrix.9b00036198", { value1: <b>{t("AutomationMatrix.37a8eec1ce")}</b>, value2: <b>{t("AutomationMatrix.6a5b550c05")}</b>, value3: <b>{project?.project_name || t("AutomationMatrix.9859597853")}</b>, value4: <i>{t("AutomationMatrix.1f812f7e7b")}</i>, value5: <em class="project-setting-chip spends">{t("AutomationMatrix.1e59927704")}</em> })}</p>
+    <div class="automation-matrix-grid" role="table" aria-label={t("AutomationMatrix.960c1842d4")} data-setting="automation_global_allow">
       {/* The Default column has no single control to mark - it is one checkbox per
           row - so the column header is its anchor, which is also the right place
           for a deep link to land: the whole column is the answer to "where do new
           Projects get this from". */}
-      <div class="automation-matrix-head" role="row" data-setting="automations"><span>automation</span><span data-setting="automation_project_defaults">global</span><span>{project?.project_name||'project'}</span><span>projects on</span></div>
+      <div class="automation-matrix-head" role="row" data-setting="automations"><span>{t("AutomationMatrix.6d65ed5c75")}</span><span data-setting="automation_project_defaults">{t("AutomationMatrix.8001c27439")}</span><span>{project?.project_name || t("AutomationMatrix.244210e484")}</span><span>{t("AutomationMatrix.fdd6eaad7f")}</span></div>
       {groups.map(([title,hint,items])=>items.length?<div key={title}>
         <h5 class="project-automation-group">{title}<span>{hint}</span></h5>
         {items.map(item=>[
@@ -507,32 +503,32 @@ export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,l
             {/* The deep-link mark sits on the name cell rather than on the label
                 itself, so a reveal scrolls to and flashes the whole row name. */}
             <div class="automation-matrix-name" style="--depth:1" data-setting="title_refinements">
-              {nameCell('title_refinements','Title refinements','How many times a provisional title may be revised after the first, while the work is still taking shape. 0 names a pane once and never revises it.')}
+              {nameCell('title_refinements',t("AutomationMatrix.5e0d71209a"),t("AutomationMatrix.13bc0e0548"))}
             </div>
             <div class="automation-matrix-cell automation-authority-global">
-              <label class="check" data-setting="title_refinements_default" title="What a Project that has not decided inherits">
-                <Dropdown ariaLabel="Default title refinements" value={String(refinementsDefault)} disabled={saving}
+              <label class="check" data-setting="title_refinements_default" title={t("AutomationMatrix.3dc0015cad")}>
+                <Dropdown ariaLabel={t("AutomationMatrix.368ec2a9d2")} value={String(refinementsDefault)} disabled={saving}
                   options={refinementOptions}
                   onChange={value=>void patchConfig({title_refinements_default:Number(value)})}/>
-                <span>default</span>
+                <span>{t("AutomationMatrix.37a8eec1ce")}</span>
               </label>
               <div class="automation-authority-meta">
-                <small>{data.projects.filter(row=>row.title_refinements_own==null).length} inherit</small>
+                <small>{rich("AutomationMatrix.3eaa0f403a", { length: data.projects.filter(row=>row.title_refinements_own==null).length })}</small>
               </div>
             </div>
             <div class="automation-matrix-cell">
-              <Dropdown ariaLabel="Title refinements in this Project"
+              <Dropdown ariaLabel={t("AutomationMatrix.dd1b9d1e48")}
                 value={project.title_refinements_own==null?'':String(project.title_refinements_own)}
                 disabled={saving||!requestedOn(item)||globallyDisabled.has('session_titler')}
-                options={[{value:'',label:`Follow global (${refinementsDefault})`},...refinementOptions]}
+                options={[{value:'',get label() { return t("AutomationMatrix.1b9916280a", { refinementsDefault: refinementsDefault }) }},...refinementOptions]}
                 onChange={value=>setTitleRefinements(value===''?null:Number(value))}/>
             </div>
-            <span class="automation-matrix-fleet">{data.projects.filter(row=>row.title_refinements_own!=null).length} custom</span>
+            <span class="automation-matrix-fleet">{rich("AutomationMatrix.fd1cf3b889", { length: data.projects.filter(row=>row.title_refinements_own!=null).length })}</span>
           </div>:null,
         ])}
-        {title==='Foundations'&&project&&<div class={`automation-matrix-row${requestedOn(byId.get('scan_timeline')||({} as never))?'':' globally-off'}`}>
+        {title==='Foundations'&&project && <div class={`automation-matrix-row${requestedOn(byId.get('scan_timeline')||({} as never))?'':' globally-off'}`}>
           <div class="automation-matrix-name" style="--depth:3" data-setting="scan_timeline_auto_enable">
-            {nameCell('scan_timeline_auto_enable','Arm every new conversation','Off, each conversation starts unscanned and is armed from its Timeline tab. On, a new conversation arms itself on its first turn.')}
+            {nameCell('scan_timeline_auto_enable',t("AutomationMatrix.ae2454b096"),t("AutomationMatrix.fb63e89d2a"))}
           </div>
           {/* The one Project field that qualifies an opt-in rather than being
               one, so it gets the same two scopes as the rows above: an install
@@ -540,23 +536,23 @@ export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,l
               into every Project the creation form armed, which is exactly why
               an operator could not change their mind about it in one place. */}
           <div class="automation-matrix-cell automation-authority-global">
-            <label class="check" data-setting="scan_timeline_auto_enable_default" title="What a Project that has not decided inherits">
+            <label class="check" data-setting="scan_timeline_auto_enable_default" title={t("AutomationMatrix.3dc0015cad")}>
               <input type="checkbox" disabled={saving} checked={!!data.scan_timeline_auto_enable_default}
                 onChange={event=>void patchConfig({scan_timeline_auto_enable_default:event.currentTarget.checked})}/>
-              <span>default</span>
+              <span>{t("AutomationMatrix.37a8eec1ce")}</span>
             </label>
             <div class="automation-authority-meta">
-              <small>{data.projects.filter(row=>row.scan_timeline_auto_enable_own==null).length} inherit</small>
+              <small>{rich("AutomationMatrix.3eaa0f403a", { length: data.projects.filter(row=>row.scan_timeline_auto_enable_own==null).length })}</small>
             </div>
           </div>
           <div class="automation-matrix-cell">
-            <Dropdown ariaLabel="Arm every new conversation in this Project"
+            <Dropdown ariaLabel={t("AutomationMatrix.93104f376c")}
               value={project.scan_timeline_auto_enable_own==null?'':project.scan_timeline_auto_enable_own?'on':'off'}
               disabled={saving||!requestedOn(byId.get('scan_timeline')||({} as never))||globallyDisabled.has('scan_timeline')}
               options={[
-                {value:'',label:`Follow global (${data.scan_timeline_auto_enable_default?'on':'off'})`},
-                {value:'on',label:'On'},
-                {value:'off',label:'Off'},
+                {value:'',get label() { return t("AutomationMatrix.e22c3dcfd5", { value1: (data.scan_timeline_auto_enable_default) ? 'yes' : 'no' }) }},
+                {value:'on',get label() { return t("AutomationMatrix.1300117561") }},
+                {value:'off',get label() { return t("AutomationMatrix.ca7981b46e") }},
               ]}
               onChange={value=>setAutoArm(value===''?null:value==='on')}/>
           </div>
@@ -571,7 +567,6 @@ export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,l
     {/* Project-wide, scan-scoped, and meaningless without the permission above
         it - so it renders here beside the switch rather than in the
         session-scoped Timeline tab or the general Projects registry. */}
-    {project&&requestedOn(byId.get('scan_timeline')||({} as never))&&!globallyDisabled.has('scan_timeline')&&
-      <ProjectContextEditor projectId={project.project_id} busy={saving} onError={onError}/>}
+    {project&&requestedOn(byId.get('scan_timeline')||({} as never))&&!globallyDisabled.has('scan_timeline') && <ProjectContextEditor projectId={project.project_id} busy={saving} onError={onError}/>}
   </div>
 }

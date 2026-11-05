@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // Pure helpers behind the drawer's Git tab.
 //
 // Two independent facts are joined here, because neither is enough on its own:
@@ -500,8 +501,8 @@ export function groupProvenance(raw: unknown): ProvenanceGroup[] {
 /** How many sessions merely had the checkout open, said once instead of N times. */
 export function occupancyLabel(group: ProvenanceGroup): string {
   const count = group.observers.length
-  if (count === 1) return '1 session had this checkout open'
-  return `${count} sessions had this checkout open`
+  if (count === 1) return t("gitWorktrees.6349c28827")
+  return t("gitWorktrees.8938fc811a", { count: count })
 }
 
 /**
@@ -513,18 +514,18 @@ export function occupancyLabel(group: ProvenanceGroup): string {
  * the commit that carries its work.
  */
 export function provenanceRoleLabel(item: GitProvenance): string {
-  if (item.role === 'committer') return item.relationship === 'rewrote' ? 'amended' : 'committed'
+  if (item.role === 'committer') return item.relationship === 'rewrote' ? t("gitWorktrees.8c90591451") : t("gitWorktrees.cc962289af")
   if (item.role === 'integrator') {
     const count = item.contributedPaths.length
-    if (!count) return 'merged it'
-    return count === 1 ? 'merged it, resolving 1 file' : `merged it, resolving ${count} files`
+    if (!count) return t("gitWorktrees.2ca0c1fb8e")
+    return count === 1 ? t("gitWorktrees.d96ca75043") : t("gitWorktrees.474e1133e6", { value1: count })
   }
-  if (item.role === 'branch_author') return 'wrote the branch it merges'
+  if (item.role === 'branch_author') return t("gitWorktrees.023c1b58f3")
   if (item.role === 'contributor') {
     const count = item.contributedPaths.length
-    return count === 1 ? 'wrote 1 file in it' : `wrote ${count} files in it`
+    return count === 1 ? t("gitWorktrees.07c7af9be3") : t("gitWorktrees.b3ba009692", { value1: count })
   }
-  return 'was in the checkout when it appeared'
+  return t("gitWorktrees.49f3f16009")
 }
 
 /**
@@ -539,19 +540,19 @@ export function refMoveLabel(move: GitRefMove): string {
   const count = move.commitCount === 1 ? '1 commit' : `${move.commitCount} commits`
   switch (move.kind) {
     case 'fast_forward':
-      return `fast-forwarded onto ${count} written elsewhere`
+      return t("gitWorktrees.4562eef237", { count: count })
     case 'merged':
-      return `merged, creating 1 commit over ${count}`
+      return t("gitWorktrees.7f31008084", { count: count })
     case 'created':
       return move.authoredCount === move.commitCount
-        ? `gained ${count} written here`
-        : `gained ${count}, ${move.authoredCount} written here`
+        ? t("gitWorktrees.39e7b1e73a", { value1: count })
+        : t("gitWorktrees.b5d98e0acf", { value1: count, value2: move.authoredCount })
     case 'rebased':
-      return `rewritten, replaying ${count}`
+      return t("gitWorktrees.b235f19b38", { count: count })
     case 'reset':
-      return `moved back onto ${count} that already existed`
+      return t("gitWorktrees.80811a0f07", { count: count })
     default:
-      return `moved by ${count} git could not place`
+      return t("gitWorktrees.7f284e2623", { count: count })
   }
 }
 
@@ -567,9 +568,9 @@ export function refMoveLabel(move: GitRefMove): string {
 export function provenanceAmbiguityNote(item: GitProvenance): string {
   if (!item.ambiguous) return ''
   if (item.matchMethod === 'command_ambiguous') {
-    return 'Another commit landed in the same window and neither its message nor its time tells them apart.'
+    return t("gitWorktrees.07fa0295f6")
   }
-  return 'swe-mux did not observe enough to name one session for this commit.'
+  return t("gitWorktrees.9ecc117eba")
 }
 
 /** Compact porcelain/name-status code for a narrow file list. */
@@ -577,8 +578,8 @@ export function changeStatusLabel(status: string): string {
   if (status === '??') return '?'
   const code = status.replace(/[\s.]/g, '')
   if (!code) return '·'
-  if (code.startsWith('R')) return 'R'
-  if (code.startsWith('C')) return 'C'
+  if (code.startsWith('R')) return t("gitWorktrees.8c25748920")
+  if (code.startsWith('C')) return t("gitWorktrees.6b23c0d5f3")
   return [...new Set(code)].join('')
 }
 
@@ -638,7 +639,7 @@ export function branchRows(worktrees: Worktree[], sessions: SessionGit[]): Branc
     if (existing) { existing.worktrees.push(item); continue }
     rows.set(key, {
       key,
-      label: item.branch || (item.bare ? '(bare)' : `detached @ ${shortSha(item.head) || 'unknown'}`),
+      label: item.branch || (item.bare ? t("gitWorktrees.8a79d9c471") : t("gitWorktrees.df543b0946", { value1: shortSha(item.head) || t("gitWorktrees.b23a6a8439") })),
       detached: item.detached && !item.branch,
       worktrees: [item],
       sessions: [],
@@ -807,28 +808,28 @@ export function graphDecorations(
     head:0,comparison:1,'worktree-ref':2,tag:3,'other-ref':4,'main-tree':5,'worktree-tip':6,
   }
   const refs=line.refs.map((ref):GitGraphDecoration=>{
-    if(ref==='HEAD')return {kind:'head',label:'HEAD',title:'Project root HEAD'}
-    if(comparisonNames.has(ref))return {kind:'comparison',label:ref,title:`Comparison ref ${ref}`}
+    if(ref==='HEAD')return {kind:'head',get label() { return t("gitWorktrees.b518022316") },get title() { return t("gitWorktrees.6d16714114") }}
+    if(comparisonNames.has(ref))return {kind:'comparison',label:ref,get title() { return t("gitWorktrees.be9a2e746c", { ref: ref }) }}
     const checkedOut=worktreeBranches.get(ref)
     if(checkedOut?.length){
       const names=checkedOut.map(tree=>pathTail(tree.path)).join(', ')
-      return {kind:'worktree-ref',label:ref,title:`Checked out in ${names}`}
+      return {kind:'worktree-ref',label:ref,get title() { return t("gitWorktrees.e2d5d9d5ae", { names: names }) }}
     }
-    if(ref.startsWith('tag: '))return {kind:'tag',label:ref.slice(5),title:`Tag ${ref.slice(5)}`}
-    return {kind:'other-ref',label:ref,title:`Git ref ${ref}`}
+    if(ref.startsWith('tag: '))return {kind:'tag',label:ref.slice(5),get title() { return t("gitWorktrees.bb8489214f", { value1: ref.slice(5) }) }}
+    return {kind:'other-ref',label:ref,get title() { return t("gitWorktrees.249485752c", { ref: ref }) }}
   }).sort((left,right)=>rank[left.kind]-rank[right.kind])
   if(tips.some(tree=>tree.main)){
-    refs.push({kind:'main-tree',label:'MAIN TREE',title:'The Project root checkout points at this commit'})
+    refs.push({kind:'main-tree',get label() { return t("gitWorktrees.694b4a0a9f") },get title() { return t("gitWorktrees.f4f7b00210") }})
   }
   if(linked.length===1){
     const tree=linked[0]
     refs.push({
-      kind:'worktree-tip',label:`WT ${pathTail(tree.path)}`,
-      title:`Linked worktree ${tree.path}${tree.branch?` on ${tree.branch}`:' in detached HEAD'}`,
+      kind:'worktree-tip',get label() { return t("gitWorktrees.8ab7554eeb", { value1: pathTail(tree.path) }) },
+      get title() { return t("gitWorktrees.1b3077a629", { path: tree.path, value2: tree.branch?` on ${tree.branch}`:t("gitWorktrees.7bec351796") }) },
     })
   }else if(linked.length>1){
     refs.push({
-      kind:'worktree-tip',label:`${linked.length} WORKTREES`,
+      kind:'worktree-tip',get label() { return t("gitWorktrees.8a9d328514", { length: linked.length }) },
       title:linked.map(tree=>`${pathTail(tree.path)}${tree.branch?` on ${tree.branch}`:' (detached)'}`).join('\n'),
     })
   }
@@ -990,14 +991,14 @@ export function parsePatchSnapshot(value:unknown):GitPatchSnapshot|null {
 }
 
 export function comparisonSourceLabel(comparison:GitComparison):string {
-  if(!comparison.available)return comparison.reason||'No comparison ref could be inferred.'
-  const source={project_override:'Project override',origin_head:'origin default',single_remote_head:'remote default',local_fallback:'local fallback',none:'Auto'}[comparison.source]
-  return `${source}: ${comparison.display||comparison.ref}`
+  if(!comparison.available)return comparison.reason||t("gitWorktrees.dd0eb2f625")
+  const source={get project_override() { return t("gitWorktrees.80d4d03ae3") },get origin_head() { return t("gitWorktrees.b30e06a3ac") },get single_remote_head() { return t("gitWorktrees.12df41163b") },get local_fallback() { return t("gitWorktrees.b48ce90f0b") },none:'Auto'}[comparison.source]
+  return t("gitWorktrees.b360567cb8", { source: source, value2: comparison.display||comparison.ref })
 }
 
 export function fileStatLabel(file:Pick<ReviewFileChange,'binary'|'submodule'|'additions'|'deletions'>):string {
-  if(file.submodule)return 'submodule'
-  if(file.binary)return 'binary'
-  if(file.additions===null||file.deletions===null)return 'unmeasured'
-  return `+${file.additions} -${file.deletions}`
+  if(file.submodule)return t("gitWorktrees.d8566c566c")
+  if(file.binary)return t("gitWorktrees.9a3a45d015")
+  if(file.additions===null||file.deletions===null)return t("gitWorktrees.e3bebb4113")
+  return t("gitWorktrees.191350c44d", { additions: file.additions, deletions: file.deletions })
 }

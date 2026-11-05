@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // The History results list's shape: which Project heading each conversation sits under,
 // what order the headings come in, and how long the search box waits before asking.
 //
@@ -57,7 +58,7 @@ export function groupHistoryFeed<T extends HistoryFeedEntry>(
     const configured = projects.find(item => item.id === key)
     const baseLabel = known?.label || configured?.name || entry.project_label || 'Unassigned'
     const group = groups.get(key)
-      || { label: known?.removed_at ? `${baseLabel} (removed)` : baseLabel, entries: [] }
+      || { label: known?.removed_at ? t("historyFeed.24175a4c16", { value1: baseLabel }) : baseLabel, entries: [] }
     group.entries.push(entry)
     groups.set(key, group)
   }

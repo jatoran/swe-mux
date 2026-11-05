@@ -1,3 +1,4 @@
+import { rich, t } from './localization/index.ts'
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import {
   announceAction, applyAssistantEvent, ASSISTANT_DIALOG_RESET_EVENT, cancelAction, confirmAction,
@@ -41,7 +42,7 @@ export function AssistantPanel({
   speechEnabled,
   voiceActive,
   pendingSpeech = '',
-  pendingSpeechNote = 'holding — say “go ahead” to send',
+  pendingSpeechNote = t("AssistantPanel.752346c544"),
   variant = 'full',
   onOpenActions,
   onReply,
@@ -340,13 +341,13 @@ export function AssistantPanel({
   if (variant === 'hidden') return <div class="assistant-panel hidden-variant" hidden />
   if (!enabled) {
     return variant === 'peek'
-      ? <div class="assistant-panel peek disabled"><p>The assistant is off.</p></div>
+      ? <div class="assistant-panel peek disabled"><p>{t("AssistantPanel.91ce0220f0")}</p></div>
       : <div class="assistant-panel disabled">
         {/* The switch is named by the target registry rather than by a sentence. This
             state used to read "Enable it in Settings → Assistant", a tab that does not
             exist, so the reader who most needed the switch was the one sent nowhere.
             `SettingLink` opens the panel, scrolls to the control and flashes it. */}
-        <p>The assistant is off, so it cannot answer questions or act on the fleet.</p>
+        <p>{t("AssistantPanel.ceb08f579d")}</p>
         <SettingLink target="assistant.enable" />
       </div>
   }
@@ -358,14 +359,10 @@ export function AssistantPanel({
     const latest = messages[messages.length - 1]
     return <div class="assistant-panel peek">
       {error && <p class="assistant-error" role="alert">{error}</p>}
-      {thinking
-        ? <p class="assistant-thinking">{thinking}</p>
-        : latest
-          ? <p class="assistant-peek-line" title={latest.status === 'failed' ? (latest.error || 'The turn failed.') : latest.display}>
-            <b>{latest.role === 'user' ? 'you' : latest.role === 'action' ? 'done' : 'mux'}</b>
-            <span>{latest.status === 'failed' ? (latest.error || 'The turn failed.') : latest.display}</span>
-          </p>
-          : <p class="assistant-peek-line empty"><span>No conversation yet — expand to start one.</span></p>}
+      {thinking ? <p class="assistant-thinking">{thinking}</p> : latest ? <p class="assistant-peek-line" title={latest.status === 'failed' ? (latest.error || t("AssistantPanel.9d9229252a")) : latest.display}>
+            <b>{latest.role === 'user' ? t("AssistantPanel.bb0347a468") : latest.role === 'action' ? t("AssistantPanel.a4c3ed04a9") : t("AssistantPanel.99830b20a9")}</b>
+            <span>{latest.status === 'failed' ? (latest.error || t("AssistantPanel.9d9229252a")) : latest.display}</span>
+          </p> : <p class="assistant-peek-line empty"><span>{t("AssistantPanel.9e85f1e9a7")}</span></p>}
       {openActions.map(action => <AssistantActionCard key={action.id} action={action} />)}
     </div>
   }
@@ -376,19 +373,15 @@ export function AssistantPanel({
         open={previousOpen}
         onToggle={event => setPreviousOpen(event.currentTarget.open)}
       >
-        <summary>
-          previous conversation · {previousMessages.length} message{previousMessages.length === 1 ? '' : 's'} · kept, not deleted
-        </summary>
+        <summary>{rich("AssistantPanel.a4d388c82f", { length: previousMessages.length, value2: (previousMessages.length === 1) ? 'yes' : 'no' })}</summary>
         {previousMessages.map(message => message.role === 'action'
           ? <p key={`previous-${message.id}`} class={`assistant-record ${message.status}`}>{message.display}</p>
           : <article key={`previous-${message.id}`} class={`assistant-message ${message.role}`}>
-            <header>{message.role === 'user' ? 'you' : 'mux'}</header>
-            <p>{message.status === 'failed' ? (message.error || 'The turn failed.') : message.display}</p>
+            <header>{message.role === 'user' ? t("AssistantPanel.bb0347a468") : t("AssistantPanel.99830b20a9")}</header>
+            <p>{message.status === 'failed' ? (message.error || t("AssistantPanel.9d9229252a")) : message.display}</p>
           </article>)}
       </details>}
-      {messages.length === 0 && !thinking && <p class="assistant-empty">
-        Ask about the fleet, queue or reword messages, spawn sessions, or navigate — in plain language.
-      </p>}
+      {messages.length === 0 && !thinking && <p class="assistant-empty">{t("AssistantPanel.95f192625e")}</p>}
       {messages.map(message => message.role === 'action'
         // A resolved card, in the position it resolved in. Its own row rather
         // than a bubble, because it is neither party speaking: it is the record
@@ -396,11 +389,11 @@ export function AssistantPanel({
         // drop the instant the card stopped being open.
         ? <p key={message.id} class={`assistant-record ${message.status}`}>{message.display}</p>
         : <article key={message.id} class={`assistant-message ${message.role}${message.status === 'failed' ? ' failed' : ''}`}>
-          <header>{message.role === 'user' ? 'you' : 'mux'}</header>
-          <p>{message.status === 'failed' ? (message.error || 'The turn failed.') : message.display}</p>
+          <header>{message.role === 'user' ? t("AssistantPanel.bb0347a468") : t("AssistantPanel.99830b20a9")}</header>
+          <p>{message.status === 'failed' ? (message.error || t("AssistantPanel.9d9229252a")) : message.display}</p>
         </article>)}
       {pendingSpeech.trim() && <article class="assistant-message user assistant-pending-speech">
-        <header>you · {pendingSpeechNote}</header>
+        <header>{rich("AssistantPanel.047e73f0af", { pendingSpeechNote: pendingSpeechNote })}</header>
         <p>{pendingSpeech}</p>
       </article>}
       {thinking && <p class="assistant-thinking">{thinking}</p>}
@@ -412,17 +405,15 @@ export function AssistantPanel({
         class="assistant-input"
         value={input}
         rows={1}
-        placeholder="Message the assistant… (Enter to send)"
+        placeholder={t("AssistantPanel.1f8414212b")}
         onInput={event => setInput(event.currentTarget.value)}
         onKeyDown={event => {
           if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void submit() }
           if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); event.currentTarget.blur() }
         }}
       />
-      {turnRunning
-        ? <button class="assistant-stop" title="Interrupt the running turn" onClick={() => { if (dialogId) void stopTurn(dialogId) }}>stop</button>
-        : <button class="assistant-send" disabled={!input.trim()} onClick={() => void submit()}>send</button>}
-      <button class="assistant-new" title="Start a fresh conversation. The current one is kept, not deleted." onClick={() => void newDialog()}>new</button>
+      {turnRunning ? <button class="assistant-stop" title={t("AssistantPanel.221046e168")} onClick={() => { if (dialogId) void stopTurn(dialogId) }}>{t("AssistantPanel.6c45cb72a3")}</button> : <button class="assistant-send" disabled={!input.trim()} onClick={() => void submit()}>{t("AssistantPanel.27ce1d1bf4")}</button>}
+      <button class="assistant-new" title={t("AssistantPanel.b4cf2f913f")} onClick={() => void newDialog()}>{t("AssistantPanel.11507a0e2f")}</button>
     </footer>
   </div>
 }
@@ -440,13 +431,13 @@ function AssistantActionCard({ action }: { action: AssistantAction }) {
   const scheduled = action.status === 'scheduled'
   return <aside class={`assistant-action ${action.action_class}`}>
     <p>
-      <strong>{scheduled ? 'about to' : 'wants to'}</strong> {action.restatement}
-      {scheduled && remaining !== null && <span class="assistant-countdown"> · {remaining}s</span>}
+      <strong>{scheduled ? t("AssistantPanel.96a52c3419") : t("AssistantPanel.f0c79963b0")}</strong> {action.restatement}
+      {scheduled && remaining !== null && <span class="assistant-countdown">{rich("AssistantPanel.515ef9d126", { remaining: remaining })}</span>}
     </p>
     <div>
-      {!scheduled && <button class="confirm" onClick={() => void confirmAction(action.id).catch(() => {})}>confirm</button>}
-      {scheduled && <button class="confirm" onClick={() => void confirmAction(action.id).catch(() => {})}>run now</button>}
-      <button class="cancel" onClick={() => void cancelAction(action.id).catch(() => {})}>cancel</button>
+      {!scheduled && <button class="confirm" onClick={() => void confirmAction(action.id).catch(() => {})}>{t("AssistantPanel.3f267c2ab4")}</button>}
+      {scheduled && <button class="confirm" onClick={() => void confirmAction(action.id).catch(() => {})}>{t("AssistantPanel.2bb215f2a2")}</button>}
+      <button class="cancel" onClick={() => void cancelAction(action.id).catch(() => {})}>{t("AssistantPanel.2374d91794")}</button>
     </div>
   </aside>
 }

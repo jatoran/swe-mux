@@ -1,3 +1,4 @@
+import { rich, t } from './localization/index.ts'
 import { useEffect, useState } from 'preact/hooks'
 import { api } from './api'
 import { GrantButton, GrantGate } from './GrantGate'
@@ -126,13 +127,12 @@ export function GitLandBar({ project, queue, error, onChanged, open, onOpen }: P
   // stays folded; the pipeline's gate cell says so where it stands (`gitLand.ts`).
   const isOpen = open ?? summary.opensByDefault
 
-  return <section class="git-landing" aria-label="Auto-merge">
+  return <section class="git-landing" aria-label={t("GitLandBar.788d20dbca")}>
     <button class={`git-landing-summary ${summary.tone}`} aria-expanded={isOpen}
       onClick={() => onOpen(!isOpen)}>
       <span class="git-landing-summary-head">
-        <span class="git-landing-title">AUTO-MERGE</span>
-        <span class="git-landing-headline">{summary.notConfigured
-          ? 'not set up for this repository' : activeHeadline}</span>
+        <span class="git-landing-title">{t("GitLandBar.bab9b402f5")}</span>
+        <span class="git-landing-headline">{summary.notConfigured ? t("GitLandBar.10b0667331") : activeHeadline}</span>
         <span class="git-landing-chevron" aria-hidden="true">{isOpen ? '−' : '+'}</span>
       </span>
       {/* Three cells describe an operation, and an unconfigured repository has none:
@@ -151,11 +151,9 @@ export function GitLandBar({ project, queue, error, onChanged, open, onOpen }: P
         anything else, so with it off a request enqueues and then sits at `queued`
         forever - identical on screen to a pipeline working through a backlog. */}
     {queue && !queue.installedEnabled && <GrantGate ids={['automation.landQueue']}
-      heading="Auto-merge is switched off for this install."
+      heading={t("GitLandBar.18ef543a70")}
       onGranted={onChanged}>
-      <p>Branches can still be queued from the rows below, and nothing will move them:
-      the daemon's sweep is the only thing that reconciles, verifies, and fast-forwards,
-      and it stops on this switch before reading anything else.</p>
+      <p>{t("GitLandBar.7df06c26ce")}</p>
     </GrantGate>}
 
     {/* A repository that never set this up gets the explanation and the one act that
@@ -191,67 +189,42 @@ export function GitLandBar({ project, queue, error, onChanged, open, onOpen }: P
           whole strip exists to remove. */}
       {queue && project && <details class="git-land-authority">
         <summary>
-          <span>Agent-started auto-merge</span>
-          <em class={queue.projectEnabled && queue.agentGrant === 'granted' ? 'ok' : 'warn'}>{
-            !queue.projectEnabled ? 'not permitted'
-              : queue.agentGrant === 'granted' ? 'starts without asking' : 'you approve each one'
-          }</em>
+          <span>{t("GitLandBar.05445d4325")}</span>
+          <em class={queue.projectEnabled && queue.agentGrant === 'granted' ? 'ok' : 'warn'}>{!queue.projectEnabled ? t("GitLandBar.fef6a44418") : queue.agentGrant === 'granted' ? t("GitLandBar.235afdb32e") : t("GitLandBar.72b976bbe0")}</em>
         </summary>
-        <p>Your own Auto-merge button never consults this - you are the authority it defers to.
-        It decides what happens when an agent in a worktree here calls
-        <code>mux.request_land</code> instead.</p>
-        {!queue.projectEnabled
-          ? <GrantGate ids={['project.landQueue']} projectId={project.id}
-              heading="This Project has not permitted auto-merge for agents."
+        <p>{rich("GitLandBar.6429bfa304", { value1: <code>{t("GitLandBar.0efc722334")}</code> })}</p>
+        {!queue.projectEnabled ? <GrantGate ids={['project.landQueue']} projectId={project.id}
+              heading={t("GitLandBar.82444b873c")}
               onGranted={onChanged}>
-              <p>With it off, an agent's <code>request_land</code> is refused outright.
-              With it on, the request is still drafted for you to approve until you raise
-              the authority below.</p>
-            </GrantGate>
-          : queue.agentGrant === 'draft'
-            ? <p class="git-land-authority-row">Each agent request writes a row you decide,
-              here.{' '}
-              <GrantButton id="project.landGrant" projectId={project.id} onGranted={onChanged}
-                title="Lets an agent start a land without waiting for you · writes to this Project’s .swe-mux/config.toml"
-              >Let agents start one directly</GrantButton>{' '}
-              (still fast-forward-only, still running the verification command, and still
-              inside {queue.hourlyBudget} requests per session per hour).</p>
-            : <p class="git-land-authority-row">Agents start lands directly, inside
-              {' '}{queue.hourlyBudget} requests per session per hour. Lower it back to
-              approve-each-one in this Project's settings.</p>}
+              <p>{rich("GitLandBar.69b38328cf", { value1: <code>{t("GitLandBar.fe2681aa3f")}</code> })}</p>
+            </GrantGate> : queue.agentGrant === 'draft' ? <p class="git-land-authority-row">{rich("GitLandBar.df68213e08", { value1: <GrantButton id="project.landGrant" projectId={project.id} onGranted={onChanged}
+                title={t("GitLandBar.7c91044a76")}
+              >{t("GitLandBar.0ecf8c855b")}</GrantButton>, hourlyBudget: queue.hourlyBudget })}</p> : <p class="git-land-authority-row">{rich("GitLandBar.1383671c23", { hourlyBudget: queue.hourlyBudget })}</p>}
         {/* The second authority, and deliberately its own sentence rather than a clause
             on the first. `agentGrant` decides who may *start* a land; this decides what
             the daemon may *execute* while running one, and the two are lowered
             independently. */}
-        {queue.projectEnabled && <p class="git-land-authority-row">{queue.verifyGrant === 'granted'
-          ? <>Gate edits written on this machine run without a fresh approval. A
-            <code>{' '}.worktree-verify</code> changed by anyone else still presents its
-            bytes for you to read.</>
-          : <>Every change to the verification command presents its bytes for approval,
-            whoever wrote it.{' '}
-            <GrantButton id="project.landVerifyGrant" projectId={project.id}
+        {queue.projectEnabled && <p class="git-land-authority-row">{queue.verifyGrant === 'granted' ? <>{rich("GitLandBar.bb92f99754", { value1: <code>{t("GitLandBar.6d33b54ed0")}</code> })}</> : <>{rich("GitLandBar.1f24104b81", { value1: <GrantButton id="project.landVerifyGrant" projectId={project.id}
               onGranted={async result => {
                 setResumedNote(resumedLandsNote(result.resumed_lands || []))
                 await onChanged()
               }}
-              title="Lets this Project's own agents change the verification command without a fresh approval · writes to this Project’s .swe-mux/config.toml"
-            >Stop asking for edits made here</GrantButton></>}</p>}
+              title={t("GitLandBar.2f3c2fd06e")}
+            >{t("GitLandBar.fb1d2c61e9")}</GrantButton> })}</>}</p>}
       </details>}
 
       {/* The queue, in the order the pipeline will reach it. Oldest first: the request
           about to run is the one a reader looks at first, and the daemon's own
           newest-first listing put it at the bottom. */}
-      <div class="git-land-list" aria-label="Merge queue">
-        <h4>QUEUE<small>{queued.length ? `${queued.length} waiting to merge` : 'nothing queued'}</small></h4>
-        {queued.length === 0 && <p class="git-change-empty">
-          Auto-merge a branch from its row below - expand the worktree and press Auto-merge.
-        </p>}
+      <div class="git-land-list" aria-label={t("GitLandBar.668ac4c723")}>
+        <h4>{rich("GitLandBar.8b1b480458", { value1: <small>{queued.length ? t("GitLandBar.17504aea3c", { length: queued.length }) : t("GitLandBar.8726de8209")}</small> })}</h4>
+        {queued.length === 0 && <p class="git-change-empty">{t("GitLandBar.241dbac036")}</p>}
         {queued.map((request, index) => <LandRow key={request.id} request={request}
           position={index + 1} busy={busy} onCancel={() => void cancel(request.id)} />)}
       </div>
 
       {history.length > 0 && <details class="git-land-history">
-        <summary>{history.length} finished</summary>
+        <summary>{rich("GitLandBar.9240953075", { length: history.length })}</summary>
         {history.map(request => <LandRow key={request.id} request={request} busy={busy} />)}
       </details>}
     </div>}
@@ -260,7 +233,7 @@ export function GitLandBar({ project, queue, error, onChanged, open, onOpen }: P
 
 /** The short sentence beside AUTO-MERGE; the cells carry the detail. */
 function landingHeadline(queue: LandQueue | null, fallback: string): string {
-  if (queue !== null && !queue.installedEnabled) return 'sweep stopped'
+  if (queue !== null && !queue.installedEnabled) return t("GitLandBar.7948fd20c0")
   const ordered = landQueueOrder(queue?.requests || [])
   const lead = ordered.find(request => landStateTone(request.state) === 'busy') || ordered[0]
   return lead ? `${lead.branch} · ${landStateLabel(lead.state)}` : fallback
@@ -291,13 +264,13 @@ function LandPipeline({ queue, gate, summary }: {
   // `approved || runsWithoutApproval`. Reading `approved` alone here would say
   // "Needs approval" in `ok` tone over a gate that is about to run, which is the one
   // reading a collapsed strip cannot afford to get wrong.
-  const gateLabel = gate === null ? 'Reading gate'
-    : !gate.configured ? 'Not configured'
-      : blocked ? 'Needs approval'
-        : gate.approved ? 'Gate ready'
-          : gate.runsWithoutApproval ? 'Gate authorised' : 'Needs approval'
+  const gateLabel = gate === null ? t("GitLandBar.bdabd9a0f8")
+    : !gate.configured ? t("GitLandBar.dd1841d295")
+      : blocked ? t("GitLandBar.db0e960b68")
+        : gate.approved ? t("GitLandBar.e4d3ad8a74")
+          : gate.runsWithoutApproval ? t("GitLandBar.30a469ca54") : t("GitLandBar.db0e960b68")
   const gateDetail = blocked
-    ? `${blocked} worktree${blocked === 1 ? '' : 's'} awaiting approval`
+    ? t("GitLandBar.182b2a48f3", { value1: blocked, value2: (blocked === 1) ? 'yes' : 'no' })
     : gate?.configured ? gate.display : gate?.scriptName || '.worktree-verify'
   const activeLabel = lead ? landStateLabel(lead.state)
     : attention ? landStateLabel(attention.state) : 'Idle'
@@ -306,11 +279,11 @@ function LandPipeline({ queue, gate, summary }: {
       + (kindNote ? ` · ${kindNote}` : '')
       + (progress ? ` · ${progress}` : '')
       + (gateNote ? ` · ${gateNote}` : '')
-    : attention ? attention.branch : 'No branch is running'
-  const queueLabel = waiting ? `${waiting} waiting` : 'Queue clear'
-  const queueDetail = waiting ? `next ${behind[0].branch}` : 'Nothing behind the active branch'
+    : attention ? attention.branch : t("GitLandBar.b774a2c76d")
+  const queueLabel = waiting ? `${waiting} waiting` : t("GitLandBar.93f2bf34cf")
+  const queueDetail = waiting ? `next ${behind[0].branch}` : t("GitLandBar.25ffe05197")
 
-  return <span class="git-land-pipeline" aria-label="Auto-merge pipeline">
+  return <span class="git-land-pipeline" aria-label={t("GitLandBar.ae494c9fb7")}>
     <span class={`git-land-pipeline-step gate ${gate === null ? 'idle' : summary.gateTone === 'ok' ? 'complete' : 'warn'}`}>
       <strong>{gateLabel}</strong>
       <small>{gateDetail}</small>
@@ -423,7 +396,7 @@ function VerifyCommandEditor({ project, gate, busy, setBusy, onError, onGate, on
 
   const sourceLabel = gate?.source === 'project_config'
     ? '[worktree] verify_command'
-    : gate?.source === 'convention' ? `the executable ${gate.scriptName}` : ''
+    : gate?.source === 'convention' ? t("GitLandBar.233e3f31f5", { value1: gate.scriptName }) : ''
 
   // Whether the next land runs this gate, which is not the same question as whether a
   // human read it. A Project that lets its own agents change the command authorises
@@ -433,69 +406,43 @@ function VerifyCommandEditor({ project, gate, busy, setBusy, onError, onGate, on
   const willRun = !!gate?.configured && (gate.approved || gate.runsWithoutApproval)
 
   const standing = !gate?.configured
-    ? 'No verification command'
-    : gate.approved ? 'Approved' : gate.runsWithoutApproval ? 'Authorised' : 'Needs approval'
+    ? t("GitLandBar.91f12d933b")
+    : gate.approved ? 'Approved' : gate.runsWithoutApproval ? 'Authorised' : t("GitLandBar.db0e960b68")
 
   return <details class={`git-land-gate ${willRun ? 'ok' : 'warn'}`}
     open={settingsOpen} onToggle={event => setSettingsOpen(event.currentTarget.open)}>
     <summary class="git-land-gate-summary">
-      <span>Verification settings</span>
+      <span>{t("GitLandBar.7800fc65ac")}</span>
       {gate?.configured && <code>{gate.display}</code>}
       <em class={willRun ? 'ok' : 'warn'}>{standing}</em>
     </summary>
 
     <div class="git-land-gate-content">
       <div class="git-land-gate-head">
-        <strong>{!gate?.configured
-          ? 'No verification command'
-          : gate.approved ? 'Verification approved'
-            : gate.runsWithoutApproval ? 'Verification authorised, not read'
-              : 'Verification not approved'}</strong>
+        <strong>{!gate?.configured ? t("GitLandBar.91f12d933b") : gate.approved ? t("GitLandBar.dad91cc19a") : gate.runsWithoutApproval ? t("GitLandBar.f9bc0055ea") : t("GitLandBar.ffd0fe3dbe")}</strong>
         {gate?.configured && <button onClick={() => setShowing(value => !value)}>
-          {showing ? 'Hide bytes' : 'Review bytes'}
+          {showing ? t("GitLandBar.874c5218b2") : t("GitLandBar.5a39b717a4")}
         </button>}
       </div>
 
     {/* Which of the two mechanisms is in force. Both were documented and neither was
         ever stated on screen, so "why is it running that" had no answer here. */}
-    {gate?.configured && <p class="git-state">
-      Resolved from {sourceLabel}, for every worktree of this Project.{' '}
-      {gate.source === 'convention'
-        ? 'Use a different command here only if this script should be overridden.'
-        : gate.scriptPresent
-          ? `The override wins over the ${gate.scriptName} in the checkout.`
-          : ''}
-    </p>}
-    {gate && !gate.configured && <p class="git-state">
-      A land here would be refused rather than run. Add an executable
-      {' '}<code>{gate.scriptName}</code> to the repository, or set an override below.
-    </p>}
+    {gate?.configured && <p class="git-state">{rich("GitLandBar.ac8f54d86b", { sourceLabel: sourceLabel, value2: gate.source === 'convention' ? t("GitLandBar.75935da264") : gate.scriptPresent ? t("GitLandBar.f9a51a2c42", { scriptName: gate.scriptName }) : '' })}</p>}
+    {gate && !gate.configured && <p class="git-state">{rich("GitLandBar.f59dd00d54", { value1: <code>{gate.scriptName}</code> })}</p>}
 
     {gate?.configured && !gate.approved && <p class="git-state">
-      {gate.runsWithoutApproval
-        // Not a block, so this must not read as one. It states why the command runs
-        // anyway and where the standing decision lives, and leaves Review bytes as an
-        // ordinary thing to do rather than a step someone is waiting on.
-        ? <>These bytes were written on this machine, and this Project lets its own
-          agents change the verification command, so a land runs them without waiting
-          for you. Review them whenever you like, or lower{' '}
-          <SettingLink target="project.landVerifyGrant" projectId={project.id} variant="link"
-          >this Project's verification authority</SettingLink> back to approve-each-one.</>
-        : gate.previouslyApproved
-          ? 'It changed since it was approved. Review it again before anything runs it.'
-          : 'Review the exact command a land will run, then approve it.'}
+      {gate.runsWithoutApproval ? <>{rich("GitLandBar.5272b200f4", { value1: <SettingLink target="project.landVerifyGrant" projectId={project.id} variant="link"
+          >{t("GitLandBar.1b7538c769")}</SettingLink> })}</> : gate.previouslyApproved ? t("GitLandBar.3cbe45ae8f") : t("GitLandBar.ff87da9989")}
     </p>}
 
     {showing && gate && <div class="git-land-gate-body">
       {gate.previouslyApproved && gate.approvedSource && gate.approvedSource !== gate.currentSource && <>
-        <h5>Previously approved</h5>
+        <h5 data-heading-message="GitLandBar.e7ed996f3f">{t("GitLandBar.e7ed996f3f")}</h5>
         <pre class="git-land-source">{gate.approvedSource}</pre>
       </>}
-      <h5>Will run</h5>
+      <h5 data-heading-message="GitLandBar.3a95b6a45d">{t("GitLandBar.3a95b6a45d")}</h5>
       <pre class="git-land-source">{gate.currentSource || gate.display}</pre>
-      {!gate.approved && <button disabled={busy} onClick={() => void approve()}>
-        Approve these bytes
-      </button>}
+      {!gate.approved && <button disabled={busy} onClick={() => void approve()}>{t("GitLandBar.e2d4cdb909")}</button>}
     </div>}
 
     {resumed && <p class="git-land-resumed">{resumed}</p>}
@@ -508,32 +455,20 @@ function VerifyCommandEditor({ project, gate, busy, setBusy, onError, onGate, on
 
     <div class="git-land-command-editor">
       {!editing && <button disabled={!editable} onClick={() => { setDraft(gate?.configCommand || ''); setEditing(true) }}>
-        {gate?.configCommand
-          ? 'Change the override…'
-          : gate?.configured ? 'Use a different command…' : 'Configure verification…'}
+        {gate?.configCommand ? t("GitLandBar.55f44c27e4") : gate?.configured ? t("GitLandBar.37fa9960aa") : t("GitLandBar.38035585cd")}
       </button>}
-      {!editable && <small class="warn">
-        This Project's <code>.swe-mux/config.toml</code> is {gate?.configStatus === 'malformed'
-          ? 'malformed; fix it before editing here'
-          : 'read-only on this machine'}.
-      </small>}
+      {!editable && <small class="warn">{rich("GitLandBar.6347d780d4", { value1: <code>{t("GitLandBar.9f98c8f7e7")}</code>, value2: (gate?.configStatus === 'malformed') ? 'yes' : 'no' })}</small>}
       {editing && <>
         <label>
-          <span>Override <code>[worktree] verify_command</code></span>
-          <input value={draft} disabled={busy} placeholder={gate?.scriptName || '.worktree-verify'}
+          <span>{rich("GitLandBar.46318e51b2", { value1: <code>{t("GitLandBar.703b33e9ad")}</code> })}</span>
+          <input value={draft} disabled={busy} placeholder={gate?.scriptName || t("GitLandBar.f6e4b44985")}
             onInput={event => setDraft(event.currentTarget.value)} />
         </label>
-        <p class="git-state">
-          Runs in the branch's worktree through this host's shell. It is committed
-          repository content, so it travels with the checkout — and it will need
-          approving again here before any land runs it.
-        </p>
+        <p class="git-state">{t("GitLandBar.402523e519")}</p>
         <div>
-          <button disabled={busy} onClick={() => void save(draft.trim())}>Save</button>
-          <button disabled={busy} onClick={() => { setEditing(false); setDraft(gate?.configCommand || '') }}>Cancel</button>
-          {gate?.configCommand && <button class="danger" disabled={busy} onClick={() => void save('')}>
-            Clear the override
-          </button>}
+          <button disabled={busy} onClick={() => void save(draft.trim())}>{t("GitLandBar.1509f561f2")}</button>
+          <button disabled={busy} onClick={() => { setEditing(false); setDraft(gate?.configCommand || '') }}>{t("GitLandBar.19766ed6cc")}</button>
+          {gate?.configCommand && <button class="danger" disabled={busy} onClick={() => void save('')}>{t("GitLandBar.2ccff0c4d1")}</button>}
         </div>
       </>}
     </div>
@@ -600,52 +535,38 @@ function BlockedWorktreeGate({
 
   return <div class="git-land-gate warn git-land-gate-worktree">
     <div class="git-land-gate-head">
-      <strong>This worktree's own verification command is not approved</strong>
+      <strong>{t("GitLandBar.1301b2b100")}</strong>
       <code>{branch}</code>
       {gate?.configured && <button onClick={() => setShowing(value => !value)}>
-        {showing ? 'Hide' : 'Review'}
+        {showing ? t("GitLandBar.ac20a57bfd") : t("GitLandBar.aff0766a52")}
       </button>}
     </div>
-    <p class="git-state">
-      <code>{worktreeRoot}</code> resolves a different {gate?.source === 'project_config'
-        ? 'command' : gate?.scriptName || '.worktree-verify'} from the one above, so its
-      land was refused rather than run. Approving here approves <em>these</em> bytes and
-      leaves every other copy exactly as it stands.
-    </p>
-    {gate === null && <p class="git-state">Reading this worktree's command…</p>}
-    {gate && !gate.configured && <p class="git-state">
-      This checkout resolves no verification command at all, so there is nothing to
-      approve. Add an executable <code>{gate.scriptName}</code> to the branch.
-    </p>}
+    <p class="git-state">{rich("GitLandBar.5431e84932", { value1: <code>{worktreeRoot}</code>, value2: gate?.source === 'project_config' ? t("GitLandBar.5d347fd948") : gate?.scriptName || t("GitLandBar.f6e4b44985"), value3: <em>{t("GitLandBar.b808e156d1")}</em> })}</p>
+    {gate === null && <p class="git-state">{t("GitLandBar.a31ab16dd5")}</p>}
+    {gate && !gate.configured && <p class="git-state">{rich("GitLandBar.3ef6baeac6", { value1: <code>{gate.scriptName}</code> })}</p>}
     {showing && gate?.configured && <div class="git-land-gate-body">
       {gate.approvedSource && gate.approvedSource !== gate.currentSource && <>
-        <h5>Approved on this machine</h5>
+        <h5 data-heading-message="GitLandBar.1f6bf0b830">{t("GitLandBar.1f6bf0b830")}</h5>
         <pre class="git-land-source">{gate.approvedSource}</pre>
       </>}
-      <h5>What this worktree would run</h5>
+      <h5 data-heading-message="GitLandBar.0f8ba2c098">{t("GitLandBar.0f8ba2c098")}</h5>
       <pre class="git-land-source">{gate.currentSource || gate.display}</pre>
     </div>}
     {/* Why the Project's standing authority did not cover these bytes. Without it, a
         refusal inside a Project that lets agents change the gate reads as a
         contradiction, and the reader's next move is to doubt the switch rather than to
         look at who wrote the script — which is the one fact that decided it. */}
-    {gate?.provenance && !gate.provenance.trusted && gate.verifyGrant === 'granted'
-      && <p class="git-state">This Project does let agents change the gate, but that
-        authority did not reach these bytes: {gate.provenance.reason}.</p>}
+    {gate?.provenance && !gate.provenance.trusted && gate.verifyGrant === 'granted' && <p class="git-state">{rich("GitLandBar.9d1a60ec0c", { reason: gate.provenance.reason })}</p>}
     {gate?.configured && <div class="git-map-actions">
-      <button disabled={busy || !gate.digest} onClick={() => void approve()}>
-        Approve this worktree's bytes
-      </button>
-      {!showing && <small>Review them first — approving is what lets them run unattended.</small>}
+      <button disabled={busy || !gate.digest} onClick={() => void approve()}>{t("GitLandBar.8b42044d5a")}</button>
+      {!showing && <small>{t("GitLandBar.73d2f09f9b")}</small>}
     </div>}
     {/* The standing answer beside the one-off one, offered only where it would change
         this outcome: bytes this machine wrote, refused because the Project approves each
         digest by hand. Raising the authority is the same decision as approving, made
         once. Where the provenance is untrusted the grant would not have helped and is
         deliberately absent — a control that cannot clear the block is worse than none. */}
-    {gate?.configured && gate.verifyGrant !== 'granted' && gate.provenance?.trusted
-      && <p class="git-land-authority-row">These bytes were written on this machine.{' '}
-        <GrantButton id="project.landVerifyGrant" projectId={project.id}
+    {gate?.configured && gate.verifyGrant !== 'granted' && gate.provenance?.trusted && <p class="git-land-authority-row">{rich("GitLandBar.c8eddb4567", { value1: <GrantButton id="project.landVerifyGrant" projectId={project.id}
           onGranted={async result => {
             // Raising the authority clears this block, so the land it ended is waiting
             // on nothing - the daemon re-queues it in the same act and names what it
@@ -654,9 +575,8 @@ function BlockedWorktreeGate({
             onResumed(resumedLandsNote(result.resumed_lands || []))
             await onApproved()
           }}
-          title="Lets this Project's own agents change the verification command without a fresh approval · writes to this Project’s .swe-mux/config.toml"
-        >Stop asking for edits made here</GrantButton>{' '}
-        (a gate edited by anyone else still presents for approval).</p>}
+          title={t("GitLandBar.2f3c2fd06e")}
+        >{t("GitLandBar.fb1d2c61e9")}</GrantButton> })}</p>}
   </div>
 }
 
@@ -694,44 +614,25 @@ function AutoMergeIntroduction({ scriptName }: { scriptName: string }) {
   const [showing, setShowing] = useState(false)
   const prompt = verifySetupPrompt(scriptName)
   const copy = async () => {
-    try { await navigator.clipboard.writeText(prompt); setNote('Setup prompt copied.') }
-    catch { setNote('Clipboard access was blocked. Open "Read what it says" and copy it by hand.') }
+    try { await navigator.clipboard.writeText(prompt); setNote(t("GitLandBar.8d87f24abb")) }
+    catch { setNote(t("GitLandBar.dce86127bd")) }
   }
   return <div class="git-land-intro">
-    <h4>Auto-merge is not set up for this repository</h4>
-    <p>
-      Auto-merge finishes a worktree branch for you. One branch at a time, swe-mux merges
-      the trunk into it, runs this repository's own check suite there, and merges the
-      branch onto the trunk only if those checks pass. If they fail - or the merge
-      conflicts - nothing moves and the branch goes back to whoever asked, with the
-      output.
-    </p>
-    <p>
-      It needs one thing: a <strong>verification command</strong> - the checks that decide
-      whether a branch is good enough to merge. This repository has none, so nothing can
-      be merged automatically here.
-    </p>
+    <h4 data-heading-message="GitLandBar.4b916fa155">{t("GitLandBar.4b916fa155")}</h4>
+    <p>{t("GitLandBar.0bad2610d5")}</p>
+    <p>{rich("GitLandBar.c30880548f", { value1: <strong>{t("GitLandBar.4d4fdd673c")}</strong> })}</p>
     <div class="git-land-setup-prompt">
       <div>
-        <button class="primary" onClick={() => void copy()}>Copy setup prompt</button>
+        <button class="primary" onClick={() => void copy()}>{t("GitLandBar.9a5d81ccb4")}</button>
         {note && <small role="status">{note}</small>}
       </div>
-      <small>
-        Paste it to an agent working in this repository. It says what the command has to
-        do, where to put it, and how to prove it fails when it should - and it ends by
-        telling that agent it cannot approve what it wrote. That stays yours, here,
-        against the exact bytes.
-      </small>
+      <small>{t("GitLandBar.91ca2cd73f")}</small>
       <details open={showing} onToggle={event => setShowing(event.currentTarget.open)}>
-        <summary>Read what it says</summary>
+        <summary>{t("GitLandBar.4dda922399")}</summary>
         <pre class="git-land-source">{prompt}</pre>
       </details>
     </div>
-    <p class="git-state">
-      Or write it yourself: an executable <code>{scriptName}</code> at the repository root
-      is all it takes. Verification settings has the override if the command cannot be a
-      file in the repository.
-    </p>
+    <p class="git-state">{rich("GitLandBar.1bc37d0acd", { value1: <code>{scriptName}</code> })}</p>
   </div>
 }
 
@@ -758,29 +659,24 @@ function LandRow({ request, busy, onCancel, position }: {
       <em class={`git-land-state ${landStateTone(request.state)}`}>{landStateLabel(request.state)}</em>
       {progress && <span class="git-land-progress-detail">{progress}</span>}
       {gateNote && <small class="git-land-gate-note">{gateNote}</small>}
-      {request.origin !== 'operator' && <small class="git-land-origin">requested by agent</small>}
-      {request.waitingSince && <small>{ago(request.waitingSince)} waiting</small>}
-      {onCancel && (request.state === 'queued' || request.state === 'waiting')
-        && <button disabled={busy} onClick={onCancel}>Cancel</button>}
+      {request.origin !== 'operator' && <small class="git-land-origin">{t("GitLandBar.f9071a2bdf")}</small>}
+      {request.waitingSince && <small>{rich("GitLandBar.2395f79b71", { value1: ago(request.waitingSince) })}</small>}
+      {onCancel && (request.state === 'queued' || request.state === 'waiting') && <button disabled={busy} onClick={onCancel}>{t("GitLandBar.19766ed6cc")}</button>}
     </div>
     {request.reason && <p class="git-land-reason">{request.reason}</p>}
     {/* Answered by the trunk rather than by the queue: the branch landed some other way,
         which is exactly what a fast-forward refusal tells its author to go and do. The
         row keeps saying what happened - the trail is an audit - and stops reading as
         something still waiting on someone. */}
-    {request.absorbedByTrunk && <p class="git-land-absorbed">
-      The trunk already contains what this asked to land.
-    </p>}
-    {(request.state === 'refused' || request.state === 'handed_back')
-      && <LandMessage requestId={request.id} />}
+    {request.absorbedByTrunk && <p class="git-land-absorbed">{t("GitLandBar.1453760430")}</p>}
+    {(request.state === 'refused' || request.state === 'handed_back') && <LandMessage requestId={request.id} />}
     {request.paths.length > 0 && <ul class="git-land-paths">
       {request.paths.slice(0, 12).map(path => <li key={path}><code>{path}</code></li>)}
-      {request.paths.length > 12 && <li><small>and {request.paths.length - 12} more</small></li>}
+      {request.paths.length > 12 && <li><small>{rich("GitLandBar.edb26af65a", { value1: request.paths.length - 12 })}</small></li>}
     </ul>}
     {request.landedOid && <small class="git-land-oid">
       {shortSha(request.trunkBefore)} → {shortSha(request.landedOid)}
-      {request.finishedAt && request.createdAt
-        && ` · ${formatDuration((request.finishedAt - request.createdAt) * 1000)}`}
+      {request.finishedAt && request.createdAt && t("GitLandBar.f6b53f9c8a", { value1: formatDuration((request.finishedAt - request.createdAt) * 1000) })}
     </small>}
   </article>
 }

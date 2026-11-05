@@ -19,6 +19,7 @@ from ..http_support import json_response
 from ..operator_input import record_operator_input
 from ..session import SessionManager
 from ..supervisor_client import Liveness, liveness_of
+from ..ui_messages import ui_message
 from .support import refuse_agent_session_caller
 
 log = logging.getLogger(__name__)
@@ -73,9 +74,7 @@ async def _interrupt_session_pty(app: web.Application, session: Any) -> None:
     would skip the `input_revision`/`terminal_input` bookkeeping the
     delivery-readiness contract depends on.
     """
-    record_operator_input(
-        app[keys.EVENTS], session, _INTERRUPT_KEYS, source="agent_control"
-    )
+    record_operator_input(app[keys.EVENTS], session, _INTERRUPT_KEYS, source="agent_control")
     await app[keys.EVENTS].emit(
         "agent_turn_interrupted", session_id=session.record.id, source="agent_control"
     )
@@ -98,15 +97,11 @@ async def _end_session_gracefully(
     session.record.requested_end_reason = reason
     if session.record.state in {"exited", "crashed"}:
         return {"final_state": session.record.state, "graceful": True, "reason": reason}
-    record_operator_input(
-        app[keys.EVENTS], session, _INTERRUPT_KEYS, source="agent_control"
-    )
+    record_operator_input(app[keys.EVENTS], session, _INTERRUPT_KEYS, source="agent_control")
     await asyncio.sleep(_INTERRUPT_SETTLE_SECONDS)
     exit_keys = str(getattr(session.pty, "graceful_exit", "") or "")
     if exit_keys and session.record.state not in {"exited", "crashed"}:
-        record_operator_input(
-            app[keys.EVENTS], session, exit_keys, source="agent_control"
-        )
+        record_operator_input(app[keys.EVENTS], session, exit_keys, source="agent_control")
     deadline = time.monotonic() + float(config.session_control_graceful_timeout_s)
     while time.monotonic() < deadline:
         if session.record.state in {"exited", "crashed"}:
@@ -131,13 +126,11 @@ async def session_input(request: web.Request) -> web.Response:
     # readiness, arming, and revocation - the exact machinery agent-to-agent
     # messaging exists to route through - so an agent session's pane is
     # refused here and pointed at notify/`swemux agent` (Phase 23 W1).
-    refuse_agent_session_caller(
-        request, operation="writing terminal input over HTTP"
-    )
+    refuse_agent_session_caller(request, operation="writing terminal input over HTTP")
     body = await request.json()
     session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     if session.record.state in {"exited", "crashed"}:
-        return json_response({"error": "the session has ended"}, 409)
+        return json_response({"error": ui_message("terminal.ac0f4d7106")}, 409)
     data = str(body.get("data", ""))
     if not data:
         return json_response({"ok": True})
@@ -149,20 +142,20 @@ async def session_startup_metrics(request: web.Request) -> web.Response:
     session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     raw = (await request.json()).get("timing_ms")
     if not isinstance(raw, dict):
-        raise ValueError("timing_ms must be an object")
+        raise ValueError(ui_message("terminal.6a4b1bd95e"))
     allowed = {"api_response", "pane_mounted", "socket_open", "replay_ready"}
     timing_ms: dict[str, float] = {}
     for key, value in raw.items():
         if key not in allowed:
-            raise ValueError(f"unsupported startup timing: {key}")
+            raise ValueError(ui_message("terminal.1c740fee1f", value1=key))
         if isinstance(value, bool) or not isinstance(value, int | float):
-            raise ValueError(f"startup timing must be numeric: {key}")
+            raise ValueError(ui_message("terminal.e3fa920876", value1=key))
         measured = float(value)
         if not 0 <= measured <= 300_000:
-            raise ValueError(f"startup timing is out of range: {key}")
+            raise ValueError(ui_message("terminal.4f9d880500", value1=key))
         timing_ms[key] = round(measured, 1)
     if "replay_ready" not in timing_ms:
-        raise ValueError("replay_ready startup timing is required")
+        raise ValueError(ui_message("terminal.24406ed1c6"))
     if not session.record.client_startup_timing_ms:
         session.record.client_startup_timing_ms = timing_ms
         session.publish_update()
@@ -225,9 +218,7 @@ async def deliver_broadcast(
 
 
 async def broadcast_input_route(request: web.Request) -> web.Response:
-    refuse_agent_session_caller(
-        request, operation="broadcasting terminal input over HTTP"
-    )
+    refuse_agent_session_caller(request, operation="broadcasting terminal input over HTTP")
     data = str((await request.json()).get("data", ""))
     return json_response(
         await deliver_broadcast(request.app[keys.SESSIONS], data, request.app[keys.EVENTS])

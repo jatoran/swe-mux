@@ -31,6 +31,7 @@ from typing import Any
 from . import budget
 from .budget import coerce_budget
 from .config import BUDGET_FIELDS
+from .ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -108,7 +109,7 @@ class AttentionNarrator:
             fallback=BUDGET_FIELDS["automation_daily_budget"].default,
         )
         spend = await self.store.spend()
-        verdict = budget.spent_out(cap, spend, label="the global daily automation")
+        verdict = budget.spent_out(cap, spend, label=ui_message("attention_narration.acfc9410dc"))
         if verdict.exhausted:
             log.info("attention narration skipped for %s: %s", item["id"], verdict.reason)
             return None, "budget"

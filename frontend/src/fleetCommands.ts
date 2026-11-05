@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import type { Command } from './commands.ts'
 import { serverNow } from './serverClock.ts'
 import { sessionLaunchVoicePhrases } from './voiceLaunch.ts'
@@ -52,13 +53,13 @@ export function displayOrderKey(projects: readonly Project[]): string {
  * snapshot is, which the daemon replaces on every refresh cycle.
  */
 export function sessionVoiceAliases(session: Session): string[] {
-  if (session.awaiting_reason === 'approval') return ['go to the one waiting for approval', 'show approvals', 'open approval']
-  if (session.awaiting_reason === 'question' || session.awaiting_reason === 'elicitation') return ['go to the one waiting for an answer', 'show questions']
-  if (session.awaiting_reason === 'rate_limit') return ['go to the rate limited one']
-  if (session.delivery_readiness?.state === 'unknown' || ((session.state === 'working' || session.state === 'running') && serverNow() - session.last_activity_ts > 300)) return ['go to the stuck one']
-  if (session.state === 'working' || session.state === 'running') return ['go to the working one']
-  if (session.state === 'idle') return ['go to the idle one']
-  if (session.state === 'crashed') return ['go to the crashed one']
+  if (session.awaiting_reason === 'approval') return [t("fleetCommands.d6bf654ccf"), t("fleetCommands.c901d2ec4b"), t("fleetCommands.79339d2323")]
+  if (session.awaiting_reason === 'question' || session.awaiting_reason === 'elicitation') return [t("fleetCommands.9f10272697"), t("fleetCommands.8d9d28ecf4")]
+  if (session.awaiting_reason === 'rate_limit') return [t("fleetCommands.d999cf360b")]
+  if (session.delivery_readiness?.state === 'unknown' || ((session.state === 'working' || session.state === 'running') && serverNow() - session.last_activity_ts > 300)) return [t("fleetCommands.af66119673")]
+  if (session.state === 'working' || session.state === 'running') return [t("fleetCommands.2d043a394e")]
+  if (session.state === 'idle') return [t("fleetCommands.26be1d8afd")]
+  if (session.state === 'crashed') return [t("fleetCommands.ef8c355376")]
   return []
 }
 
@@ -78,22 +79,22 @@ export function buildFleetCommands(input: FleetCommandInput): Command[] {
   const projectNumber = new Map(displayProjects.map((project, index) => [project.id, index + 1]))
   return [
     ...displayProjects.slice(0, 9).map((project, index): Command => ({
-      id: `project.activate(${index + 1})`, label: `Switch to project ${index + 1}: ${project.name}`,
-      category: 'project', available: project.id !== activeProjectId, disabledReason: 'Project is already active',
+      id: `project.activate(${index + 1})`, get label() { return t("fleetCommands.20e64c838c", { value1: index + 1, name: project.name }) },
+      category: 'project', available: project.id !== activeProjectId, get disabledReason() { return t("fleetCommands.a489dc9abb") },
       run: () => actions.activateProject(project.id),
     })),
     ...projects.map((project): Command => ({
-      id: `project.focus:${project.id}`, label: `Focus project: ${project.name}`, category: 'project', available: true,
+      id: `project.focus:${project.id}`, get label() { return t("fleetCommands.43e3edc940", { name: project.name }) }, category: 'project', available: true,
       run: () => actions.focusProject(project.id),
       voice: { phrases: [`go to project ${project.name}`, `open project ${project.name}`, `switch to ${project.name}`] },
     })),
     ...sessions.filter(session => !session.pending && !input.isEnded(session)).map((session): Command => ({
-      id: `session.focus:${session.id}`, label: `Focus session: ${input.sessionName(session)}`, category: 'session', available: true,
+      id: `session.focus:${session.id}`, get label() { return t("fleetCommands.30dee3b720", { value1: input.sessionName(session) }) }, category: 'session', available: true,
       run: () => void actions.focusSession(session),
       voice: { phrases: [`go to session ${input.sessionName(session)}`, `open session ${input.sessionName(session)}`, `focus ${input.sessionName(session)}`, ...sessionVoiceAliases(session)] },
     })),
     ...projects.flatMap(project => backends.map((backend): Command => ({
-      id: `session.spawn:${project.id}:${backend}`, label: `New ${input.harnessDisplayName(backend)} in ${project.name}`, category: 'session', available: true,
+      id: `session.spawn:${project.id}:${backend}`, get label() { return t("fleetCommands.a98b6015e0", { value1: input.harnessDisplayName(backend), name: project.name }) }, category: 'session', available: true,
       run: () => void actions.spawnSession(project.id, backend),
       voice: {
         phrases: sessionLaunchVoicePhrases({
@@ -106,8 +107,8 @@ export function buildFleetCommands(input: FleetCommandInput): Command[] {
         execute: async text => {
           const started = await actions.spawnSession(project.id, backend, text || undefined)
           return { detail: started
-            ? `Started ${input.harnessDisplayName(backend)} in ${project.name}${text ? ' with the spoken seed' : ''}. Still listening.`
-            : 'The session could not be started. Still listening.' }
+            ? t("fleetCommands.a9a338a09c", { value1: input.harnessDisplayName(backend), value2: project.name, value3: (text) ? 'yes' : 'no' })
+            : t("fleetCommands.762ec6d821") }
         },
       },
     }))),

@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { COMPLETION, deferralExtensionMs, utteranceCompleteness, utteranceWords } from './utteranceCompleteness.ts'
 import type { CompletenessKind } from './utteranceCompleteness.ts'
 
@@ -269,7 +270,7 @@ export function pendingUtterance(inputs: PendingInputs): PendingUtterance {
   if (inputs.hold) {
     return {
       text: join(inputs.holdBuffer, provisional),
-      note: 'holding — say “go ahead” to send',
+      get note() { return t("utteranceDeferral.752346c544") },
     }
   }
   if (inputs.held) {
@@ -278,10 +279,10 @@ export function pendingUtterance(inputs: PendingInputs): PendingUtterance {
       // The two holds end differently and the operator has to be able to tell
       // which one they are in: one expires into a turn, the other never does.
       note: inputs.held.source === 'assistant'
-        ? 'waiting for the rest of your thought'
-        : `unfinished after “${inputs.held.trigger}” — keep going, or pause to send`,
+        ? t("utteranceDeferral.4c913ca8ad")
+        : t("utteranceDeferral.a2a1765b9c", { value1: inputs.held.trigger }),
     }
   }
-  if (provisional) return { text: provisional, note: 'hearing you…' }
+  if (provisional) return { text: provisional, get note() { return t("utteranceDeferral.95b5c6e195") } }
   return { text: '', note: '' }
 }

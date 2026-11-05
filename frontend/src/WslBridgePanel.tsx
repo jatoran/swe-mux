@@ -1,3 +1,4 @@
+import { rich, t } from './localization/index.ts'
 // Setup surface for the WSL agent bridge.
 //
 // This exists because the bridge's failure mode is silence. An agent running
@@ -44,27 +45,23 @@ export function WslBridgePanel({
   if (!status || !status.supported) return null
   const needsFirewall = status.distros.some(d => d.bridge?.reachable === false)
   return <div class="remote-firewall">
-    <strong>WSL agent bridge</strong>
-    <p class="profile-hint">Run an agent CLI natively inside a WSL distribution and have mux observe it - hooks, status, transcripts - the same as a Windows pane. Without the bridge a WSL pane can still start an agent, but mux sees none of it.</p>
-    <label><input type="checkbox" checked={status.enabled} onChange={e => onToggle(e.currentTarget.checked)} /> Enable the WSL agent bridge</label>
-    {status.enabled && <p class="profile-hint">The daemon listens on {status.adapter_address || 'the WSL adapter'} for hooks from inside a distribution. Every process in every distribution on this machine can then reach it, and swe-mux has no login of its own.</p>}
-    {status.restart_required && <p class="settings-inline-error" aria-live="polite">Restart the daemon so it binds {status.adapter_address}. Enabling this changes which sockets the daemon opens, and that only happens at startup.</p>}
+    <strong>{t("WslBridgePanel.6db147570d")}</strong>
+    <p class="profile-hint">{t("WslBridgePanel.1f2117f696")}</p>
+    <label>{rich("WslBridgePanel.00336e77f8", { value1: <input type="checkbox" checked={status.enabled} onChange={e => onToggle(e.currentTarget.checked)} /> })}</label>
+    {status.enabled && <p class="profile-hint">{rich("WslBridgePanel.71c75faecc", { value1: status.adapter_address || t("WslBridgePanel.9f853b9c17") })}</p>}
+    {status.restart_required && <p class="settings-inline-error" aria-live="polite">{rich("WslBridgePanel.56e04f894b", { adapter_address: status.adapter_address })}</p>}
 
     <div class="theme-actions">
-      <button disabled={probing} onClick={onProbe}>{probing ? 'Checking…' : 'Check distributions'}</button>
-      {needsFirewall && <button class="primary" disabled={busy === 'firewall'} onClick={onRepairFirewall}>{busy === 'firewall' ? 'Repairing…' : 'Allow through firewall'}</button>}
+      <button disabled={probing} onClick={onProbe}>{probing ? t("WslBridgePanel.ec963ffc91") : t("WslBridgePanel.94cb7ed354")}</button>
+      {needsFirewall && <button class="primary" disabled={busy === 'firewall'} onClick={onRepairFirewall}>{busy === 'firewall' ? t("WslBridgePanel.fb4c616eb4") : t("WslBridgePanel.4a988a055e")}</button>}
     </div>
-    <p class="profile-hint">Checking starts a stopped distribution, which takes a few seconds - so it is a button rather than something this page does on its own.</p>
+    <p class="profile-hint">{t("WslBridgePanel.d9d8073e67")}</p>
 
-    {!status.distros.length && <p class="profile-hint">No WSL distributions found.</p>}
+    {!status.distros.length && <p class="profile-hint">{t("WslBridgePanel.25872d015b")}</p>}
     {status.distros.map(distro => <div key={distro.name} class="wsl-distro">
-      <strong>{distro.name}</strong> <span class="profile-hint">{distro.running ? 'running' : 'stopped'}</span>
-      {isReady(status, distro)
-        ? <p class="profile-hint">Ready: {distro.bridge?.harnesses.map(h => h.name).join(', ')}</p>
-        : <ul class="profile-hint">{blockers(status, distro).map(reason => <li key={reason}>{reason}</li>)}</ul>}
-      {status.enabled && distro.bridge?.harnesses.length && !distro.bridge?.installed
-        ? <div class="theme-actions"><button disabled={busy === distro.name} onClick={() => onInstall(distro.name)}>{busy === distro.name ? 'Installing…' : `Install bridge into ${distro.name}`}</button></div>
-        : null}
+      <strong>{distro.name}</strong> <span class="profile-hint">{distro.running ? t("WslBridgePanel.c071cf5f5e") : t("WslBridgePanel.8322e87d24")}</span>
+      {isReady(status, distro) ? <p class="profile-hint">{rich("WslBridgePanel.e5e5b6d309", { value1: distro.bridge?.harnesses.map(h => h.name).join(', ') })}</p> : <ul class="profile-hint">{blockers(status, distro).map(reason => <li key={reason}>{reason}</li>)}</ul>}
+      {status.enabled && distro.bridge?.harnesses.length && !distro.bridge?.installed ? <div class="theme-actions"><button disabled={busy === distro.name} onClick={() => onInstall(distro.name)}>{busy === distro.name ? t("WslBridgePanel.530bcc355f") : t("WslBridgePanel.6407a06987", { name: distro.name })}</button></div> : null}
     </div>)}
 
     {message && <p class={/could not|failed|declined/i.test(message) ? 'settings-inline-error' : ''} aria-live="polite">{message}</p>}

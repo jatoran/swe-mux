@@ -1,3 +1,4 @@
+import { rich, t } from './localization/index.ts'
 import { useEffect } from 'preact/hooks'
 import { Dropdown } from './Dropdown'
 import { SetupAccounts } from './SetupAccounts'
@@ -6,22 +7,22 @@ import type { SetupDraft } from './onboarding'
 
 export type ExperienceTier = 'terminal'|'deterministic'|'automations'
 export const EXPERIENCE_TIERS = [
-  {id:'terminal',title:'Just terminals',blurb:'Shells and agent CLIs. Minimal extras.'},
-  {id:'deterministic',title:'Agent workspace',blurb:'Transcripts, status, notes, and queues. No model API needed.'},
-  {id:'automations',title:'Smart workspace',blurb:'Add AI summaries and automations. Connect models later.'},
+  {id:'terminal',get title() { return t("HarnessSetup.4220e2080e") },get blurb() { return t("HarnessSetup.0acc2aca5f") }},
+  {id:'deterministic',get title() { return t("HarnessSetup.9f6f919dc1") },get blurb() { return t("HarnessSetup.1584ca994a") }},
+  {id:'automations',get title() { return t("HarnessSetup.78a79112df") },get blurb() { return t("HarnessSetup.df6006ca4b") }},
 ] as const
 export type AutonomyLevel = 'supervised'|'assisted'|'autonomous'
 export const AUTONOMY_LEVELS = [
-  {id:'supervised',title:'Review first',blurb:'You approve queued messages.'},
-  {id:'assisted',title:'Deliver when ready',blurb:'Queued messages send when an agent is ready.'},
-  {id:'autonomous',title:'Extended runs',blurb:'Longer unattended sequences, with higher delivery and spawn limits.'},
+  {id:'supervised',get title() { return t("HarnessSetup.a6f703fd0e") },get blurb() { return t("HarnessSetup.479ce31729") }},
+  {id:'assisted',get title() { return t("HarnessSetup.3aba4e923d") },get blurb() { return t("HarnessSetup.89c6c35705") }},
+  {id:'autonomous',get title() { return t("HarnessSetup.08a3229fa3") },get blurb() { return t("HarnessSetup.982e6a6351") }},
 ] as const
 export type FleetAccessChoice = 'default'|'mcp'|'cli'|'none'
 export const FLEET_ACCESS_CHOICES = [
-  {id:'default',label:'MCP tools + agent CLI',note:'Recommended'},
-  {id:'mcp',label:'MCP tools only',note:''},
-  {id:'cli',label:'Agent CLI + skill file',note:''},
-  {id:'none',label:'No fleet access',note:''},
+  {id:'default',get label() { return t("HarnessSetup.c35b64c5b7") },get note() { return t("HarnessSetup.d70604e843") }},
+  {id:'mcp',get label() { return t("HarnessSetup.cf796b5a0e") },note:''},
+  {id:'cli',get label() { return t("HarnessSetup.f971e6a3c6") },note:''},
+  {id:'none',get label() { return t("HarnessSetup.7880eef881") },note:''},
 ] as const
 /** Absolute selections: changing back to the default also restores its surfaces. */
 export function fleetAccessChanges(choice:FleetAccessChoice,harnesses:readonly string[]):Record<string,Record<string,boolean>> {
@@ -37,7 +38,7 @@ export const DEFAULT_THEME='tokyo-night'
 export type KeymapPreset={id:string;title:string;description:string;warning:string}
 export function keymapNote(presets:KeymapPreset[],selected:string):string {
   const preset=presets.find(item=>item.id===selected)
-  return preset?.warning||preset?.description||'Shortcuts stay editable in Settings.'
+  return preset?.warning||preset?.description||t("HarnessSetup.3f56db5af2")
 }
 
 type Props={
@@ -53,10 +54,10 @@ export function HarnessSetup({page,draft,onChange,registry,loading,error,onRetry
     onChange({harnesses:enabled,default_harness:registry.harnesses.find(item=>enabled[item.name])?.name||''})
   },[registry,draft.harnesses])
   if(page==='experience')return <section>
-    <h2>How do you want to start?</h2><p class="setup-lede">Pick a starting point. Change it anytime.</p>
+    <h2 data-heading-message="HarnessSetup.99a17fa51b">{t("HarnessSetup.99a17fa51b")}</h2><p class="setup-lede">{t("HarnessSetup.5d79799ad6")}</p>
     <div class="setup-cards">{EXPERIENCE_TIERS.map(tier=><label class={`setup-card ${(draft.tier||'deterministic')===tier.id?'selected':''}`} key={tier.id}>
       <input type="radio" name="experience-tier" checked={(draft.tier||'deterministic')===tier.id} onChange={()=>onChange({tier:tier.id,overrides:{}})}/>
-      <span><strong>{tier.title}</strong><small>{tier.blurb}</small>{tier.id==='deterministic'&&<small class="setup-recommended">Recommended</small>}</span>
+      <span><strong>{tier.title}</strong><small>{tier.blurb}</small>{tier.id==='deterministic' && <small class="setup-recommended">{t("HarnessSetup.d70604e843")}</small>}</span>
     </label>)}</div>
   </section>
   const choices=draft.harnesses
@@ -67,17 +68,17 @@ export function HarnessSetup({page,draft,onChange,registry,loading,error,onRetry
     onChange({harnesses:next,default_harness:next[defaultHarness]?defaultHarness:harnesses.find(item=>next[item.name])?.name||''})
   }
   return <section>
-    <h2>What do you want to run?</h2><p class="setup-lede">Shell is ready. Choose any agents you also want.</p>
-    <div class="setup-shell-row"><strong>Shell</strong><span>Always available</span><button onClick={()=>onChange({harnesses:{},default_harness:''})}>Use Shell only</button></div>
-    {loading&&<p role="status">Detecting installed agents…</p>}
-    {error&&<p role="alert">{error}</p>}
-    {registry&&<div class="setup-cards">{harnesses.map(item=><label class={`setup-card ${choices?.[item.name]?'selected':''}`} key={item.name}>
+    <h2 data-heading-message="HarnessSetup.853acc42ef">{t("HarnessSetup.853acc42ef")}</h2><p class="setup-lede">{t("HarnessSetup.eb1b91436b")}</p>
+    <div class="setup-shell-row"><strong>{t("HarnessSetup.a733285486")}</strong><span>{t("HarnessSetup.0fda37724c")}</span><button onClick={()=>onChange({harnesses:{},default_harness:''})}>{t("HarnessSetup.8e11f491ff")}</button></div>
+    {loading && <p role="status">{t("HarnessSetup.cacc943a92")}</p>}
+    {error && <p role="alert">{error}</p>}
+    {registry && <div class="setup-cards">{harnesses.map(item=><label class={`setup-card ${choices?.[item.name]?'selected':''}`} key={item.name}>
       <input type="checkbox" disabled={!item.installed} checked={!!choices?.[item.name]} onChange={event=>choose(item.name,event.currentTarget.checked)}/>
-      <span><strong>{item.display_name}</strong><small>{item.resolved_path?'Detected':item.installed?'Agent data found - check the CLI is installed':'Install needed'}</small></span>
+      <span><strong>{item.display_name}</strong><small>{item.resolved_path ? t("HarnessSetup.756a8ba97d") : item.installed ? t("HarnessSetup.f1418eb503") : t("HarnessSetup.a5ee305c97")}</small></span>
     </label>)}</div>}
-    <div class="setup-inline-actions"><button disabled={loading} onClick={onRetry}>{error?'Retry detection':'Check again'}</button><a href="https://swemux.dev/docs/agent-setup/" target="_blank" rel="noreferrer">Agent installation guide ↗</a></div>
-    {selected.length>0&&<label class="setup-select">Start with<Dropdown ariaLabel="Default harness" value={defaultHarness} onChange={value=>onChange({default_harness:value})} options={[{value:'',label:'Shell'},...selected.map(item=>({value:item.name,label:item.display_name}))]}/></label>}
-    {selected.length>0&&<SetupAccounts enabled={selected.map(item=>item.name)}/>}
-    <p class="setup-hint">{selected.length?'Recent project folders are being found in the background.':'Choose a folder manually on the next page.'}</p>
+    <div class="setup-inline-actions"><button disabled={loading} onClick={onRetry}>{error ? t("HarnessSetup.17a0a747db") : t("HarnessSetup.fb7099ad8e")}</button><a href="https://swemux.dev/docs/agent-setup/" target="_blank" rel="noreferrer">{t("HarnessSetup.a941998dbf")}</a></div>
+    {selected.length>0 && <label class="setup-select">{rich("HarnessSetup.b31b817625", { value1: <Dropdown ariaLabel={t("HarnessSetup.c039f423b8")} value={defaultHarness} onChange={value=>onChange({default_harness:value})} options={[{value:'',get label() { return t("HarnessSetup.a733285486") }},...selected.map(item=>({value:item.name,label:item.display_name}))]}/> })}</label>}
+    {selected.length>0 && <SetupAccounts enabled={selected.map(item=>item.name)}/>}
+    <p class="setup-hint">{selected.length ? t("HarnessSetup.bf6ef4d916") : t("HarnessSetup.d3268e49fe")}</p>
   </section>
 }

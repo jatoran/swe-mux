@@ -111,8 +111,7 @@ export function MenuGroup({ id, label, openId, onOpenChange, children, disabled,
       onPointerLeave={event => { if (event.pointerType !== 'touch') scheduleClose() }}
       onClick={() => { clear(); onOpenChange(open ? null : id) }}
     >{icon ? <span class="menu-row-icon" aria-hidden="true">{icon}</span> : null}{icon ? <span class="menu-row-label">{label}</span> : label}{badge}<span class="menu-group-caret" aria-hidden="true">{flyout ? '›' : open ? '▾' : '▸'}</span></button>
-    {open && (flyout
-      ? <div
+    {open && (flyout ? <div
           ref={panel}
           class="context-menu menu-flyout"
           role="menu"
@@ -120,7 +119,6 @@ export function MenuGroup({ id, label, openId, onOpenChange, children, disabled,
           onPointerEnter={clear}
           onPointerLeave={event => { if (event.pointerType !== 'touch') scheduleClose() }}
           style={{ left: `${box?.left ?? -9999}px`, top: `${box?.top ?? -9999}px`, visibility: box ? 'visible' : 'hidden' }}
-        >{children}</div>
-      : <div class="menu-group-items" role="group" aria-label={label}>{children}</div>)}
+        >{children}</div> : <div class="menu-group-items" role="group" aria-label={label}>{children}</div>)}
   </Fragment>
 }

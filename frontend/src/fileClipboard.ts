@@ -1,3 +1,5 @@
+import { locale as uiLocale } from './localization/index.ts'
+import { t } from './localization/index.ts'
 // Clipboard payloads for project files: the two path forms and a bounded slice of file text.
 //
 // Pure so the joining and truncation rules can be unit-tested without a DOM or a server.
@@ -61,9 +63,9 @@ export function truncateForClipboard(
   if (slice.length === totalChars) {
     return { text: slice, truncated: false, lines, totalLines, chars: slice.length, totalChars }
   }
-  const notice = `\n\n[swe-mux: truncated ${label} — copied ${lines.toLocaleString()} of ${totalLines.toLocaleString()} lines (${slice.length.toLocaleString()} of ${totalChars.toLocaleString()} characters)]\n`
+  const notice = t("fileClipboard.eb9c0e44d5", { value1: label, value2: lines.toLocaleString(uiLocale.value), value3: totalLines.toLocaleString(uiLocale.value), value4: slice.length.toLocaleString(uiLocale.value), value5: totalChars.toLocaleString(uiLocale.value) })
   return {
-    text: `${slice}${notice}`,
+    get text() { return t("fileClipboard.66c9349203", { slice: slice, notice: notice }) },
     truncated: true,
     lines,
     totalLines,
@@ -75,7 +77,7 @@ export function truncateForClipboard(
 /** Human summary for the transient "copied" notice in the file browser. */
 export function copySummary(slice: ClipboardSlice): string {
   if (!slice.truncated) {
-    return `Copied ${slice.totalLines.toLocaleString()} line${slice.totalLines === 1 ? '' : 's'}`
+    return t("fileClipboard.1c21b7ab5b", { value1: slice.totalLines.toLocaleString(uiLocale.value), value2: (slice.totalLines === 1) ? 'yes' : 'no' })
   }
-  return `Copied first ${slice.lines.toLocaleString()} of ${slice.totalLines.toLocaleString()} lines`
+  return t("fileClipboard.470a2daac3", { value1: slice.lines.toLocaleString(uiLocale.value), value2: slice.totalLines.toLocaleString(uiLocale.value) })
 }

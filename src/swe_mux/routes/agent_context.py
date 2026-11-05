@@ -13,6 +13,7 @@ from .. import (
 from ..agent_context import AgentContextConflict, AgentContextService
 from ..file_manager import open_in_file_manager
 from ..http_support import json_response
+from ..ui_messages import error_text, ui_message
 from .support import _request_project
 
 log = logging.getLogger(__name__)
@@ -69,7 +70,7 @@ async def sync_agent_context(request: web.Request) -> web.Response:
     source_revision = str(body.get("source_revision") or "")
     target_revision = str(body.get("target_revision") or "")
     if not source_revision or not target_revision:
-        raise ValueError("source_revision and target_revision are required")
+        raise ValueError(ui_message("agent_context.a27c4a97d7"))
     service: AgentContextService = request.app[keys.AGENT_CONTEXT]
     try:
         result = await asyncio.to_thread(
@@ -81,7 +82,7 @@ async def sync_agent_context(request: web.Request) -> web.Response:
             target_revision,
         )
     except AgentContextConflict as exc:
-        return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+        return json_response({"error": error_text(exc), "code": "revision_conflict"}, 409)
     log.info(
         "agent_context_synced project_id=%s direction=%s source=%s target=%s revision=%s",
         project.id,
@@ -116,7 +117,7 @@ async def link_agent_context(request: web.Request) -> web.Response:
     source_revision = str(body.get("source_revision") or "")
     target_revision = str(body.get("target_revision") or "")
     if not source_revision or not target_revision:
-        raise ValueError("source_revision and target_revision are required")
+        raise ValueError(ui_message("agent_context.a27c4a97d7"))
     service: AgentContextService = request.app[keys.AGENT_CONTEXT]
     try:
         result = await asyncio.to_thread(
@@ -128,7 +129,7 @@ async def link_agent_context(request: web.Request) -> web.Response:
             target_revision,
         )
     except AgentContextConflict as exc:
-        return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+        return json_response({"error": error_text(exc), "code": "revision_conflict"}, 409)
     log.info(
         "agent_context_linked project_id=%s direction=%s source=%s target=%s revision=%s",
         project.id,
@@ -155,7 +156,7 @@ async def unlink_agent_context(request: web.Request) -> web.Response:
     source_id = str(body.get("source_id") or "")
     target_revision = str(body.get("target_revision") or "")
     if not source_id or not target_revision:
-        raise ValueError("source_id and target_revision are required")
+        raise ValueError(ui_message("agent_context.ae70e734c9"))
     service: AgentContextService = request.app[keys.AGENT_CONTEXT]
     try:
         result = await asyncio.to_thread(
@@ -166,7 +167,7 @@ async def unlink_agent_context(request: web.Request) -> web.Response:
             target_revision,
         )
     except AgentContextConflict as exc:
-        return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+        return json_response({"error": error_text(exc), "code": "revision_conflict"}, 409)
     log.info(
         "agent_context_unlinked project_id=%s source_id=%s target=%s revision=%s",
         project.id,
@@ -191,7 +192,7 @@ async def restore_agent_context(request: web.Request) -> web.Response:
     backup_id = str(body.get("backup_id") or "")
     target_revision = str(body.get("target_revision") or "")
     if not backup_id or not target_revision:
-        raise ValueError("backup_id and target_revision are required")
+        raise ValueError(ui_message("agent_context.5b61bfd17f"))
     service: AgentContextService = request.app[keys.AGENT_CONTEXT]
     try:
         result = await asyncio.to_thread(
@@ -202,7 +203,7 @@ async def restore_agent_context(request: web.Request) -> web.Response:
             target_revision,
         )
     except AgentContextConflict as exc:
-        return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+        return json_response({"error": error_text(exc), "code": "revision_conflict"}, 409)
     log.info(
         "agent_context_restored project_id=%s backup_id=%s target=%s revision=%s",
         project.id,

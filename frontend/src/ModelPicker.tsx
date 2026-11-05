@@ -1,3 +1,4 @@
+import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { DROPDOWN_PRESS_SLOP_PX, dropdownScrollTop } from './dropdownOptions'
 import { filterModelOptions, type ModelOption } from './modelFilter'
@@ -60,7 +61,7 @@ export function ModelPicker({id,value,options,emptyLabel,required,onChange}:Prop
   const [open,setOpen]=useState(false)
   const [query,setQuery]=useState('')
   const [active,setActive]=useState(0)
-  const matches=useMemo(()=>filterModelOptions(options,query),[options,query])
+  const matches=useMemo(()=>filterModelOptions(options,query), [options, query, uiLocale.value, catalogRevision.value])
   const listId=`${id}-options`
   // The typed id, offered only when it is not already one of the rows above. An
   // exact match would otherwise render twice and the two would commit the same
@@ -128,7 +129,7 @@ export function ModelPicker({id,value,options,emptyLabel,required,onChange}:Prop
         aria-activedescendant={open&&matches[active]?`${listId}-${active}`:undefined}
         autocomplete="off"
         value={open?query:value}
-        placeholder={open?'Type to filter models…':emptyLabel}
+        placeholder={open ? t("ModelPicker.84cf662241") : emptyLabel}
         onFocus={()=>{if(!open)openPicker()}}
         onInput={event=>{setQuery(event.currentTarget.value);setOpen(true)}}
         onKeyDown={event=>{
@@ -138,10 +139,10 @@ export function ModelPicker({id,value,options,emptyLabel,required,onChange}:Prop
           else if(event.key==='Escape'&&open){event.preventDefault();setOpen(false);setQuery('')}
         }}
       />
-      <button type="button" aria-label={open?'Close model list':'Open model list'} onPointerDown={event=>event.preventDefault()} onClick={()=>{if(open){setOpen(false);setQuery('')}else{openPicker();input.current?.focus()}}}>⌄</button>
+      <button type="button" aria-label={open ? t("ModelPicker.191a39cf2a") : t("ModelPicker.a2d1649e7b")} onPointerDown={event=>event.preventDefault()} onClick={()=>{if(open){setOpen(false);setQuery('')}else{openPicker();input.current?.focus()}}}>⌄</button>
     </div>
-    {open&&<div ref={list} class="model-picker-options" id={listId} role="listbox" aria-label="Available models">
-      {!query&&!required&&<button type="button" role="option" aria-selected={!value} class={!value?'active':''} data-selected={!value?'true':undefined} onClick={()=>choose('')}>{emptyLabel}</button>}
+    {open && <div ref={list} class="model-picker-options" id={listId} role="listbox" aria-label={t("ModelPicker.9dbfd0478b")}>
+      {!query&&!required && <button type="button" role="option" aria-selected={!value} class={!value?'active':''} data-selected={!value?'true':undefined} onClick={()=>choose('')}>{emptyLabel}</button>}
       {matches.map((model,index)=>{
         const meta=modelMetaLabel(model)
         const detail=modelMetaTitle(model)
@@ -169,18 +170,18 @@ export function ModelPicker({id,value,options,emptyLabel,required,onChange}:Prop
             if(from&&Math.hypot(event.clientX-from.x,event.clientY-from.y)>DROPDOWN_PRESS_SLOP_PX)return
             choose(model.id)
           }}
-        ><strong>{model.name}</strong><span class="model-picker-meta"><span>{model.id}</span>{meta&&<span class="model-picker-price">{meta}</span>}</span></button>
+        ><strong>{model.name}</strong><span class="model-picker-meta"><span>{model.id}</span>{meta && <span class="model-picker-price">{meta}</span>}</span></button>
       })}
-      {!matches.length&&<span class="model-picker-empty">No matching models</span>}
+      {!matches.length && <span class="model-picker-empty">{t("ModelPicker.5267f5e646")}</span>}
       {/* Last, never first. Above the list it would sit under the cursor as soon
           as typing began and take the Enter meant for the row being searched for;
           below it, it is what you reach only once the catalog has nothing. */}
-      {custom&&<button
+      {custom && <button
         type="button"
         role="option"
         aria-selected={custom===value}
         class="model-picker-custom"
-        title={`Use ${custom} even though it is not in this endpoint's catalog`}
+        title={t("ModelPicker.c3f6a51074", { custom: custom })}
         onPointerDown={event=>{press.current={x:event.clientX,y:event.clientY}}}
         onClick={event=>{
           const from=press.current
@@ -188,7 +189,7 @@ export function ModelPicker({id,value,options,emptyLabel,required,onChange}:Prop
           if(from&&Math.hypot(event.clientX-from.x,event.clientY-from.y)>DROPDOWN_PRESS_SLOP_PX)return
           choose(custom)
         }}
-      ><strong>Use <code>{custom}</code></strong><span class="model-picker-meta"><span>not in this endpoint's catalog</span></span></button>}
+      ><strong>{rich("ModelPicker.c935935ee0", { value1: <code>{custom}</code> })}</strong><span class="model-picker-meta"><span>{t("ModelPicker.928a6d0d02")}</span></span></button>}
     </div>}
   </div>
 }

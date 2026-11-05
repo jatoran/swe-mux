@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import type { ProviderAccount } from './ProviderAccounts'
 import { serverNow } from './serverClock.ts'
 
@@ -190,13 +191,13 @@ export function modelPeriodRows(
  *  as a mark beside it rather than in words. */
 export function accountNameLabel(account:Pick<ProviderAccount,'label'|'email'>):string {
   const detail = account.email&&account.email!==account.label?` · ${account.email}`:''
-  return `${account.label}${detail}`
+  return t("usageAnalytics.8e4f34140b", { label: account.label, detail: detail })
 }
 
 /** The same name with its provider in words, for text that cannot carry a mark: a select
  *  option, a tooltip, an accessible name. */
 export function accountDisplayLabel(account:Pick<ProviderAccount,'label'|'email'|'provider'>):string {
-  return `${accountNameLabel(account)} · ${account.provider}`
+  return t("usageAnalytics.88b4e65526", { value1: accountNameLabel(account), provider: account.provider })
 }
 
 export function quotaSeriesPath(options:{

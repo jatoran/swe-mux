@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 from .telemetry_otlp import provider_capabilities
 from .telemetry_schema import QUALITY_FIELDS, canonical_json, digest, period_of
+from .ui_messages import ui_message
 
 #: Columns a caller may filter aggregates by. Every one exists on the canonical
 #: entity tables and on both rollup tables, so a filter costs nothing in exactness.
@@ -98,8 +99,16 @@ EXPORT_KINDS: dict[str, tuple[str, str, str]] = {
 }
 #: Extra exact-match columns a detail page of each kind accepts, beyond FILTER_COLUMNS.
 PAGE_EXTRA_FILTERS: dict[str, tuple[str, ...]] = {
-    "tool_calls": ("invocation_layer", "family", "status", "evidence_quality", "raw_name",
-                   "run_id", "turn_id", "session_id"),
+    "tool_calls": (
+        "invocation_layer",
+        "family",
+        "status",
+        "evidence_quality",
+        "raw_name",
+        "run_id",
+        "turn_id",
+        "session_id",
+    ),
     "runs": ("session_id", "origin"),
     "turns": ("run_id", "status", "session_id"),
     "model_requests": ("run_id", "turn_id", "query_source"),
@@ -266,9 +275,7 @@ class LedgerQueryMixin:
             }
             dirty_hours = {
                 str(row["hour"])
-                for row in self._catalog.execute(
-                    "SELECT hour FROM rollup_dirty_hours"
-                ).fetchall()
+                for row in self._catalog.execute("SELECT hour FROM rollup_dirty_hours").fetchall()
             }
         spans: list[Span] = []
 
@@ -306,9 +313,7 @@ class LedgerQueryMixin:
                     hour_start = (cursor // 3600) * 3600
                     hour_end = hour_start + 3600
                     slice_end = min(query_end, hour_end)
-                    hour_text = datetime.fromtimestamp(hour_start, tz=UTC).strftime(
-                        "%Y-%m-%dT%H"
-                    )
+                    hour_text = datetime.fromtimestamp(hour_start, tz=UTC).strftime("%Y-%m-%dT%H")
                     full_hour = cursor == hour_start and slice_end == hour_end
                     if full_hour and hour_text in rolled_hours and hour_text not in dirty_hours:
                         spans.append(("hour", hour_start, hour_end, hour_text))
@@ -347,7 +352,7 @@ class LedgerQueryMixin:
                 raise ValueError
             return value
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
-            raise ValueError("invalid telemetry cursor") from exc
+            raise ValueError(ui_message("telemetry_queries.e9dae485d9")) from exc
 
     # -- detail pages -----------------------------------------------------------
 
@@ -375,7 +380,7 @@ class LedgerQueryMixin:
         """
 
         if kind not in EXPORT_KINDS:
-            raise ValueError(f"unknown entity kind {kind!r}")
+            raise ValueError(ui_message("telemetry_queries.9c9191f845", value1=repr(kind)))
         table, time_column, key_column = EXPORT_KINDS[kind]
         bounded_limit = max(1, min(int(limit), 500))
         allowed = {*FILTER_COLUMNS, *PAGE_EXTRA_FILTERS.get(kind, ())}
@@ -436,7 +441,8 @@ class LedgerQueryMixin:
                 str(row["evidence_id"]): row
                 for row in self._query_all(
                     "SELECT evidence_id,observed_at,event_type FROM telemetry_evidence "
-                    f"WHERE evidence_id IN ({placeholders})", tuple(evidence_ids)
+                    f"WHERE evidence_id IN ({placeholders})",
+                    tuple(evidence_ids),
                 )
             }
             for row in page:
@@ -454,8 +460,11 @@ class LedgerQueryMixin:
             "origin": origin or "all",
             "filters": {
                 **usable,
-                **({"model": filters["model"]}
-                   if kind == "runs" and filters and filters.get("model") else {}),
+                **(
+                    {"model": filters["model"]}
+                    if kind == "runs" and filters and filters.get("model")
+                    else {}
+                ),
             },
             "matching": counted,
             "items": page,
@@ -561,14 +570,17 @@ class LedgerQueryMixin:
         if wanted:
             placeholders = ",".join("?" for _ in wanted)
             for other in self._periods():
-                for row in self._segment(other).execute(
-                    f"SELECT * FROM telemetry_evidence WHERE evidence_id IN ({placeholders})",
-                    tuple(wanted),
-                ).fetchall():
+                for row in (
+                    self._segment(other)
+                    .execute(
+                        f"SELECT * FROM telemetry_evidence WHERE evidence_id IN ({placeholders})",
+                        tuple(wanted),
+                    )
+                    .fetchall()
+                ):
                     evidence[str(row["evidence_id"])] = dict(row)
         return [
-            {**dict(link), "observation": evidence.get(str(link["evidence_id"]))}
-            for link in links
+            {**dict(link), "observation": evidence.get(str(link["evidence_id"]))} for link in links
         ]
 
     def _locate(self, entity_kind: str, entity_id: str) -> str | None:
@@ -582,9 +594,11 @@ class LedgerQueryMixin:
         period = self._locate("tool_call", tool_call_id)
         if period is None:
             return None
-        call = self._segment(period).execute(
-            "SELECT * FROM telemetry_tool_calls WHERE tool_call_id=?", (tool_call_id,)
-        ).fetchone()
+        call = (
+            self._segment(period)
+            .execute("SELECT * FROM telemetry_tool_calls WHERE tool_call_id=?", (tool_call_id,))
+            .fetchone()
+        )
         if call is None:
             return None
         return {
@@ -598,9 +612,11 @@ class LedgerQueryMixin:
         period = self._locate("run", run_id)
         if period is None:
             return None
-        run = self._segment(period).execute(
-            "SELECT * FROM telemetry_runs WHERE run_id=?", (run_id,)
-        ).fetchone()
+        run = (
+            self._segment(period)
+            .execute("SELECT * FROM telemetry_runs WHERE run_id=?", (run_id,))
+            .fetchone()
+        )
         if run is None:
             return None
         turns = self._query_all(
@@ -657,9 +673,11 @@ class LedgerQueryMixin:
         period = self._locate("turn", turn_id)
         if period is None:
             return None
-        turn = self._segment(period).execute(
-            "SELECT * FROM telemetry_turns WHERE turn_id=?", (turn_id,)
-        ).fetchone()
+        turn = (
+            self._segment(period)
+            .execute("SELECT * FROM telemetry_turns WHERE turn_id=?", (turn_id,))
+            .fetchone()
+        )
         if turn is None:
             return None
         return {
@@ -803,10 +821,12 @@ class LedgerQueryMixin:
             else:
                 rows.extend(
                     dict(row)
-                    for row in self._segment(period_of(start)).execute(
+                    for row in self._segment(period_of(start))
+                    .execute(
                         raw_sql.format(origin=origin_clause, filters=filter_clause),
                         (start, end, *origin_args, *filter_args),
-                    ).fetchall()
+                    )
+                    .fetchall()
                 )
         return rows, self._coverage(spans)
 
@@ -847,8 +867,7 @@ class LedgerQueryMixin:
             count = int(row["count"])
             total += count
             key = tuple(
-                str(row[field])
-                for field in ("backend", "model", "project_id", "origin", "trigger")
+                str(row[field]) for field in ("backend", "model", "project_id", "origin", "trigger")
             )
             group = groups.setdefault(
                 key,
@@ -1514,9 +1533,11 @@ class LedgerQueryMixin:
         now: float | None = None,
     ) -> dict[str, Any]:
         if verdict not in FINDING_VERDICTS:
-            raise ValueError(f"verdict must be one of {', '.join(FINDING_VERDICTS)}")
+            raise ValueError(
+                ui_message("telemetry_queries.783c950ff0", value1=", ".join(FINDING_VERDICTS))
+            )
         if not finding_key or len(finding_key) != 64:
-            raise ValueError("finding_key must be the finding's own key")
+            raise ValueError(ui_message("telemetry_queries.4241e3b458"))
         reviewed_at = time.time() if now is None else now
         with self._write_lock, self._catalog:
             self._catalog.execute(
@@ -1637,8 +1658,15 @@ class LedgerQueryMixin:
                 )
             }
 
-            def add(kind: str, evidence: dict[str, Any], confidence: str, suggestion: str,
-                    *, cov: float = coverage, ident: dict[str, Any] = identity) -> None:
+            def add(
+                kind: str,
+                evidence: dict[str, Any],
+                confidence: str,
+                suggestion: str,
+                *,
+                cov: float = coverage,
+                ident: dict[str, Any] = identity,
+            ) -> None:
                 findings.append(
                     {
                         "kind": kind,
@@ -1652,14 +1680,30 @@ class LedgerQueryMixin:
                 )
 
             rate_findings = (
-                ("high_failure_rate", failed, "failed",
-                 "Inspect recurring errors and tool arguments before changing configuration."),
-                ("high_denial_rate", denied, "denied",
-                 "Review permission rules or repeated unsupported requests."),
-                ("high_abandonment_rate", abandoned, "abandoned",
-                 "Calls left open when their run ended; look for hangs or killed sessions."),
-                ("high_interruption_rate", interrupted, "interrupted",
-                 "Operators are cutting this tool off; check whether it runs too long."),
+                (
+                    "high_failure_rate",
+                    failed,
+                    "failed",
+                    "Inspect recurring errors and tool arguments before changing configuration.",
+                ),
+                (
+                    "high_denial_rate",
+                    denied,
+                    "denied",
+                    "Review permission rules or repeated unsupported requests.",
+                ),
+                (
+                    "high_abandonment_rate",
+                    abandoned,
+                    "abandoned",
+                    "Calls left open when their run ended; look for hangs or killed sessions.",
+                ),
+                (
+                    "high_interruption_rate",
+                    interrupted,
+                    "interrupted",
+                    "Operators are cutting this tool off; check whether it runs too long.",
+                ),
             )
             for kind, count, label, suggestion in rate_findings:
                 if completed >= 5 and count / completed >= 0.2:
@@ -1709,9 +1753,7 @@ class LedgerQueryMixin:
         for finding in findings:
             finding["review"] = reviews.get(finding["finding_key"])
         visible = (
-            findings
-            if include_reviewed
-            else [item for item in findings if not item["review"]]
+            findings if include_reviewed else [item for item in findings if not item["review"]]
         )
         return {
             "from": from_ts,
@@ -1756,13 +1798,11 @@ class LedgerQueryMixin:
         """
 
         if split not in FILTER_COLUMNS:
-            raise ValueError(f"split must be one of {', '.join(FILTER_COLUMNS)}")
-        fixed = {
-            column: value for column, value in (filters or {}).items() if column != split
-        }
-        workload = self.workload_summary(
-            from_ts=from_ts, to_ts=to_ts, origin=origin, filters=fixed
-        )
+            raise ValueError(
+                ui_message("telemetry_queries.61254fe40a", value1=", ".join(FILTER_COLUMNS))
+            )
+        fixed = {column: value for column, value in (filters or {}).items() if column != split}
+        workload = self.workload_summary(from_ts=from_ts, to_ts=to_ts, origin=origin, filters=fixed)
         skills = self.skill_summary(from_ts=from_ts, to_ts=to_ts, origin=origin, filters=fixed)
         verifications = self.verification_summary(
             from_ts=from_ts, to_ts=to_ts, origin=origin, filters=fixed
@@ -1895,9 +1935,7 @@ class LedgerQueryMixin:
             origin=origin,
             filters=filters,
             rollup_table="quality_daily",
-            rollup_columns=(
-                "backend,harness_version,model,project_id,origin," + ",".join(fields)
-            ),
+            rollup_columns=("backend,harness_version,model,project_id,origin," + ",".join(fields)),
             raw_sql=self._QUALITY_RAW_SQL,
             hours=True,
         )
@@ -2086,7 +2124,7 @@ class LedgerQueryMixin:
         """
 
         if kind not in EXPORT_KINDS:
-            raise ValueError(f"unknown export kind {kind!r}")
+            raise ValueError(ui_message("telemetry_queries.0e9c17339e", value1=repr(kind)))
         table, time_column, key_column = EXPORT_KINDS[kind]
         bounded = max(1, min(int(limit), 5000))
         origin_clause = "" if origin is None else " AND origin=?"
@@ -2122,11 +2160,13 @@ class LedgerQueryMixin:
             remaining = bounded - len(items) + 1
             rows = [
                 dict(row)
-                for row in self._segment(period).execute(
+                for row in self._segment(period)
+                .execute(
                     f"SELECT * FROM {table} WHERE {where} "
                     f"ORDER BY {time_column},{key_column} LIMIT ?",
                     (*args, remaining),
-                ).fetchall()
+                )
+                .fetchall()
             ]
             if len(rows) >= remaining:
                 taken = rows[: remaining - 1]

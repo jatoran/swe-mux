@@ -1,3 +1,4 @@
+import { rich, t } from './localization/index.ts'
 import { useEffect, useState } from 'preact/hooks'
 import { alertPreferencesFor, setAlertPreferencesFor } from './alertPrefs.ts'
 import { Dropdown } from './Dropdown'
@@ -23,24 +24,24 @@ import {
 } from './sessionSounds.ts'
 
 const eventLabels: Record<NotificationEvent, string> = {
-  complete: 'Root turn complete',
-  waiting: 'Waiting for input',
-  attention: 'Approval or question',
+  get complete() { return t("NotificationPushSettings.14710cfb88") },
+  get waiting() { return t("NotificationPushSettings.9259faf308") },
+  get attention() { return t("NotificationPushSettings.65508938a3") },
   failure: 'Failure',
-  reset: 'Unexpected quota reset',
+  get reset() { return t("NotificationPushSettings.673bfd80f4") },
 }
 const profileLabels: Record<SettingsProfile, string> = { desktop: 'Desktop', mobile: 'Mobile' }
 const suppressLabels: Record<NotificationSuppress, string> = {
-  never: 'Never - always push',
-  focused: 'This device has the app open',
-  anyDevice: 'Any device is in use',
+  get never() { return t("NotificationPushSettings.401cfdba25") },
+  get focused() { return t("NotificationPushSettings.81e80560b2") },
+  get anyDevice() { return t("NotificationPushSettings.ebc1a9be5a") },
 }
 const suppressHints: Record<NotificationSuppress, string> = {
-  never: 'Every enabled push event is delivered, even while you are looking at the app.',
-  focused: 'Push is skipped while this device is focused. An enabled foreground sound can cover that moment.',
-  anyDevice: 'Push is also suppressed while you are active elsewhere. Attention and waiting alerts are held briefly in case you step away.',
+  get never() { return t("NotificationPushSettings.66b4d57d0d") },
+  get focused() { return t("NotificationPushSettings.8a42bcf8d5") },
+  get anyDevice() { return t("NotificationPushSettings.575c8da61d") },
 }
-const customSoundOption = { id: 'custom' as const, label: 'Custom', description: 'your uploaded sound', glyph: '♪' }
+const customSoundOption = { id: 'custom' as const, get label() { return t("NotificationPushSettings.494ca78f73") }, get description() { return t("NotificationPushSettings.914dffe72b") }, glyph: '♪' }
 
 export function NotificationAlertSettings() {
   const [profile, setProfile] = useState<SettingsProfile>(currentProfile)
@@ -77,7 +78,7 @@ export function NotificationAlertSettings() {
   const preview = (next: typeof sounds, soundId: SoundId) => {
     void testSessionSound(next, soundId)
       .then(() => setSoundError(''))
-      .catch(() => setSoundError('Could not play this sound. Check this site’s audio permission and try again.'))
+      .catch(() => setSoundError(t("NotificationPushSettings.6ff39fbeba")))
   }
   const soundOptions = sounds.customSound ? [...satisfyingSounds, customSoundOption] : satisfyingSounds
   const chooseSound = (event: SoundEvent, value: string) => {
@@ -104,11 +105,11 @@ export function NotificationAlertSettings() {
     setBusy(true); setStatus('')
     const result = await enablePush()
     setBusy(false); setPermission(notificationPermission()); setSubscribed(result.ok)
-    setStatus(result.ok ? 'This browser is subscribed.' : (result.reason || 'Could not subscribe this browser.'))
+    setStatus(result.ok ? t("NotificationPushSettings.43f87ef075") : (result.reason || t("NotificationPushSettings.128c587efe")))
   }
   const unsubscribe = async () => {
     setBusy(true); await disablePush(); setBusy(false); setSubscribed(false)
-    setStatus('This browser is unsubscribed. Your profile choices are unchanged.')
+    setStatus(t("NotificationPushSettings.b5ee5adcaf"))
   }
 
   const supported = pushSupported()
@@ -117,55 +118,55 @@ export function NotificationAlertSettings() {
   const pushMuted = alertsMuted || !push.enabled
 
   return <section class="alert-settings">
-    <h3>Alerts</h3>
-    <p>Sounds and push are delivery channels for the same agent events. The alert history remains available in the Notifications panel even while delivery is muted.</p>
+    <h3 data-heading-message="NotificationPushSettings.f62e9267d1">{t("NotificationPushSettings.f62e9267d1")}</h3>
+    <p>{t("NotificationPushSettings.7811c94990")}</p>
 
-    <div class="settings-profile-switch" role="group" aria-label="Editing alert profile">
-      {(Object.keys(profileLabels) as SettingsProfile[]).map(id => <button type="button" key={id} aria-pressed={profile === id} class={profile === id ? 'is-active' : ''} onClick={() => setProfile(id)}>{profileLabels[id]}{id === currentProfile() ? ' (this device)' : ''}</button>)}
+    <div class="settings-profile-switch" role="group" aria-label={t("NotificationPushSettings.4b3f1a4ab1")}>
+      {(Object.keys(profileLabels) as SettingsProfile[]).map(id => <button type="button" key={id} aria-pressed={profile === id} class={profile === id ? 'is-active' : ''} onClick={() => setProfile(id)}>{profileLabels[id]}{id === currentProfile() ? t("NotificationPushSettings.41de3fbdea") : ''}</button>)}
     </div>
 
     <div class="alert-master" data-setting="alerts_enabled">
-      <div><strong>Enable alerts for {profileLabels[profile]}</strong><p>One mute switch for every interruptive alert on this device class. Channel and event choices are preserved while muted.</p></div>
-      <input aria-label={`Enable alerts for ${profileLabels[profile]}`} type="checkbox" checked={alerts.enabled} onChange={event => changeAlerts({ ...alerts, enabled: event.currentTarget.checked })} />
+      <div><strong>{rich("NotificationPushSettings.60849e674a", { value1: profileLabels[profile] })}</strong><p>{t("NotificationPushSettings.c560392fb6")}</p></div>
+      <input aria-label={t("NotificationPushSettings.60849e674a", { value1: profileLabels[profile] })} type="checkbox" checked={alerts.enabled} onChange={event => changeAlerts({ ...alerts, enabled: event.currentTarget.checked })} />
     </div>
 
     <div class={`alert-controls${alertsMuted ? ' is-muted' : ''}`}>
       <div class="alert-channel-grid">
         <article>
-          <label class="check"><span><strong>Sound in the open app</strong><small>Short foreground chimes from this browser.</small></span><input type="checkbox" disabled={alertsMuted} checked={sounds.enabled} onChange={event => changeSounds({ ...sounds, enabled: event.currentTarget.checked })} /></label>
-          <label>Volume<input aria-label="Alert sound volume" type="range" min="0" max="1" step=".05" disabled={soundMuted} value={sounds.volume} onInput={event => changeSounds({ ...sounds, volume: Number(event.currentTarget.value) })} /></label>
+          <label class="check"><span><strong>{t("NotificationPushSettings.b4c963cccb")}</strong><small>{t("NotificationPushSettings.5c8143b493")}</small></span><input type="checkbox" disabled={alertsMuted} checked={sounds.enabled} onChange={event => changeSounds({ ...sounds, enabled: event.currentTarget.checked })} /></label>
+          <label>{rich("NotificationPushSettings.6ac676b4d1", { value1: <input aria-label={t("NotificationPushSettings.ad7c20a1af")} type="range" min="0" max="1" step=".05" disabled={soundMuted} value={sounds.volume} onInput={event => changeSounds({ ...sounds, volume: Number(event.currentTarget.value) })} /> })}</label>
         </article>
         <article>
-          <label class="check"><span><strong>Push in the background</strong><small>System notifications when the app is closed, hidden, or locked.</small></span><input type="checkbox" disabled={alertsMuted} checked={push.enabled} onChange={event => changePush({ ...push, enabled: event.currentTarget.checked })} /></label>
-          <label>Stay quiet while<Dropdown ariaLabel={`When ${profileLabels[profile]} push stays quiet`} disabled={pushMuted} value={push.suppress} onChange={value => changePush({ ...push, suppress: value as NotificationSuppress })} options={notificationSuppressModes.map(mode => ({ value: mode, label: suppressLabels[mode] }))} /></label>
+          <label class="check"><span><strong>{t("NotificationPushSettings.ff2e147b76")}</strong><small>{t("NotificationPushSettings.c9bbb72c72")}</small></span><input type="checkbox" disabled={alertsMuted} checked={push.enabled} onChange={event => changePush({ ...push, enabled: event.currentTarget.checked })} /></label>
+          <label>{rich("NotificationPushSettings.689af4484d", { value1: <Dropdown ariaLabel={t("NotificationPushSettings.bc7f29ea46", { value1: profileLabels[profile] })} disabled={pushMuted} value={push.suppress} onChange={value => changePush({ ...push, suppress: value as NotificationSuppress })} options={notificationSuppressModes.map(mode => ({ value: mode, label: suppressLabels[mode] }))} /> })}</label>
           <p class="settings-hint">{suppressHints[push.suppress]}</p>
         </article>
       </div>
 
       <div class="alert-subsection">
-        <strong>Quiet hours</strong>
-        <p>One schedule applies to both delivery channels. Leave both times empty for no quiet period.</p>
-        <div class="quiet-hours"><label>Quiet from<input type="time" disabled={alertsMuted} value={alerts.quietStart} onInput={event => changeAlerts({ ...alerts, quietStart: event.currentTarget.value })} /></label><label>Until<input type="time" disabled={alertsMuted} value={alerts.quietEnd} onInput={event => changeAlerts({ ...alerts, quietEnd: event.currentTarget.value })} /></label></div>
+        <strong>{t("NotificationPushSettings.bf0671dd69")}</strong>
+        <p>{t("NotificationPushSettings.e8b7b57ef8")}</p>
+        <div class="quiet-hours"><label>{rich("NotificationPushSettings.32be2f94a7", { value1: <input type="time" disabled={alertsMuted} value={alerts.quietStart} onInput={event => changeAlerts({ ...alerts, quietStart: event.currentTarget.value })} /> })}</label><label>{rich("NotificationPushSettings.6c5bf405fb", { value1: <input type="time" disabled={alertsMuted} value={alerts.quietEnd} onInput={event => changeAlerts({ ...alerts, quietEnd: event.currentTarget.value })} /> })}</label></div>
       </div>
 
       <div class="alert-subsection">
-        <strong>Events</strong>
-        <p>Choose a foreground sound or Off for each event, and independently choose whether it can produce push.</p>
-        <div class="alert-event-table" role="group" aria-label="Alert delivery by event">
-          <div class="alert-event-header" aria-hidden="true"><span>Event</span><span>Sound</span><span>Push</span><span></span></div>
+        <strong>{t("NotificationPushSettings.8d14f6e72d")}</strong>
+        <p>{t("NotificationPushSettings.96fe6fac66")}</p>
+        <div class="alert-event-table" role="group" aria-label={t("NotificationPushSettings.edd289d3bc")}>
+          <div class="alert-event-header" aria-hidden="true"><span>{t("NotificationPushSettings.4e1f49a9c8")}</span><span>{t("NotificationPushSettings.46124e0236")}</span><span>{t("NotificationPushSettings.731ce7ed80")}</span><span></span></div>
           {notificationEvents.map(event => {
             const soundEvent = event as SoundEvent
             return <div class="alert-event-row" key={event}>
               <strong>{eventLabels[event]}</strong>
               <Dropdown
-                ariaLabel={`Sound for ${eventLabels[event]}`}
+                ariaLabel={t("NotificationPushSettings.6bf83b9d4f", { value1: eventLabels[event] })}
                 disabled={soundMuted}
                 value={sounds.events[soundEvent] ? sounds.eventSounds[soundEvent] : 'off'}
                 onChange={value => chooseSound(soundEvent, value)}
-                options={[{ value: 'off', label: 'Off' }, ...soundOptions.map(sound => ({ value: sound.id, label: sound.label }))]}
+                options={[{ value: 'off', get label() { return t("NotificationPushSettings.ca7981b46e") } }, ...soundOptions.map(sound => ({ value: sound.id, label: sound.label }))]}
               />
-              <input aria-label={`Push for ${eventLabels[event]}`} type="checkbox" disabled={pushMuted} checked={push.events[event]} onChange={changeEvent => changePush({ ...push, events: { ...push.events, [event]: changeEvent.currentTarget.checked } })} />
-              <button type="button" disabled={soundMuted || !sounds.events[soundEvent]} aria-label={`Preview sound for ${eventLabels[event]}`} onClick={() => preview(sounds, sounds.eventSounds[soundEvent])}>Preview</button>
+              <input aria-label={t("NotificationPushSettings.75451b5eb8", { value1: eventLabels[event] })} type="checkbox" disabled={pushMuted} checked={push.events[event]} onChange={changeEvent => changePush({ ...push, events: { ...push.events, [event]: changeEvent.currentTarget.checked } })} />
+              <button type="button" disabled={soundMuted || !sounds.events[soundEvent]} aria-label={t("NotificationPushSettings.9aaa421670", { value1: eventLabels[event] })} onClick={() => preview(sounds, sounds.eventSounds[soundEvent])}>{t("NotificationPushSettings.324b134f57")}</button>
             </div>
           })}
         </div>
@@ -173,23 +174,21 @@ export function NotificationAlertSettings() {
     </div>
 
     <div class="alert-subsection">
-      <strong>Sound library</strong>
-      <p>Previewing a sound never changes the alert master or channel switches.</p>
-      <div class="sound-preset-grid" role="group" aria-label="Available alert sounds">
-        {soundOptions.map(sound => <button type="button" key={sound.id} aria-label={`Preview ${sound.label}`} onClick={() => preview(sounds, sound.id)}><span aria-hidden="true">{sound.glyph}</span><strong>{sound.label}</strong><small>{sound.description}</small></button>)}
+      <strong>{t("NotificationPushSettings.da91b11835")}</strong>
+      <p>{t("NotificationPushSettings.d218afd76c")}</p>
+      <div class="sound-preset-grid" role="group" aria-label={t("NotificationPushSettings.1d71116329")}>
+        {soundOptions.map(sound => <button type="button" key={sound.id} aria-label={t("NotificationPushSettings.7b5f33f587", { label: sound.label })} onClick={() => preview(sounds, sound.id)}><span aria-hidden="true">{sound.glyph}</span><strong>{sound.label}</strong><small>{sound.description}</small></button>)}
       </div>
-      <label>Custom sound<input type="file" accept="audio/*" onChange={event => { const file = event.currentTarget.files?.[0]; if (file) void safeSoundFile(file).then(customSound => { const next = { ...sounds, customSound }; changeSounds(next); preview(next, 'custom') }).catch(cause => setSoundError(cause.message)) }} /></label>
-      {sounds.customSound && <div class="theme-actions"><button type="button" onClick={removeCustom}>Remove custom sound</button></div>}
-      <p aria-live="polite">Last sound: {lastReason}</p>
+      <label>{rich("NotificationPushSettings.755ca3ba5e", { value1: <input type="file" accept="audio/*" onChange={event => { const file = event.currentTarget.files?.[0]; if (file) void safeSoundFile(file).then(customSound => { const next = { ...sounds, customSound }; changeSounds(next); preview(next, 'custom') }).catch(cause => setSoundError(cause.message)) }} /> })}</label>
+      {sounds.customSound && <div class="theme-actions"><button type="button" onClick={removeCustom}>{t("NotificationPushSettings.7c5f1bdff9")}</button></div>}
+      <p aria-live="polite">{rich("NotificationPushSettings.11ff16c4ce", { lastReason: lastReason })}</p>
       {soundError && <p class="settings-inline-error">{soundError}</p>}
     </div>
 
     <div class="alert-subsection alert-browser-status">
-      <div><strong>This browser’s push capability</strong><p>{supported ? (subscribed ? 'Subscribed. Push still follows the selected profile, master, event, quiet-hour, and presence settings.' : 'Not subscribed. Profile choices are preserved and can be configured before subscribing.') : 'Push is unavailable in this browser. On iPhone, add the app to the Home Screen first.'}</p></div>
-      {supported && (subscribed
-        ? <button type="button" disabled={busy} onClick={unsubscribe}>Unsubscribe browser</button>
-        : <button type="button" disabled={busy} onClick={subscribe}>Subscribe browser</button>)}
-      {permission === 'denied' && <p class="settings-inline-error">Permission is blocked in the browser’s site settings.</p>}
+      <div><strong>{t("NotificationPushSettings.36f168bad1")}</strong><p>{supported ? (subscribed ? t("NotificationPushSettings.b9f49ce2c5") : t("NotificationPushSettings.8497aa07d7")) : t("NotificationPushSettings.a06ef3828e")}</p></div>
+      {supported && (subscribed ? <button type="button" disabled={busy} onClick={unsubscribe}>{t("NotificationPushSettings.4c9cf06a55")}</button> : <button type="button" disabled={busy} onClick={subscribe}>{t("NotificationPushSettings.0378e09139")}</button>)}
+      {permission === 'denied' && <p class="settings-inline-error">{t("NotificationPushSettings.c83478e833")}</p>}
       {status && <p aria-live="polite">{status}</p>}
     </div>
   </section>

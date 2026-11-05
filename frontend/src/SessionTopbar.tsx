@@ -49,9 +49,9 @@ export function SessionTopbar({session,config,rowConfig,facts,title,fault,render
       const section=(items:SessionTopbarItem[],align:'left'|'right')=>{
         const rendered=items.map(item=>({key:`${item.kind}:${item.id}`,node:renderItem(item)})).filter(item=>item.node!==null&&item.node!==false)
         if(rowIndex===0&&align==='left'&&!titlePlaced&&fault)rendered.unshift({key:'fault',node:<div class="pane-identity">{fault}</div>})
-        return <div class={`session-topbar-section ${align}${align==='right'?' pane-tools':''}`}>{rendered.map((item,index)=><div key={item.key} class="session-topbar-item">{index>0&&separator?<span class="session-topbar-separator" aria-hidden="true">{separator}</span>:null}{item.node}</div>)}</div>
+        return <div class={`session-topbar-section ${align}${align==='right'?' pane-tools':''}`}>{rendered.map((item,index)=><div key={item.key} class="session-topbar-item">{index>0&&separator ? <span class="session-topbar-separator" aria-hidden="true">{separator}</span> : null}{item.node}</div>)}</div>
       }
-      return <div key={rowIndex} class="session-topbar-row">{section(row.left,'left')}{section(row.right,'right')}{rowIndex===0&&<div class="session-topbar-menu">{menu}</div>}</div>
+      return <div key={rowIndex} class="session-topbar-row">{section(row.left,'left')}{section(row.right,'right')}{rowIndex===0 && <div class="session-topbar-menu">{menu}</div>}</div>
     })}
   </div>
 }

@@ -10,6 +10,8 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
+from .ui_messages import ui_message
+
 WINDOW_STATE_NAME = "desktop-window-state.json"
 WINDOW_STATE_VERSION = 1
 DEFAULT_WINDOW_WIDTH = 1440
@@ -40,7 +42,7 @@ class ScreenArea(Protocol):
 
 def _plain_int(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError("window geometry values must be integers")
+        raise ValueError(ui_message("desktop_window_state.d1d3617439"))
     return value
 
 
@@ -49,21 +51,21 @@ def load_window_state(path: Path) -> DesktopWindowState:
 
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
-        raise ValueError("desktop window state must be an object")
+        raise ValueError(ui_message("desktop_window_state.ca32d99f05"))
     version = _plain_int(payload.get("version"))
     if version != WINDOW_STATE_VERSION:
-        raise ValueError(f"unsupported desktop window state version {version}")
+        raise ValueError(ui_message("desktop_window_state.ab153bf77a", value1=version))
     x = _plain_int(payload.get("x"))
     y = _plain_int(payload.get("y"))
     width = _plain_int(payload.get("width"))
     height = _plain_int(payload.get("height"))
     maximized = payload.get("maximized")
     if not isinstance(maximized, bool):
-        raise ValueError("desktop window maximized state must be boolean")
+        raise ValueError(ui_message("desktop_window_state.b29850102e"))
     if not (-1_000_000 <= x <= 1_000_000 and -1_000_000 <= y <= 1_000_000):
-        raise ValueError("desktop window position is outside the supported range")
+        raise ValueError(ui_message("desktop_window_state.15c9f1a366"))
     if not (1 <= width <= 100_000 and 1 <= height <= 100_000):
-        raise ValueError("desktop window size is outside the supported range")
+        raise ValueError(ui_message("desktop_window_state.89d705d445"))
     return DesktopWindowState(x, y, width, height, maximized, version)
 
 

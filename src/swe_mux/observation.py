@@ -55,6 +55,7 @@ from .session import (
 from .session_patch import session_patch
 from .text_safety import utf8_safe
 from .tool_evidence import tool_call_evidence
+from .ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -414,9 +415,7 @@ def _patch_apply_evidence(
         if isinstance(entry, dict) and entry.get("content") is not None
     ]
     content_hash = (
-        hashlib.sha256("\x00".join(contents).encode("utf-8")).hexdigest()
-        if contents
-        else None
+        hashlib.sha256("\x00".join(contents).encode("utf-8")).hexdigest() if contents else None
     )
     return target, content_hash
 
@@ -630,9 +629,7 @@ def _parse_unittest(lines: list[str]) -> tuple[dict[str, int], list[str]] | None
         counts = found
     if ran is None or counts is None:
         return None
-    counts["passed"] = max(
-        0, ran - counts["failed"] - counts["errors"] - counts["skipped"]
-    )
+    counts["passed"] = max(0, ran - counts["failed"] - counts["errors"] - counts["skipped"])
     failing = [
         match.group(1) for line in lines if (match := _UNITTEST_FAILING_RE.match(line.strip()))
     ]
@@ -700,9 +697,7 @@ def _tool_targets(session: Session) -> dict[str, str]:
     return targets
 
 
-def _remember_tool_call(
-    session: Session, call_id: str, name: str, target: str | None
-) -> None:
+def _remember_tool_call(session: Session, call_id: str, name: str, target: str | None) -> None:
     """Correlate a tool invocation id with its name and target.
 
     Tool results identify their call only by opaque id, so a result would
@@ -773,9 +768,7 @@ def _transcript_read_pool() -> AccountedThreadPoolExecutor:
     return _transcript_reader
 
 
-async def _in_transcript_reader[**P, R](
-    fn: Callable[P, R], *args: P.args, **kwargs: P.kwargs
-) -> R:
+async def _in_transcript_reader[**P, R](fn: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R:
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         _transcript_read_pool(), functools.partial(fn, *args, **kwargs)
@@ -1295,9 +1288,7 @@ async def _finish_transcript_catchup(
         state["turn_started_at"] = 0.0
         session.record.turn_started_at = None
         _clear_active_turn_identity(session, state)
-        await _transition(
-            session, events, "idle", source="transcript", evidence="catchup:settled"
-        )
+        await _transition(session, events, "idle", source="transcript", evidence="catchup:settled")
         if session.record.state == "idle":
             # Delivery readiness keeps its lifecycle memory in the daemon process,
             # so a restart left an already-idle session with no record that its
@@ -1530,9 +1521,7 @@ def _omp_message_tool_calls(message: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(content, list):
         return []
     return [
-        block
-        for block in content
-        if isinstance(block, dict) and block.get("type") == "toolCall"
+        block for block in content if isinstance(block, dict) and block.get("type") == "toolCall"
     ]
 
 
@@ -1667,9 +1656,7 @@ def _observation_state(session: Session) -> dict[str, Any]:
     return state
 
 
-def _first_compaction_evidence(
-    session: Session, backend: str, compaction_id: object
-) -> bool:
+def _first_compaction_evidence(session: Session, backend: str, compaction_id: object) -> bool:
     """Accept one event when hooks and transcripts name the same compaction.
 
     OMP emits ``session_compact`` before appending the matching transcript
@@ -1898,9 +1885,7 @@ def expire_interrupt_intent(session: Session, *, now: float) -> bool:
         return False
     counters = getattr(session, "status_health_counters", None)
     if isinstance(counters, dict):
-        counters["interrupt_intent_timeouts"] = (
-            counters.get("interrupt_intent_timeouts", 0) + 1
-        )
+        counters["interrupt_intent_timeouts"] = counters.get("interrupt_intent_timeouts", 0) + 1
     _publish_update(session)
     return True
 
@@ -2018,9 +2003,7 @@ async def _begin_root_turn(
     if state["root_turn_active"]:
         active_turn_id = _turn_id(state.get("active_turn_id"))
         different_native_turn = bool(
-            incoming_turn_id
-            and active_turn_id
-            and incoming_turn_id != active_turn_id
+            incoming_turn_id and active_turn_id and incoming_turn_id != active_turn_id
         )
         logical_sources = state.get("logical_turn_sources")
         if not isinstance(logical_sources, list):
@@ -2037,9 +2020,7 @@ async def _begin_root_turn(
             )
         )
         first_logical_evidence = bool(
-            logical_root
-            and not logical_sources
-            and not state.get("turn_saw_activity")
+            logical_root and not logical_sources and not state.get("turn_saw_activity")
         )
         answering_awaiting = bool(logical_root and session.record.state == "awaiting")
         if different_native_turn or (
@@ -2150,9 +2131,7 @@ MAX_TURN_DURATION_SECONDS = 6 * 60 * 60
 MIN_TURN_DURATION_SECONDS = 0.25
 
 
-def _record_turn_duration(
-    session: Session, state: dict[str, Any], payload: dict[str, Any]
-) -> None:
+def _record_turn_duration(session: Session, state: dict[str, Any], payload: dict[str, Any]) -> None:
     """Stamp the completed turn's duration on the record and event.
 
     The record field is what a sidebar reads for a ready session ("the last turn
@@ -2276,9 +2255,7 @@ def _note_stale_turn_terminal(
 ) -> None:
     counters = getattr(session, "status_health_counters", None)
     if isinstance(counters, dict):
-        counters["stale_turn_terminal_ignored"] = (
-            counters.get("stale_turn_terminal_ignored", 0) + 1
-        )
+        counters["stale_turn_terminal_ignored"] = counters.get("stale_turn_terminal_ignored", 0) + 1
     ledger = getattr(session, "state_transitions", None)
     if ledger is not None:
         ledger.append(
@@ -2394,13 +2371,17 @@ async def _finish_root_turn(
             else None
         )
         accepted = await _transition(
-            session, events, "idle", source=source, force=force,
-            evidence=evidence, inferred=inferred, idle_reason=idle_reason,
+            session,
+            events,
+            "idle",
+            source=source,
+            force=force,
+            evidence=evidence,
+            inferred=inferred,
+            idle_reason=idle_reason,
         )
         if not _turn_close_landed(session, accepted):
-            _restore_refused_turn(
-                session, state, was_active, was_completion_seen, active_turn_id
-            )
+            _restore_refused_turn(session, state, was_active, was_completion_seen, active_turn_id)
             return
         _record_turn_duration(session, state, payload)
         # A close with nothing running is where a request ends; a close with
@@ -2426,13 +2407,17 @@ async def _finish_root_turn(
         )
     else:
         accepted = await _transition(
-            session, events, "idle", outcome, source=source, force=force,
-            evidence=evidence, inferred=inferred,
+            session,
+            events,
+            "idle",
+            outcome,
+            source=source,
+            force=force,
+            evidence=evidence,
+            inferred=inferred,
         )
         if not _turn_close_landed(session, accepted):
-            _restore_refused_turn(
-                session, state, was_active, was_completion_seen, active_turn_id
-            )
+            _restore_refused_turn(session, state, was_active, was_completion_seen, active_turn_id)
             return
         _record_turn_duration(session, state, payload)
         # A close with nothing running is where a request ends; a close with
@@ -2551,9 +2536,7 @@ def note_child_thread(session: Session, payload: dict[str, Any]) -> None:
     child_thread_ids(session).add(agent_id)
 
 
-def session_hook_event_scope(
-    session: Session, event_type: str, payload: dict[str, Any]
-) -> str:
+def session_hook_event_scope(session: Session, event_type: str, payload: dict[str, Any]) -> str:
     """`hook_event_scope`, refined by what this session has learned about its children.
 
     The payload rules are everything a single event can prove about itself. A
@@ -2583,12 +2566,11 @@ def note_witnessed_root_conversation(session: Session, payload: dict[str, Any]) 
 
 def _hook_turn_outcome(payload: dict[str, Any]) -> str:
     """Normalize terminal hook payloads without treating continuation as success."""
-    raw = str(
-        payload.get("outcome")
-        or payload.get("stop_reason")
-        or payload.get("stopReason")
-        or ""
-    ).strip().lower()
+    raw = (
+        str(payload.get("outcome") or payload.get("stop_reason") or payload.get("stopReason") or "")
+        .strip()
+        .lower()
+    )
     if raw in {"aborted", "abort", "cancelled", "canceled", "interrupted"}:
         return "interrupted"
     if raw in {"error", "failed", "failure"} or payload.get("error"):
@@ -2731,9 +2713,7 @@ def _note_auto_approval(
             log.debug("approval policy meta sink failed", exc_info=True)
 
 
-def _persist_approval_candidate(
-    session: Session, candidate: dict[str, Any] | None
-) -> None:
+def _persist_approval_candidate(session: Session, candidate: dict[str, Any] | None) -> None:
     """Mirror a pending approval timer into supervisor-owned session metadata."""
     session.approval_candidate = candidate
     meta_sink = getattr(session, "meta_sink", None)
@@ -2813,9 +2793,10 @@ async def _deliver_decided_approval(
     window = float(
         getattr(session, "approval_keystroke_window_seconds", APPROVAL_KEYSTROKE_WINDOW_SECONDS)
     )
-    poll = max(0.05, float(
-        getattr(session, "approval_keystroke_poll_seconds", APPROVAL_KEYSTROKE_POLL_SECONDS)
-    ))
+    poll = max(
+        0.05,
+        float(getattr(session, "approval_keystroke_poll_seconds", APPROVAL_KEYSTROKE_POLL_SECONDS)),
+    )
     started = time.monotonic()
     deadline = started + window
     fast_until = started + APPROVAL_KEYSTROKE_FAST_SECONDS
@@ -2901,13 +2882,9 @@ def cancel_pending_approval(session: Session, reason: str) -> bool:
         task.cancel()
     elapsed_seconds = 0.0
     if isinstance(pending, dict):
-        elapsed_seconds = max(
-            0.0, time.monotonic() - float(pending.get("started") or 0.0)
-        )
+        elapsed_seconds = max(0.0, time.monotonic() - float(pending.get("started") or 0.0))
     else:
-        elapsed_seconds = max(
-            0.0, time.time() - float(source_record.get("started_at") or 0.0)
-        )
+        elapsed_seconds = max(0.0, time.time() - float(source_record.get("started_at") or 0.0))
     transitions = getattr(session, "state_transitions", None)
     if transitions is not None:
         transitions.append(
@@ -2973,9 +2950,7 @@ def note_activity_evidence(
     if not isinstance(pending, dict):
         return False
     approval_tool_use_id = str(pending.get("tool_use_id") or "")
-    matching_tool = bool(
-        approval_tool_use_id and tool_use_id == approval_tool_use_id
-    )
+    matching_tool = bool(approval_tool_use_id and tool_use_id == approval_tool_use_id)
     if approval_tool_use_id and tool_use_id and not matching_tool:
         return False
     if not matching_tool and session_pty_state(session) == "approval":
@@ -3065,9 +3040,7 @@ async def _request_stabilized_approval(
         raw_started_at = candidate.get("started_at")
         try:
             started_at = (
-                float(raw_started_at)
-                if isinstance(raw_started_at, (int, float, str))
-                else now_wall
+                float(raw_started_at) if isinstance(raw_started_at, (int, float, str)) else now_wall
             )
         except (TypeError, ValueError):
             started_at = now_wall
@@ -3164,8 +3137,7 @@ async def _request_stabilized_approval(
             awaiting_reason="approval",
         )
         if not accepted and not (
-            session.record.state == "awaiting"
-            and session.record.awaiting_reason == "approval"
+            session.record.state == "awaiting" and session.record.awaiting_reason == "approval"
         ):
             if transitions is not None:
                 transitions.append(
@@ -4242,9 +4214,7 @@ def _claude_task_notification_text(event: dict[str, Any]) -> str:
     return ""
 
 
-def _task_notification_tier(
-    session: Session, *, identifiers: set[str], text: str
-) -> str:
+def _task_notification_tier(session: Session, *, identifiers: set[str], text: str) -> str:
     """Which annotation a `<task-notification>` is about: `subagents` or `background_tasks`.
 
     Both a background shell and an async agent announce their end in this record
@@ -4298,7 +4268,9 @@ def _extract_standing_task_notifications(
             continue
         changed = (
             _close_background_task(
-                session, evidence="transcript:task_notification", now=now,
+                session,
+                evidence="transcript:task_notification",
+                now=now,
                 tool_use_id=tool_use_id,
             )
             or changed
@@ -4372,9 +4344,7 @@ def _apply_subagent_hook(session: Session, event_type: str) -> None:
     if event_type == "SubagentStart":
         state["subagent_hooks_seen"] = True
         _adjust_subagent_hook_count(session, 1)
-        changed = _settle_subagents(
-            session, source="hook", evidence="hook:SubagentStart", now=now
-        )
+        changed = _settle_subagents(session, source="hook", evidence="hook:SubagentStart", now=now)
     elif event_type == "SubagentStop":
         state["subagent_stop_ts"] = now
         _adjust_subagent_hook_count(session, -1)
@@ -4385,8 +4355,7 @@ def _apply_subagent_hook(session: Session, event_type: str) -> None:
         state["subagent_liveness_ts"] = now
         stop_ts = state.get("subagent_stop_ts")
         recent_stop = (
-            isinstance(stop_ts, (int, float))
-            and now - stop_ts < SUBAGENT_REOPEN_GRACE_SECONDS
+            isinstance(stop_ts, (int, float)) and now - stop_ts < SUBAGENT_REOPEN_GRACE_SECONDS
         )
         changed = _refresh_subagents(
             session,
@@ -4631,9 +4600,7 @@ async def apply_hook_observation(
                     }
                 )
         else:
-            await _transition(
-                session, events, "idle", source="hook", evidence="hook:SessionStart"
-            )
+            await _transition(session, events, "idle", source="hook", evidence="hook:SessionStart")
     elif event_type in {"UserPromptSubmit", "turn_started", "task_started"}:
         # Capture the request itself before the authority check below, which returns
         # early whenever the transcript is driving state — i.e. for every healthy
@@ -4771,9 +4738,7 @@ async def apply_hook_observation(
             matching_tool = bool(active_tool_use_id and tool_use_id == active_tool_use_id)
             if not matching_tool and session_pty_state(session) == "approval":
                 return None
-        await _transition(
-            session, events, "working", source="hook", evidence=f"hook:{event_type}"
-        )
+        await _transition(session, events, "working", source="hook", evidence=f"hook:{event_type}")
     elif event_type in {"PermissionRequest", "approval_needed", "approval-requested"}:
         tool = str(payload.get("tool_name") or payload.get("message") or "approval")
         if payload.get("omp_event") == "tool_approval_requested":
@@ -4826,7 +4791,9 @@ async def apply_hook_observation(
                         return {
                             "hookEventName": "PermissionRequest",
                             "decision": "allow",
-                            "reason": f"swe-mux approval mode: {auto_outcome.reason}",
+                            "reason": ui_message(
+                                "observation.2b42bbf96d", value1=auto_outcome.reason
+                            ),
                         }
                     # Keystroke delivery is armed *underneath* the ordinary
                     # stabilization timer rather than instead of it. If the
@@ -4860,7 +4827,7 @@ async def apply_hook_observation(
                     return {
                         "hookEventName": "PermissionRequest",
                         "decision": "allow",
-                        "reason": f"swe-mux approval mode: {auto_outcome.reason}",
+                        "reason": ui_message("observation.2b42bbf96d", value1=auto_outcome.reason),
                     }
             await _request_stabilized_approval(
                 session,
@@ -5046,9 +5013,8 @@ async def _transition(
     # evidence-producing path above owns that cancellation because it can compare
     # tool identities and consult the effective screen classifier first.
     keeps_approval_candidate = (
-        (state == "awaiting" and awaiting_reason == "approval")
-        or state == "working"
-    )
+        state == "awaiting" and awaiting_reason == "approval"
+    ) or state == "working"
     if not keeps_approval_candidate:
         cancel_pending_approval(session, f"state_evidence:{state}:{source}")
     # force: interrupt/abort evidence exists only in the transcript; hooks never
@@ -5136,9 +5102,7 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
         # judging whether a turn ended, and that stays true. They are read here
         # for one thing: they are the carriers a background-task completion uses
         # when there is no live turn to announce it into.
-        _extract_standing_task_notifications(
-            session, event, _claude_task_notification_text(event)
-        )
+        _extract_standing_task_notifications(session, event, _claude_task_notification_text(event))
         return
     if event_type == "user":
         if _is_claude_compact_summary(event):
@@ -5237,9 +5201,7 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
                         scope="subagent",
                         kind="completed",
                     )
-                _extract_standing_tool_result(
-                    session, event, tool, tool_use_id, detail, target
-                )
+                _extract_standing_tool_result(session, event, tool, tool_use_id, detail, target)
     elif event_type == "assistant":
         # The model produced output again, so nothing is blocking it.
         await _resume_from_awaiting(session, events, event, evidence="assistant_record")
@@ -5272,9 +5234,7 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
                 tool_use_id = str(block.get("id") or "")
                 target, content_hash, target_digest = tool_call_evidence(block.get("input"))
                 _remember_tool_call(session, tool_use_id, name, target)
-                await _transition(
-                    session, events, "working", name, evidence="tool_use_record"
-                )
+                await _transition(session, events, "working", name, evidence="tool_use_record")
                 await events.emit(
                     "tool_use",
                     session_id=session.record.id,
@@ -5526,12 +5486,8 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
             payload.get("arguments") or payload.get("input")
         )
         _remember_tool_call(session, call_id, name, target)
-        await _begin_root_turn(
-            session, events, source="transcript", evidence=str(payload_type)
-        )
-        await _transition(
-            session, events, "working", name, evidence=str(payload_type)
-        )
+        await _begin_root_turn(session, events, source="transcript", evidence=str(payload_type))
+        await _transition(session, events, "working", name, evidence=str(payload_type))
         await events.emit(
             "tool_use",
             session_id=session.record.id,
@@ -6114,9 +6070,7 @@ async def _omp(session: Session, event: dict[str, Any], events: EventBus) -> Non
             return
         if role == "toolResult":
             await _resume_from_awaiting(session, events, event, evidence="omp:tool_result")
-            await _begin_root_turn(
-                session, events, source="transcript", evidence="omp:tool_result"
-            )
+            await _begin_root_turn(session, events, source="transcript", evidence="omp:tool_result")
             await _omp_tool_result(session, event, message, events)
             return
         if role != "assistant":
@@ -6132,9 +6086,7 @@ async def _omp(session: Session, event: dict[str, Any], events: EventBus) -> Non
             and state.get("root_completion_seen")
         )
         if not trailing_completion:
-            await _begin_root_turn(
-                session, events, source="transcript", evidence="omp:assistant"
-            )
+            await _begin_root_turn(session, events, source="transcript", evidence="omp:assistant")
         state["turn_saw_activity"] = True
         for block in calls:
             await _omp_tool_call(session, event, block, events)
@@ -6156,7 +6108,9 @@ async def _omp(session: Session, event: dict[str, Any], events: EventBus) -> Non
     if event_type == "reset_boundary":
         for kind in ("subagents", "background_tasks"):
             clear_standing_activity(
-                session, kind, evidence="transcript:omp:reset_boundary",
+                session,
+                kind,
+                evidence="transcript:omp:reset_boundary",
                 now=_standing_now(session, event),
             )
         _tool_names(session).clear()
@@ -6238,7 +6192,7 @@ async def _omp(session: Session, event: dict[str, Any], events: EventBus) -> Non
                     success=False,
                     exit_code=None,
                     parser_version=OBSERVATION_SCHEMA_VERSION,
-                    detail="interrupted before tool completion",
+                    detail=ui_message("observation.d7b02ab51e"),
                 )
             await _finish_root_turn(
                 session,

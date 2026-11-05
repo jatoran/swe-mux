@@ -19,6 +19,7 @@ from aiohttp import web
 from .network_usage import (
     compact_json_response,
 )
+from .ui_messages import UI_LOCALE, localize_payload
 
 log = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ REQUEST_ID_KEY: web.RequestKey[str] = web.RequestKey("request_id")
 #: `access.log` can be joined to the lines it caused in `daemon.log`. `%{…}o`
 #: reads a *response* header, which is where `correlation_middleware` stamps it.
 ACCESS_LOG_FORMAT = (
-    '%a %t "%r" %s %b "%{Referer}i" "%{User-Agent}i" ' f"request_id=%{{{REQUEST_ID_HEADER}}}o"
+    f'%a %t "%r" %s %b "%{{Referer}}i" "%{{User-Agent}}i" request_id=%{{{REQUEST_ID_HEADER}}}o'
 )
 
 
@@ -47,7 +48,7 @@ def request_id(request: web.Request) -> str:
 
 
 def json_response(data: Any, status: int = 200) -> web.Response:
-    return compact_json_response(data, status=status)
+    return compact_json_response(localize_payload(data), status=status)
 
 
 def etag_matches(header: str | None, etag: str) -> bool:
@@ -73,6 +74,8 @@ def revalidated_json(request: web.Request, etag: str, build: Any) -> web.Respons
     "store, but revalidate before every use", which is what makes a browser send the
     conditional request at all; `fetch` turns the 304 back into the stored 200.
     """
+    if UI_LOCALE.get() != "en":
+        etag = etag.rstrip('"') + "-ui-" + UI_LOCALE.get() + '"'
     headers = {"ETag": etag, "Cache-Control": "no-cache"}
     if etag_matches(request.headers.get("If-None-Match"), etag):
         return web.Response(status=304, headers=headers)

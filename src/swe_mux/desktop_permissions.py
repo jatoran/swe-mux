@@ -81,6 +81,7 @@ from .desktop_webview import (
     await_webview_control,
     on_ui_thread,
 )
+from .ui_messages import ui_message
 
 #: The page-global the shell publishes its permission state into. The frontend
 #: reads it only when capture fails, so a browser tab - which never has it - is
@@ -187,7 +188,8 @@ def decide_media_permission(kind: str, uri: str, origin: str) -> PermissionDecis
         # swe-mux has no camera feature, so granting it would widen device
         # access for nothing.
         return PermissionDecision(
-            allow=False, detail=f"{kind} request from {uri} left at the WebView2 default"
+            allow=False,
+            detail=ui_message("desktop_permissions.45e1da7da4", value1=kind, value2=uri),
         )
     if not same_origin(uri, origin):
         # Denied rather than left at Default, and that difference is the whole
@@ -201,14 +203,17 @@ def decide_media_permission(kind: str, uri: str, origin: str) -> PermissionDecis
             deny=True,
             state="refused",
             detail=(
-                f"a microphone request from {normalized_origin(uri) or uri} was denied: "
-                f"the desktop shell grants the microphone only to {origin}"
+                ui_message(
+                    "desktop_permissions.15fee163f4",
+                    value1=normalized_origin(uri) or uri,
+                    value2=origin,
+                )
             ),
         )
     return PermissionDecision(
         allow=True,
         state="granted",
-        detail=f"the desktop shell granted the microphone to {origin}",
+        detail=ui_message("desktop_permissions.541a92fc39", value1=origin),
     )
 
 
@@ -301,7 +306,7 @@ class WebviewMicrophoneGrant:
         self._report = MediaPermissionReport(
             state="pending",
             origin=origin,
-            detail="the desktop shell is still building its WebView2 host",
+            detail=ui_message("desktop_permissions.4139d2069e"),
         )
 
     @property
@@ -407,8 +412,7 @@ class WebviewMicrophoneGrant:
             return
         self._record(
             "armed",
-            f"the desktop shell will grant the microphone to {self._origin} when "
-            "WebView2 asks",
+            f"the desktop shell will grant the microphone to {self._origin} when WebView2 asks",
             mechanism=MECHANISM,
         )
 

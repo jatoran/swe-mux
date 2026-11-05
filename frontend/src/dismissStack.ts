@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // The app's single answer to "what does back mean right now".
 //
 // Every dismissable level — a modal, a menu, a slide-in panel, a drill-down inside a
@@ -97,7 +98,7 @@ export function createDismissStack(now: () => number = () => Date.now()) {
       seq: active ? nextSeq++ : 0,
       active,
       blocking: entry.blocking === true,
-      label: entry.label || 'unnamed',
+      label: entry.label || t("dismissStack.e882bcaadb"),
       dismiss: entry.dismiss,
     })
     pending = null

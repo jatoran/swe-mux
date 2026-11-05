@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 /** What the UI does while the frozen desktop app rebuilds itself.
  *
  *  A redeploy has two stages that feel nothing alike, and treating them as one
@@ -90,9 +91,9 @@ export function interruptionSummary(
   const ports = previews.map(preview => `:${preview.port}`)
   const shown = ports.slice(0, limit).join(', ')
   const rest = ports.length - limit
-  const list = rest > 0 ? `${shown} and ${rest} more` : shown
+  const list = rest > 0 ? t("redeployProgress.9567b6ee9c", { value1: shown, value2: rest }) : shown
   const count = previews.length === 1 ? '1 preview' : `${previews.length} previews`
-  return `${count} unreachable while the app restarts: ${list}.`
+  return t("redeployProgress.b2cc252214", { count: count, list: list })
 }
 
 /** One line naming what would refuse the redeploy, or '' when nothing does.
@@ -109,9 +110,9 @@ export function holderWarning(
   if (!holders || !holders.length) return ''
   const named = holders.slice(0, limit).map(holder => `pid ${holder.pid} ${holder.name} (${holder.via})`)
   const rest = holders.length - limit
-  const list = rest > 0 ? `${named.join(', ')} and ${rest} more` : named.join(', ')
-  const subject = holders.length === 1 ? '1 process holds' : `${holders.length} processes hold`
-  return `${subject} the app bundle open, so the redeploy will be refused: ${list}.`
+  const list = rest > 0 ? t("redeployProgress.9567b6ee9c", { value1: named.join(', '), value2: rest }) : named.join(', ')
+  const subject = holders.length === 1 ? t("redeployProgress.6ba8b3b506") : t("redeployProgress.26dd72f258", { value1: holders.length })
+  return t("redeployProgress.1ac900a086", { value1: subject, value2: list })
 }
 
 /** Persisted so a reload, a second tab, or a client that was not the initiator
@@ -289,7 +290,7 @@ export function applyProbe(state: RedeployState, probe: ProbeResult, now: number
 /** mm:ss since the redeploy was first observed. */
 export function elapsedLabel(startedAt: number, now: number): string {
   const seconds = Math.max(0, Math.floor((now - startedAt) / 1000))
-  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+  return t("redeployProgress.3decc61b8b", { value1: Math.floor(seconds / 60), value2: String(seconds % 60).padStart(2, '0') })
 }
 
 /** What the chip says about where the redeploy is. There is no real progress to
@@ -302,9 +303,9 @@ export function phaseLabel(phase: RedeployPhase, kind: RedeployKind = 'redeploy'
   // changed in between would read as churn rather than as progress; what
   // differs between them is in `phaseDetail`.
   if (phase === 'requested' || phase === 'building') {
-    return kind === 'update' ? 'Installing update' : 'Rebuilding app'
+    return kind === 'update' ? t("redeployProgress.572b4e4107") : t("redeployProgress.6df2ec5cb7")
   }
-  if (phase === 'down') return 'Restarting app'
+  if (phase === 'down') return t("redeployProgress.0df2ab0524")
   return ''
 }
 
@@ -312,22 +313,22 @@ export function phaseDetail(
   phase: RedeployPhase, kind: RedeployKind = 'redeploy', reap = false,
 ): string {
   if (phase === 'requested') {
-    return 'Checking that nothing is holding the app bundle open, then the build starts. '
-      + 'It runs alongside the app you are using now.'
+    return t("redeployProgress.70bdfc7731")
+      + t("redeployProgress.66583410cb")
   }
   if (phase === 'building') {
     return kind === 'update'
-      ? 'The release is being staged beside the current app, so you can keep working. '
-        + 'The app restarts when it is ready.'
-      : 'The new build runs alongside the current app, so you can keep working. '
-        + 'The app restarts when it finishes.'
+      ? t("redeployProgress.1bd4f85135")
+        + t("redeployProgress.a6d05133e9")
+      : t("redeployProgress.c5ecfc284b")
+        + t("redeployProgress.23e6046e28")
   }
   if (phase === 'down') {
     return reap
-      ? 'The app and its PTY supervisor are being replaced. Every terminal session ended, '
-        + 'as agreed; this page reloads by itself when the app is back.'
-      : 'The app is being swapped and restarted around your live sessions. '
-        + 'This page reloads by itself when it comes back.'
+      ? t("redeployProgress.622c6ac355")
+        + t("redeployProgress.43752a6bf9")
+      : t("redeployProgress.0b98d7387c")
+        + t("redeployProgress.003e3fcd8e")
   }
   return ''
 }
@@ -335,8 +336,8 @@ export function phaseDetail(
 /** The reassurance under the outage overlay, or the plain truth when there is none. */
 export function sessionsNote(reap: boolean): string {
   return reap
-    ? 'This update replaced the PTY supervisor, so your sessions ended when it stopped.'
-    : 'Your sessions are held by the PTY supervisor and are not affected.'
+    ? t("redeployProgress.ec91480f88")
+    : t("redeployProgress.ea9ec849d5")
 }
 
 /** A user-facing sentence for a finished redeploy, or '' when it plainly worked.
@@ -346,14 +347,14 @@ export function outcomeNotice(result: RedeployOutcome | null | undefined): strin
   if (!result || !result.outcome || result.outcome === 'succeeded') return ''
   const detail = (result.detail || '').trim()
   const headline: Record<string, string> = {
-    rolled_back: 'Redeploy failed - the previous app was restored.',
-    build_failed: 'Redeploy failed during the build.',
-    swap_failed: 'Redeploy failed while swapping the app bundle.',
-    unhealthy: 'The rebuilt app never reported healthy.',
-    refused: 'Redeploy was refused before anything changed.',
-    failed: 'Redeploy failed.',
+    get rolled_back() { return t("redeployProgress.5a4fee6e34") },
+    get build_failed() { return t("redeployProgress.ae88923c06") },
+    get swap_failed() { return t("redeployProgress.0acd258f0c") },
+    get unhealthy() { return t("redeployProgress.cbdac4799e") },
+    get refused() { return t("redeployProgress.18cf0c33c7") },
+    get failed() { return t("redeployProgress.25ae5dc670") },
   }
-  const lead = headline[result.outcome] || 'Redeploy did not complete.'
+  const lead = headline[result.outcome] || t("redeployProgress.cec2e8dea4")
   return detail ? `${lead} ${detail}` : lead
 }
 

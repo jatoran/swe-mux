@@ -1,3 +1,5 @@
+import { locale as uiLocale } from './localization/index.ts'
+import { rich, t } from './localization/index.ts'
 import { useEffect, useState } from 'preact/hooks'
 import { api } from './api'
 import { SettingLink } from './SettingLink'
@@ -42,9 +44,9 @@ type Scope = 'session' | 'project'
 /** Who wrote a finding. Not a scope and not a tag, so it filters on its own axis. */
 type Source = 'all' | 'deterministic' | 'observer'
 const SOURCE_LABELS: Record<Source, string> = {
-  all: 'All sources',
-  deterministic: 'Deterministic',
-  observer: 'Observer',
+  get all() { return t("FindingsPane.08e774c5ba") },
+  get deterministic() { return t("FindingsPane.ec6b656e17") },
+  get observer() { return t("FindingsPane.f20b6db009") },
 }
 
 // Provenance edges are the one high-volume tag, so the default (no-tag) view hides
@@ -58,7 +60,7 @@ const DETECTOR_GRANTS: GrantId[] = [
   'project.loopDetection', 'project.declaredVsVerified', 'project.docDebt', 'project.provenanceGraph',
 ]
 const stamp = (value: number) =>
-  new Date(value * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+  new Date(value * 1000).toLocaleString(uiLocale.value, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 const tagLabel = (tag: string) => tag.replace(/-/g, ' ')
 const isDeterministic = (provenance: string) => provenance === 'deterministic_consumer'
 
@@ -165,8 +167,8 @@ export function FindingsPane({ session, project, onOpenAutomationDashboard }: {
   // scope resolves to the session's run ids, so a Project-anchored finding with no
   // run (doc-debt, provenance) is absent there by construction.
   const exclusion = scope === 'session'
-    ? 'Session scope shows only this session’s run findings. Doc-debt and cross-session provenance are anchored to the Project, not a run, so they are hidden here — switch to Project to see them.'
-    : 'Project scope includes findings from every session in this Project, not only this one.'
+    ? t("FindingsPane.73633c97f5")
+    : t("FindingsPane.6a5d008245")
 
   // The four deterministic detectors this pane reads. A Project with none of them permitted
   // produces nothing here, ever — which is a different statement from "nothing found yet".
@@ -177,11 +179,11 @@ export function FindingsPane({ session, project, onOpenAutomationDashboard }: {
 
   return <section class="findings-pane">
     <header class="findings-header">
-      <div class="findings-scope" role="tablist" aria-label="Findings scope">
+      <div class="findings-scope" role="tablist" aria-label={t("FindingsPane.122263be95")}>
         <button role="tab" aria-selected={scope === 'session'} class={scope === 'session' ? 'active' : ''}
-          disabled={!sid} onClick={() => selectScope('session')}>This session</button>
+          disabled={!sid} onClick={() => selectScope('session')}>{t("FindingsPane.6da6530a07")}</button>
         <button role="tab" aria-selected={scope === 'project'} class={scope === 'project' ? 'active' : ''}
-          disabled={!projectId} onClick={() => selectScope('project')}>This Project</button>
+          disabled={!projectId} onClick={() => selectScope('project')}>{t("FindingsPane.1b1377b391")}</button>
       </div>
     </header>
     <p class="findings-exclusion">{exclusion}</p>
@@ -192,80 +194,60 @@ export function FindingsPane({ session, project, onOpenAutomationDashboard }: {
         granularity — a Project running one of them and not the others is a preference,
         not a starting point. */}
     {detectorsOff && <GrantGate ids={DETECTOR_GRANTS} projectId={projectId}
-      heading="This Project has not permitted any finding detectors."
-      confirmLabel="Turn on all four detectors"
+      heading={t("FindingsPane.8509eace4e")}
+      confirmLabel={t("FindingsPane.57d3856e58")}
       onGranted={load}
-      extra={<p class="findings-gate-alt">
-        Prefer some and not others? <SettingLink variant="link" target="project.automations"
-          projectId={projectId}>Choose them individually</SettingLink>.
-      </p>}
+      extra={<p class="findings-gate-alt">{rich("FindingsPane.bcda8fb5fd", { value1: <SettingLink variant="link" target="project.automations"
+          projectId={projectId}>{t("FindingsPane.2d65f7125f")}</SettingLink> })}</p>}
     >
-      <p>Loop and stall detection, declared-vs-verified, the doc-debt ledger, and the
-      provenance graph read this Project’s transcripts and write what they conclude here.
-      Nothing appears on this pane until at least one is on.</p>
+      <p>{t("FindingsPane.9d4bf835a8")}</p>
     </GrantGate>}
     {/* Its own row rather than another chip: a source is not a tag, and mixing the two in
         one strip made "doc debt" and "deterministic" look like alternatives. Drawn only
         when both kinds are actually present, so a Project running deterministic detectors
         alone never sees a control with one real setting. */}
-    {sourceCounts.deterministic > 0 && sourceCounts.observer > 0 &&
-      <div class="findings-sources" role="group" aria-label="Filter by who wrote the finding">
+    {sourceCounts.deterministic > 0 && sourceCounts.observer > 0 && <div class="findings-sources" role="group" aria-label={t("FindingsPane.6e76229eae")}>
         {(Object.keys(SOURCE_LABELS) as Source[]).map(id => <button key={id}
           class={source === id ? 'active' : ''} aria-pressed={source === id}
-          title={id === 'deterministic' ? 'Model-free detectors only'
-            : id === 'observer' ? 'Notes written by a model observer only'
-              : 'Every run note, however it was concluded'}
+          title={id === 'deterministic' ? t("FindingsPane.fbb002125a") : id === 'observer' ? t("FindingsPane.afd58b378e") : t("FindingsPane.4d4aa2b78c")}
           onClick={() => setSource(id)}>{SOURCE_LABELS[id]}{id !== 'all' && <span class="findings-chip-count">{sourceCounts[id]}</span>}</button>)}
       </div>}
-    {tags.length > 0 && <div class="findings-chips" role="group" aria-label="Filter by finding type">
+    {tags.length > 0 && <div class="findings-chips" role="group" aria-label={t("FindingsPane.c7f543cd80")}>
       <button class={selectedTag === null ? 'active' : ''} aria-pressed={selectedTag === null}
-        onClick={() => setSelectedTag(null)}>All</button>
+        onClick={() => setSelectedTag(null)}>{t("FindingsPane.a52ace420f")}</button>
       {tags.map(tag => <button key={tag} class={selectedTag === tag ? 'active' : ''}
         aria-pressed={selectedTag === tag}
         onClick={() => setSelectedTag(selectedTag === tag ? null : tag)}>
         {tagLabel(tag)} <span class="findings-chip-count">{counts[tag]}</span>
       </button>)}
     </div>}
-    {selectedTag === null && provenanceCount > 0 && <p class="findings-hint">
-      Provenance edges ({provenanceCount}) are hidden here by volume. Open the Provenance chip to read them.
-    </p>}
-    {withheld.length > 0 && <p class="findings-hint findings-withheld">
-      {withheld.length} loop {withheld.length === 1 ? 'finding is' : 'findings are'} withheld: {withheld[0].unsupported_reason}
-    </p>}
+    {selectedTag === null && provenanceCount > 0 && <p class="findings-hint">{rich("FindingsPane.05c047ce4e", { provenanceCount: provenanceCount })}</p>}
+    {withheld.length > 0 && <p class="findings-hint findings-withheld">{rich("FindingsPane.2360eb84e9", { length: withheld.length, value2: (withheld.length === 1) ? 'yes' : 'no', unsupported_reason: withheld[0].unsupported_reason })}</p>}
     {/* The second half of "off vs quiet" on this pane. The four detectors above are
         per-Project and model-free; the observer notes beside them come from the
         automation engine, which is an install switch that is off by default. With the
         detectors permitted and the engine off, half of this table can never appear and
         nothing said so — the Source filter simply never grew its second button. */}
-    {engineOff && !detectorsOff && <p class="findings-hint findings-engine-off">
-      Observer notes are switched off for this install, so everything here is from the
-      model-free detectors.{' '}
-      <GrantButton id="automation.engine">Turn on the automation engine</GrantButton>
-    </p>}
+    {engineOff && !detectorsOff && <p class="findings-hint findings-engine-off">{rich("FindingsPane.f58a6ec154", { value1: <GrantButton id="automation.engine">{t("FindingsPane.a1f53bc3ed")}</GrantButton> })}</p>}
     {error && <p class="usage-error">{error}</p>}
     <div class="findings-list">
-      {scope === 'session' && !sid && <p class="drawer-empty">Focus a session to view its findings, or switch to Project scope.</p>}
-      {rows.length === 0 && !loading && !(scope === 'session' && !sid) &&
-        <p class="drawer-empty">{
-          source !== 'all' ? `No ${SOURCE_LABELS[source].toLocaleLowerCase()} findings in scope.`
-            : selectedTag ? `No ${tagLabel(selectedTag)} findings in scope.`
-              : 'No findings in scope.'
-        }</p>}
+      {scope === 'session' && !sid && <p class="drawer-empty">{t("FindingsPane.208f5abf39")}</p>}
+      {rows.length === 0 && !loading && !(scope === 'session' && !sid) && <p class="drawer-empty">{source !== 'all' ? t("FindingsPane.c9740c2416", { value1: SOURCE_LABELS[source].toLocaleLowerCase() }) : selectedTag ? t("FindingsPane.c9740c2416", { value1: tagLabel(selectedTag) }) : t("FindingsPane.36b259e04a")}</p>}
       {rows.map(item => <article class="finding-row" key={item.id}>
         <header>
           <span class={`finding-tag finding-tag-${item.tag}`}>{tagLabel(item.tag)}</span>
           <span class={`finding-provenance ${isDeterministic(item.provenance) ? 'deterministic' : 'model'}`}
-            title={isDeterministic(item.provenance) ? 'Model-free deterministic detector' : 'Written by a model observer'}>
-            {isDeterministic(item.provenance) ? 'deterministic' : (item.resolved_model || 'model')}
+            title={isDeterministic(item.provenance) ? t("FindingsPane.383b9aaad7") : t("FindingsPane.404ccd243c")}>
+            {isDeterministic(item.provenance) ? t("FindingsPane.0badac3c6d") : (item.resolved_model || t("FindingsPane.9372c470ee"))}
           </span>
           <time>{stamp(item.created_at)}</time>
         </header>
         <p>{item.content}</p>
-        {item.agent_run_id && <small class="finding-run">run {item.agent_run_id.slice(0, 8)}</small>}
+        {item.agent_run_id && <small class="finding-run">{rich("FindingsPane.b952683dd7", { value1: item.agent_run_id.slice(0, 8) })}</small>}
       </article>)}
     </div>
     <footer class="findings-footer">
-      <button class="findings-dashboard-link" onClick={onOpenAutomationDashboard}>Open Automation dashboard</button>
+      <button class="findings-dashboard-link" onClick={onOpenAutomationDashboard}>{t("FindingsPane.86e160f130")}</button>
     </footer>
   </section>
 }

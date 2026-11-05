@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 export type TerminalActionRequest = {
   sessionId: string
   action: string
@@ -76,12 +77,12 @@ export function insertionRefusal(session: InsertTargetState | null | undefined):
   const reason = session.awaiting_reason || ''
   if (!(DIALOG_AWAITING_REASONS as readonly string[]).includes(reason)) return ''
   const showing = reason === 'approval'
-    ? 'is showing an approval request'
+    ? t("terminalActions.f9e9a72e7a")
     : reason === 'question'
-      ? 'is asking a question'
-      : 'is waiting for an answer'
-  const who = session.name ? `“${session.name}”` : 'This session'
-  return `${who} ${showing}, so the text was not inserted — it would answer the dialog instead of filling the composer. Draft kept.`
+      ? t("terminalActions.0a203637ac")
+      : t("terminalActions.c5d28ae0d5")
+  const who = session.name ? `“${session.name}”` : t("terminalActions.6da6530a07")
+  return t("terminalActions.7577a13a7b", { value1: who, value2: showing })
 }
 
 const waitForTerminal: TerminalWait = delayMs => new Promise(resolve => window.setTimeout(resolve, delayMs))
@@ -134,13 +135,13 @@ export function requestTerminalAction(
       window.removeEventListener('mux:terminal-action-result', finish)
       window.clearTimeout(timer)
       if (detail.ok) resolve()
-      else reject(new Error(detail.error || 'The terminal rejected the voice input.'))
+      else reject(new Error(detail.error || t("terminalActions.2282d60c29")))
     }
     const timer = window.setTimeout(() => {
       window.removeEventListener('mux:terminal-action-result', finish)
       reject(new Error(request.action === 'insertText'
-        ? 'The target terminal is not mounted. Draft kept.'
-        : 'The target terminal is not mounted.'))
+        ? t("terminalActions.8adeef5701")
+        : t("terminalActions.c863ec631b")))
     }, 1_500)
     window.addEventListener('mux:terminal-action-result', finish)
     const detail: TerminalActionRequest = {

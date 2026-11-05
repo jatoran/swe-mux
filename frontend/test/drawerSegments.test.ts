@@ -1,3 +1,4 @@
+import { withCatalogText } from './support/localizedSource.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -17,7 +18,7 @@ import {
   resolveDrawerSegment,
 } from '../src/drawerSegments.ts'
 
-const source = (name: string) => readFileSync(join(import.meta.dirname, '..', 'src', name), 'utf8')
+const source = (name: string) => withCatalogText(readFileSync(join(import.meta.dirname, '..', 'src', name), 'utf8'))
 const agent = { hasTranscript: true, isAgentSession: true }
 const shell = { hasTranscript: false, isAgentSession: false }
 

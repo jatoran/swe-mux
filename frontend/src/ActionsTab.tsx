@@ -1,3 +1,4 @@
+import { rich, t } from './localization/index.ts'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import type { RailBackend } from './commandRail'
 import { api } from './api'
@@ -135,7 +136,7 @@ export function ActionsTab({ session, onDone, project, backend: promptBackend, o
   return <div class="actions-tab">
     <DrawerViewTabs
       className="actions-view-tabs"
-      ariaLabel="Actions catalog"
+      ariaLabel={t("ActionsTab.93884ceea0")}
       active={view}
       items={ACTION_VIEW_TABS.map(item => ({
         ...item,
@@ -143,35 +144,35 @@ export function ActionsTab({ session, onDone, project, backend: promptBackend, o
       }))}
       onSelect={id => setView(id as ActionView)}
     />
-    <p class="actions-target">Target: {session ? sessionDisplayName(session) : 'No focused session'}</p>
-    {view==='skills'&&<div class="actions-view actions-skills-view" data-setting="drawer.actions.skills">
-      {!session&&<p class="drawer-empty">Focus an agent session to read its skill inventory.</p>}
-      {session&&!isAgent&&<p class="drawer-empty">Shell sessions do not expose agent skills.</p>}
-      {session&&isAgent&&<section class="drawer-skills">
-        <header><h4>{harnessDisplayName(backend)} skills</h4><span>{inventory?`${matched.length}${query?` / ${inventory.skills.length}`:''}`:''}</span><button title="Rescan the skill directories now" onClick={()=>{if(session)void loadSkills(session.id,true)}}>Rescan</button></header>
-        {inventory&&inventory.skills.length>8&&<input type="search" placeholder="Filter skills" aria-label="Filter skills" value={query} onInput={event=>setQuery((event.target as HTMLInputElement).value)}/>}
+    <p class="actions-target">{rich("ActionsTab.0cc47b0f70", { value1: session ? sessionDisplayName(session) : t("ActionsTab.e49ed53065") })}</p>
+    {view==='skills' && <div class="actions-view actions-skills-view" data-setting="drawer.actions.skills">
+      {!session && <p class="drawer-empty">{t("ActionsTab.357937be72")}</p>}
+      {session&&!isAgent && <p class="drawer-empty">{t("ActionsTab.33de04434b")}</p>}
+      {session&&isAgent && <section class="drawer-skills">
+        <header><h4>{rich("ActionsTab.bbfec04614", { value1: harnessDisplayName(backend) })}</h4><span>{inventory ? t("ActionsTab.a92fe656f7", { length: matched.length, value2: query?` / ${inventory.skills.length}`:'' }) : ''}</span><button title={t("ActionsTab.255274e83a")} onClick={()=>{if(session)void loadSkills(session.id,true)}}>{t("ActionsTab.ec4b3ecb7a")}</button></header>
+        {inventory&&inventory.skills.length>8 && <input type="search" placeholder={t("ActionsTab.f47dd0b589")} aria-label={t("ActionsTab.f47dd0b589")} value={query} onInput={event=>setQuery((event.target as HTMLInputElement).value)}/>}
         <div class="drawer-skill-list">
-          {!inventory&&!skillsError&&<p class="drawer-empty">Reading skill directories…</p>}
-          {skillsError&&<p class="drawer-empty">Skills could not be read: {skillsError}</p>}
-          {inventory&&!inventory.skills.length&&<p class="drawer-empty">No skills on disk for this session. Scanned {inventory.roots.length} directories under {inventory.cwd}.</p>}
-          {inventory&&!!inventory.skills.length&&!matched.length&&<p class="drawer-empty">No skill matches “{query}”.</p>}
+          {!inventory&&!skillsError && <p class="drawer-empty">{t("ActionsTab.4ef50b37ec")}</p>}
+          {skillsError && <p class="drawer-empty">{rich("ActionsTab.fcfadd69fa", { skillsError: skillsError })}</p>}
+          {inventory&&!inventory.skills.length && <p class="drawer-empty">{rich("ActionsTab.b80500cba9", { length: inventory.roots.length, cwd: inventory.cwd })}</p>}
+          {inventory&&!!inventory.skills.length&&!matched.length && <p class="drawer-empty">{rich("ActionsTab.9bbe114768", { query: query })}</p>}
           {groups.map(group=><div key={group.scope} class="drawer-skill-group"><h5>{group.label}</h5>
             {group.skills.map(skill=>{
               const selected=selectedSkill===skill.path
               return <div class={`drawer-skill-row compact${selected?' selected':''}`} key={skill.path}>
                 <button class={skill.shadowed_by?'shadowed':undefined} title={skillTitle(skill)} aria-expanded={selected} onClick={()=>setSelectedSkill(current=>current===skill.path?'':skill.path)}>
-                  <span><code>{skill.invocation}</code>{skillLabel(skill)!==skill.name&&<em>{skillLabel(skill)}</em>}{skill.added_after_start&&<b class="skill-flag warn">new</b>}{!skill.implicit&&<b class="skill-flag">explicit</b>}</span>
-                  <small>{skill.short_description||skill.description||skill.origin}</small>
+                  <span><code>{skill.invocation}</code>{skillLabel(skill)!==skill.name && <em>{skillLabel(skill)}</em>}{skill.added_after_start && <b class="skill-flag warn">{t("ActionsTab.11507a0e2f")}</b>}{!skill.implicit && <b class="skill-flag">{t("ActionsTab.3b283e93de")}</b>}</span>
+                  <small>{skill.short_description||skill.description || skill.origin}</small>
                 </button>
-                {selected&&<div class="drawer-skill-detail"><p>{skill.description||skill.short_description||'No description provided.'}</p><small>{skill.origin}</small><button class="primary" disabled={!!skill.shadowed_by||skill.added_after_start} onClick={()=>insertSkill(skill)}>Insert {skill.invocation}</button></div>}
+                {selected && <div class="drawer-skill-detail"><p>{skill.description||skill.short_description || t("ActionsTab.2527a18acb")}</p><small>{skill.origin}</small><button class="primary" disabled={!!skill.shadowed_by||skill.added_after_start} onClick={()=>insertSkill(skill)}>{rich("ActionsTab.6ad88d36df", { invocation: skill.invocation })}</button></div>}
               </div>
             })}
           </div>)}
-          {disclosure&&<p class="drawer-skill-note">{disclosure}</p>}
+          {disclosure && <p class="drawer-skill-note">{disclosure}</p>}
         </div>
       </section>}
     </div>}
-    {view==='prompts'&&<div class="actions-view" data-setting="drawer.actions.prompts"><PromptsTab project={project} backend={promptBackend} onInsert={onInsert} onDone={onDone} onManage={onManage} sessions={sessions} onSend={onSend} preselect={preselect}/></div>}
-    {view==='clipboard'&&<div class="actions-view" data-setting="drawer.actions.clipboard"><ClipboardTab onInsert={onClipboardInsert} onDone={onClipboardDone} onOpenSettings={()=>onOpenSettings('Input')} autoFocusToken={clipboardAutoFocus}/></div>}
+    {view==='prompts' && <div class="actions-view" data-setting="drawer.actions.prompts"><PromptsTab project={project} backend={promptBackend} onInsert={onInsert} onDone={onDone} onManage={onManage} sessions={sessions} onSend={onSend} preselect={preselect}/></div>}
+    {view==='clipboard' && <div class="actions-view" data-setting="drawer.actions.clipboard"><ClipboardTab onInsert={onClipboardInsert} onDone={onClipboardDone} onOpenSettings={()=>onOpenSettings('Input')} autoFocusToken={clipboardAutoFocus}/></div>}
   </div>
 }

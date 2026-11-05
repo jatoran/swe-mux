@@ -39,6 +39,7 @@ from ..project_files import (
 from ..session import (
     SessionManager,
 )
+from ..ui_messages import error_text, ui_message
 from ..worktree_setup import WorktreeSetupResult, run_worktree_setup
 from . import sessions
 
@@ -92,9 +93,7 @@ async def get_swe_mux_setup(request: web.Request) -> web.Response:
     await git_review.repository_identity(project.root)
     operation_id = uuid4().hex
     try:
-        status = await git_init.repository_setup_status(
-            project.root, operation_id=operation_id
-        )
+        status = await git_init.repository_setup_status(project.root, operation_id=operation_id)
     except git_init.RepositoryInitError as exc:
         log.warning(
             "repository_swe_mux_status_failed operation_id=%s project_id=%s root=%s",
@@ -103,7 +102,7 @@ async def get_swe_mux_setup(request: web.Request) -> web.Response:
             project.root,
         )
         return json_response(
-            {"error": str(exc), "code": "git_error", "operation_id": operation_id}, 400
+            {"error": error_text(exc), "code": "git_error", "operation_id": operation_id}, 400
         )
     if status.ignored:
         return json_response(
@@ -131,11 +130,11 @@ async def decide_swe_mux_setup(request: web.Request) -> web.Response:
 
     body = await request.json()
     if not isinstance(body, dict):
-        raise ValueError("body must be an object")
+        raise ValueError(ui_message("git.fe2741b182"))
     project_id = str(body.get("project_id") or "")
     decision = str(body.get("decision") or "")
     if decision not in {"keep_visible", "ignore_all", "never_ask"}:
-        raise ValueError("decision must be keep_visible, ignore_all, or never_ask")
+        raise ValueError(ui_message("git.5b1a29595b"))
     project = request.app[keys.PROJECTS].projects.get(project_id)
     if project is None:
         raise git_review.GitReviewError("project_not_found", "unknown Project", 404)
@@ -180,7 +179,7 @@ async def decide_swe_mux_setup(request: web.Request) -> web.Response:
             code,
         )
         return json_response(
-            {"error": str(exc), "code": code, "operation_id": operation_id}, status
+            {"error": error_text(exc), "code": code, "operation_id": operation_id}, status
         )
     _record_swe_mux_prompt_decision(config, project.id, decision)
     git_review.invalidate_overview_cache(project.id)
@@ -226,9 +225,7 @@ async def list_worktrees(request: web.Request) -> web.Response:
         )
     detail = request.query.get("detail", "full")
     if detail not in {"full", "summary"}:
-        raise git_review.GitReviewError(
-            "invalid_parameters", "detail must be 'full' or 'summary'"
-        )
+        raise git_review.GitReviewError("invalid_parameters", "detail must be 'full' or 'summary'")
     project_id = request.query.get("project_id", "")
     project = request.app[keys.PROJECTS].projects.get(project_id)
     if project is None:
@@ -319,9 +316,11 @@ async def git_graph(request: web.Request) -> web.Response:
     try:
         limit = int(raw_limit)
     except ValueError:
-        return json_response({"error": "limit must be an integer"}, 400)
+        return json_response({"error": ui_message("git.4e36d92afb")}, 400)
     if not 1 <= limit <= GIT_GRAPH_MAX_LIMIT:
-        return json_response({"error": f"limit must be between 1 and {GIT_GRAPH_MAX_LIMIT}"}, 400)
+        return json_response(
+            {"error": ui_message("git.eb08460c87", value1=GIT_GRAPH_MAX_LIMIT)}, 400
+        )
     return _conditional_json(
         request,
         await git_review.git_graph(
@@ -357,14 +356,14 @@ async def git_provenance(request: web.Request) -> web.Response:
     try:
         limit = int(raw_limit)
     except ValueError:
-        return json_response({"error": "limit must be an integer"}, 400)
+        return json_response({"error": ui_message("git.4e36d92afb")}, 400)
     if not 1 <= limit <= 500:
-        return json_response({"error": "limit must be between 1 and 500"}, 400)
+        return json_response({"error": ui_message("git.01366078ee")}, 400)
     commit_oids = [value for value in request.query.getall("commit", []) if value]
     if len(commit_oids) > 500 or any(
         not re.fullmatch(r"[0-9a-fA-F]{40,64}", oid) for oid in commit_oids
     ):
-        return json_response({"error": "commit must contain full Git object IDs"}, 400)
+        return json_response({"error": ui_message("git.dc38d0f1c1")}, 400)
     subject = request.query.get("subject", "")[:200]
     history = request.app[keys.HISTORY]
     items = await history.git_provenance(
@@ -404,9 +403,7 @@ async def git_provenance(request: web.Request) -> web.Response:
     )
 
 
-async def _decorate_provenance_identity(
-    app: web.Application, items: list[dict[str, Any]]
-) -> None:
+async def _decorate_provenance_identity(app: web.Application, items: list[dict[str, Any]]) -> None:
     """Add the session's *current* display name and History row to provenance rows.
 
     `session_name` on a provenance row is durable evidence: it is what the session was
@@ -434,8 +431,7 @@ async def _decorate_provenance_identity(
                 lookup_ids.add(run_id)
     rows = await app[keys.HISTORY].history_naming_rows(sorted(lookup_ids))
     run_ids = {
-        session_titles.record_run_id(session.record)
-        for session in manager.sessions.values()
+        session_titles.record_run_id(session.record) for session in manager.sessions.values()
     }
     run_ids |= {session_titles.row_run_id(row) for row in rows.values()}
     titles = await session_titles.generated_titles(app[keys.AUTOMATION_STORE], run_ids)
@@ -541,9 +537,9 @@ async def _spawn_into_worktree(
     `git worktree list` regardless.
     """
     if not isinstance(spawn_body, dict):
-        return {"status": "error", "error": "spawn must be an object"}
+        return {"status": "error", "error": ui_message("git.3a8a9f0cf5")}
     if not spawn_body.get("project_id"):
-        return {"status": "error", "error": "spawn requires project_id"}
+        return {"status": "error", "error": ui_message("git.36890db94e")}
     try:
         forced_body = {**spawn_body, "cwd": path}
         session = (
@@ -561,7 +557,7 @@ async def _spawn_into_worktree(
             path,
             exc,
         )
-        result: dict[str, Any] = {"status": "error", "error": str(exc)}
+        result: dict[str, Any] = {"status": "error", "error": error_text(exc)}
         if setup is not None:
             result["setup"] = setup.public_dict()
         return result
@@ -601,14 +597,12 @@ async def _prepare_worktree_setup(
         resolved_path = Path(path).resolve()
         listed = await worktree_mutation.listed_worktree_paths(project.root)
         if str(resolved_path).casefold() not in listed:
-            return WorktreeSetupResult(
-                "error", error="new worktree does not belong to the selected Project"
-            )
+            return WorktreeSetupResult("error", error=ui_message("git.ddb085e2ae"))
         identity = await resolve_project(project.root)
         project_config = await read_project_config(project.root, project=identity)
         if project_config["status"] == "malformed":
             return WorktreeSetupResult(
-                "error", error=f"Project config is malformed: {project_config.get('error')}"
+                "error", error=ui_message("git.af0857391c", value1=project_config.get("error"))
             )
         values = (
             project_config["values"] if project_config["status"] in {"ready", "read-only"} else {}
@@ -652,10 +646,10 @@ async def init_repository(request: web.Request) -> web.Response:
     operation_id = uuid4().hex
     body = await request.json()
     if not isinstance(body, dict):
-        raise ValueError("body must be an object")
+        raise ValueError(ui_message("git.fe2741b182"))
     ignore_swe_mux_files = body.get("ignore_swe_mux", False)
     if not isinstance(ignore_swe_mux_files, bool):
-        raise ValueError("ignore_swe_mux must be true or false")
+        raise ValueError(ui_message("git.8f01486faa"))
     project = request.app[keys.PROJECTS].projects.get(str(body.get("project_id", "")))
     if project is None:
         raise git_review.GitReviewError("project_not_found", "unknown Project", 404)
@@ -695,7 +689,7 @@ async def init_repository(request: web.Request) -> web.Response:
             project.root,
         )
         return json_response(
-            {"error": str(exc), "code": "git_error", "operation_id": operation_id}, 400
+            {"error": error_text(exc), "code": "git_error", "operation_id": operation_id}, 400
         )
     git_review.invalidate_overview_cache(project.id)
     config: Config = request.app[keys.CONFIG]
@@ -754,8 +748,7 @@ async def create_worktree(request: web.Request) -> web.Response:
         )
         return json_response(
             {
-                "error": "the repository has no commits yet - make a first commit "
-                "before creating a worktree",
+                "error": ui_message("git.73940af47c"),
                 "code": "repository_has_no_commits",
                 "operation_id": operation_id,
             },
@@ -895,11 +888,9 @@ async def remove_worktree(request: web.Request) -> web.Response:
 async def reveal_path(request: web.Request) -> web.Response:
     path = Path((await request.json())["path"]).resolve()
     if not path.exists():
-        raise ValueError("path does not exist")
+        raise ValueError(ui_message("git.4626e60626"))
     await asyncio.to_thread(open_in_file_manager, path)
     return json_response({"ok": True})
-
-
 
 
 def _schedule_graveyard_purge(app: web.Application, root: Path, operation_id: str) -> None:

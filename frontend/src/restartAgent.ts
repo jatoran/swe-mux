@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { isInactiveSession } from './coldSession.ts'
 import { isAgentBackend } from './harnessRegistry.ts'
 import type { Session } from './types'
@@ -49,7 +50,7 @@ export type RestartMenuView = {
   action: RestartMenuAction
 }
 
-const LABEL = 'Restart agent (fresh process)'
+const restartLabel = () => (t("restartAgent.2b29a981b4"))
 
 /** What the menu row says and does, from the probe's answer and the row's own state. */
 export function restartMenuView(
@@ -58,42 +59,42 @@ export function restartMenuView(
 ): RestartMenuView {
   if (options.running) {
     return {
-      label: 'Restarting agent…', title: 'A restart is already running for this session.',
+      get label() { return t("restartAgent.b56e18c8bc") }, get title() { return t("restartAgent.2532f751e5") },
       detail: '', unavailable: true, danger: false, action: 'none',
     }
   }
   if (!probe) {
     return {
-      label: LABEL, title: 'Checking whether this agent can be restarted…',
+      label: restartLabel(), get title() { return t("restartAgent.d38b670068") },
       detail: '', unavailable: true, danger: false, action: 'none',
     }
   }
   if (probe.eligible) {
     return {
-      label: LABEL,
-      title: 'End this agent process and resume the same conversation in a fresh one, in this pane.',
+      label: restartLabel(),
+      get title() { return t("restartAgent.4eadfba958") },
       detail: '', unavailable: false, danger: false, action: 'restart',
     }
   }
   if (!probe.force_allowed) {
-    const reason = probe.reason || 'This agent cannot be restarted right now.'
+    const reason = probe.reason || t("restartAgent.98847f2f54")
     return {
-      label: LABEL, title: reason, detail: reason,
+      label: restartLabel(), title: reason, detail: reason,
       unavailable: true, danger: false, action: 'explain',
     }
   }
   const losses = restartLossSummary(probe)
   if (!options.armed) {
     return {
-      label: 'Restart agent anyway…',
-      title: `A restart now will lose: ${losses}. Press to review, then confirm.`,
+      get label() { return t("restartAgent.92282d08bb") },
+      get title() { return t("restartAgent.f7f7cd922f", { losses: losses }) },
       detail: '', unavailable: false, danger: true, action: 'arm',
     }
   }
   return {
-    label: 'Confirm restart',
-    title: `Restart now and lose: ${losses}.`,
-    detail: `Will lose: ${losses}.`,
+    get label() { return t("restartAgent.25b0910de6") },
+    get title() { return t("restartAgent.75414d84f5", { losses: losses }) },
+    get detail() { return t("restartAgent.cb7a864581", { losses: losses }) },
     unavailable: false, danger: true, action: 'force',
   }
 }
@@ -101,13 +102,13 @@ export function restartMenuView(
 /** One sentence listing what a forced restart loses, in the daemon's own words. */
 export function restartLossSummary(probe: RestartEligibility): string {
   const losses = probe.would_lose.filter(Boolean)
-  return losses.length ? losses.join('; ') : 'nothing the daemon could name'
+  return losses.length ? losses.join('; ') : t("restartAgent.500b50d32e")
 }
 
 /** The toast for a refused restart, pointing at the override when there is one. */
 export function restartRefusalMessage(detail: { error?: string; force_allowed?: boolean } | undefined, fallback: string): string {
   const reason = detail?.error || fallback
   return detail?.force_allowed
-    ? `Restart refused: ${reason}. Open the session menu and choose "Restart agent anyway" to override.`
-    : `Restart refused: ${reason}.`
+    ? t("restartAgent.25e7dfa14e", { value1: reason })
+    : t("restartAgent.7bc329640d", { value1: reason })
 }

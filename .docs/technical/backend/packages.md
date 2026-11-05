@@ -36,6 +36,14 @@ sqlite3.connect(data_dir / "mux.db").execute("UPDATE projects ...")
 
 Feature stores sharing `mux.db` use their own single-worker executor and connection plus the common operation coordinator described in `sqlite.md`.
 
+## UI messages
+
+`ui_messages.py` preserves catalog identity for user-facing labels and errors until presentation.
+`http_support.json_response` renders them under the request-scoped locale established by the daemon middleware.
+Native dialogs and push delivery use the same catalogs with the saved preference.
+Protocol values, diagnostics, and the terminal-process import boundaries remain independent of localization.
+See [UI localization](../../design/features/localization.md).
+
 ## Domain maps
 
 - [`packages/platform.md`](packages/platform.md) - the host seams: which host this is, pseudoterminal allocation, process-tree ownership, the shared bounded one-shot subprocess runner and the shared CLI version probe, path identity, where secrets rest, firewall probing, the WSL bridge.

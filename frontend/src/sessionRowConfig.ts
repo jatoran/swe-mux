@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // Configuration model for the sidebar session row.
 //
 // A row is two lines; each line has a left-aligned and a right-aligned section;
@@ -213,18 +214,18 @@ export type SeparatorId =
 
 /** Rendered text for each separator, including its surrounding spacing. */
 export const SEPARATORS: Record<SeparatorId, { label: string; text: string }> = {
-  none: { label: 'None', text: '' },
-  space: { label: 'Space', text: ' ' },
-  dot: { label: 'Middle dot ·', text: ' · ' },
-  bullet: { label: 'Bullet •', text: ' • ' },
-  slash: { label: 'Slash /', text: ' / ' },
-  backslash: { label: 'Backslash \\', text: ' \\ ' },
-  pipe: { label: 'Pipe |', text: ' | ' },
-  colon: { label: 'Colon :', text: ' : ' },
-  at: { label: 'At @', text: ' @ ' },
-  dash: { label: 'Dash -', text: ' - ' },
-  tilde: { label: 'Tilde ~', text: ' ~ ' },
-  arrow: { label: 'Arrow ›', text: ' › ' },
+  none: { get label() { return t("sessionRowConfig.dc937b5989") }, text: '' },
+  space: { get label() { return t("sessionRowConfig.20eac5aae2") }, text: ' ' },
+  dot: { get label() { return t("sessionRowConfig.3f667d88ba") }, text: ' · ' },
+  bullet: { get label() { return t("sessionRowConfig.4d020a2406") }, text: ' • ' },
+  slash: { get label() { return t("sessionRowConfig.00275e06ce") }, text: ' / ' },
+  backslash: { get label() { return t("sessionRowConfig.ba4e798f08") }, text: ' \\ ' },
+  pipe: { get label() { return t("sessionRowConfig.1ed2ef33b4") }, text: ' | ' },
+  colon: { get label() { return t("sessionRowConfig.cc75da6611") }, text: ' : ' },
+  at: { get label() { return t("sessionRowConfig.e6b932b0da") }, text: ' @ ' },
+  dash: { get label() { return t("sessionRowConfig.85f8faf8df") }, text: ' - ' },
+  tilde: { get label() { return t("sessionRowConfig.c6651b34e6") }, text: ' ~ ' },
+  arrow: { get label() { return t("sessionRowConfig.1d7419521b") }, text: ' › ' },
 }
 
 export const SEPARATOR_IDS = Object.keys(SEPARATORS) as SeparatorId[]
@@ -283,61 +284,61 @@ export interface RowFieldDescriptor {
  * of prefixes.
  */
 export const ROW_FIELDS: RowFieldDescriptor[] = [
-  { id: 'title', label: 'Session title', notable: 'always has a value', priority: 100, identity: true },
-  { id: 'glyph', label: 'Provider mark', notable: 'agent sessions only', priority: 95, identity: true },
+  { id: 'title', get label() { return t("sessionRowConfig.85969436d1") }, get notable() { return t("sessionRowConfig.d894465e40") }, priority: 100, identity: true },
+  { id: 'glyph', get label() { return t("sessionRowConfig.dba06ace59") }, get notable() { return t("sessionRowConfig.a2ee0c7c22") }, priority: 95, identity: true },
   // The flag strip, in the order it reads on the row.
-  { id: 'broadcast', label: 'Broadcast flag', notable: 'session is in the broadcast set', priority: 88, identity: true },
-  { id: 'badges', label: 'Standing activity', notable: 'a loop, cron, subagent, or background task is live', priority: 90, identity: true },
-  { id: 'draft', label: 'Unsent input', notable: 'text is sitting unsent in this session’s composer', priority: 92, identity: true },
+  { id: 'broadcast', get label() { return t("sessionRowConfig.40f48ac503") }, get notable() { return t("sessionRowConfig.89eca12187") }, priority: 88, identity: true },
+  { id: 'badges', get label() { return t("sessionRowConfig.2c80a807d8") }, get notable() { return t("sessionRowConfig.5de2fc4346") }, priority: 90, identity: true },
+  { id: 'draft', get label() { return t("sessionRowConfig.37770a2067") }, get notable() { return t("sessionRowConfig.c48d7d7634") }, priority: 92, identity: true },
   // Read aloud is the one setting in the strip whose effect you hear rather than
   // see, and its controls live in the voice panel rather than on the pane — so
   // without this mark the only way to know which sessions speak is to focus each
   // of them in turn and read the panel.
-  { id: 'voice', label: 'Read aloud', notable: 'this session turns replies into audio', priority: 94, identity: true },
+  { id: 'voice', get label() { return t("heading.0791ec6847") }, get notable() { return t("sessionRowConfig.97c61c2a2b") }, priority: 94, identity: true },
   // Sits in the flag strip and is on by default, unlike almost every other
   // field. The mode's entire effect is *removing* the notification an approval
   // would raise, so the fleet list is the only place a grant nobody remembers
   // setting can still be seen. A shed or opt-in badge would defeat the point.
-  { id: 'approvals', label: 'Approval mode', notable: 'mux is answering approvals here', priority: 96, identity: true },
-  { id: 'detail', label: 'What it is doing', notable: 'the harness reported a tool or a question', priority: 70 },
-  { id: 'duration', label: 'Time', notable: 'past the per-state threshold', priority: 80 },
+  { id: 'approvals', get label() { return t("sessionRowConfig.1e12a243e3") }, get notable() { return t("sessionRowConfig.2023d78d88") }, priority: 96, identity: true },
+  { id: 'detail', get label() { return t("sessionRowConfig.72b30e197f") }, get notable() { return t("sessionRowConfig.9678f13e1a") }, priority: 70 },
+  { id: 'duration', get label() { return t("sessionRowConfig.33b93476cf") }, get notable() { return t("sessionRowConfig.8815f831e7") }, priority: 80 },
   {
     id: 'sincePrompt',
-    label: 'Since your prompt',
-    notable: 'the session is busy with something you asked for long ago',
+    get label() { return t("sessionRowConfig.fc197e2a96") },
+    get notable() { return t("sessionRowConfig.cff2b38129") },
     priority: 78,
   },
   {
     id: 'worked',
-    label: 'Total working time',
-    notable: 'the session has worked more than 10 minutes',
+    get label() { return t("sessionRowConfig.eadf84fab7") },
+    get notable() { return t("sessionRowConfig.2ec52592a0") },
     priority: 76,
   },
-  { id: 'context', label: 'Context used', notable: 'past the high threshold', priority: 75 },
-  { id: 'branch', label: 'Git branch', notable: 'differs from the project default', priority: 60, glyph: '⎇' },
-  { id: 'worktree', label: 'Worktree', notable: 'the checkout is a linked worktree', priority: 62, glyph: '⌂' },
-  { id: 'diff', label: 'Lines changed (uncommitted)', notable: 'the working tree has changes', priority: 55 },
-  { id: 'dirty', label: 'Changed files (uncommitted)', notable: 'at least one file is dirty', priority: 50 },
-  { id: 'compareDiff', label: 'Lines changed (branch)', notable: 'the branch differs from its base', priority: 56 },
-  { id: 'compareFiles', label: 'Changed files (branch)', notable: 'the branch differs from its base', priority: 51 },
-  { id: 'sync', label: 'Ahead / behind', notable: 'diverged from upstream', priority: 45 },
-  { id: 'queue', label: 'Queue depth', notable: 'something is queued', priority: 65 },
-  { id: 'model', label: 'Model', notable: 'differs from the project default', priority: 40 },
+  { id: 'context', get label() { return t("sessionRowConfig.fb7e977982") }, get notable() { return t("sessionRowConfig.87879f4cc9") }, priority: 75 },
+  { id: 'branch', get label() { return t("sessionRowConfig.903136bdf7") }, get notable() { return t("sessionRowConfig.3c2311559a") }, priority: 60, glyph: '⎇' },
+  { id: 'worktree', get label() { return t("sessionRowConfig.c893ba3003") }, get notable() { return t("sessionRowConfig.bcd5b71ce5") }, priority: 62, glyph: '⌂' },
+  { id: 'diff', get label() { return t("sessionRowConfig.b2fe45d0fc") }, get notable() { return t("sessionRowConfig.b29af20f5d") }, priority: 55 },
+  { id: 'dirty', get label() { return t("sessionRowConfig.38cc39238b") }, get notable() { return t("sessionRowConfig.48d5c0a812") }, priority: 50 },
+  { id: 'compareDiff', get label() { return t("sessionRowConfig.eac675b1c8") }, get notable() { return t("sessionRowConfig.3db3a158b1") }, priority: 56 },
+  { id: 'compareFiles', get label() { return t("sessionRowConfig.a89e856ab5") }, get notable() { return t("sessionRowConfig.3db3a158b1") }, priority: 51 },
+  { id: 'sync', get label() { return t("sessionRowConfig.3f89fb27ab") }, get notable() { return t("sessionRowConfig.662ba1ff07") }, priority: 45 },
+  { id: 'queue', get label() { return t("sessionRowConfig.2806c350b5") }, get notable() { return t("sessionRowConfig.759cad91ca") }, priority: 65 },
+  { id: 'model', get label() { return t("sessionRowConfig.5e2c614c23") }, get notable() { return t("sessionRowConfig.3c2311559a") }, priority: 40 },
   // The harness's own report of its session (`harness_status`). Each renders
   // nothing on a harness that does not report it, which is the same rule the
   // account and branch fields already follow, so a mixed fleet needs no
   // per-harness catalogue - a field is simply silent where it has no source.
-  { id: 'effort', label: 'Effort level', notable: 'differs from the project default', priority: 39 },
-  { id: 'mode', label: 'Permission mode', notable: 'anything but the default mode', priority: 66 },
-  { id: 'limit5h', label: '5-hour limit', notable: 'past half used', priority: 23 },
-  { id: 'limit7d', label: 'Weekly limit', notable: 'past half used', priority: 22 },
-  { id: 'account', label: 'Provider account', notable: 'more than one account is live', priority: 35 },
-  { id: 'state', label: 'State word', notable: 'never — the indicator already says it', priority: 30 },
-  { id: 'idleFor', label: 'Idle for', notable: 'idle longer than 30 minutes', priority: 25 },
-  { id: 'compactions', label: 'Compactions', notable: 'the conversation has compacted', priority: 20 },
-  { id: 'cost', label: 'Cost', notable: 'past $1', priority: 15 },
-  { id: 'cwd', label: 'Working directory', notable: 'differs from the project root', priority: 10 },
-  { id: 'exit', label: 'Exit reason', notable: 'the session ended', priority: 85 },
+  { id: 'effort', get label() { return t("sessionRowConfig.634e28ea60") }, get notable() { return t("sessionRowConfig.3c2311559a") }, priority: 39 },
+  { id: 'mode', get label() { return t("sessionRowConfig.c7a8e6db5c") }, get notable() { return t("sessionRowConfig.5325f7c1b1") }, priority: 66 },
+  { id: 'limit5h', get label() { return t("sessionRowConfig.26d04fad78") }, get notable() { return t("sessionRowConfig.a194e27a0b") }, priority: 23 },
+  { id: 'limit7d', get label() { return t("sessionRowConfig.93483c9388") }, get notable() { return t("sessionRowConfig.a194e27a0b") }, priority: 22 },
+  { id: 'account', get label() { return t("sessionRowConfig.20e8bb9ff8") }, get notable() { return t("sessionRowConfig.ac08597f92") }, priority: 35 },
+  { id: 'state', get label() { return t("sessionRowConfig.72d45cce03") }, get notable() { return t("sessionRowConfig.2d95d04098") }, priority: 30 },
+  { id: 'idleFor', get label() { return t("sessionRowConfig.83753303b5") }, get notable() { return t("sessionRowConfig.a68647e42d") }, priority: 25 },
+  { id: 'compactions', get label() { return t("sessionRowConfig.d424220c19") }, get notable() { return t("sessionRowConfig.9f9fc7ad02") }, priority: 20 },
+  { id: 'cost', get label() { return t("sessionRowConfig.204a5eb2cd") }, notable: 'past $1', priority: 15 },
+  { id: 'cwd', get label() { return t("sessionRowConfig.865e85c6fb") }, get notable() { return t("sessionRowConfig.7acd5f61f3") }, priority: 10 },
+  { id: 'exit', get label() { return t("sessionRowConfig.ba91dcb50d") }, get notable() { return t("sessionRowConfig.d1a4019a3d") }, priority: 85 },
 ]
 
 export const ROW_FIELD_BY_ID: Record<RowFieldId, RowFieldDescriptor> =
@@ -437,9 +438,9 @@ export function defaultSessionRowConfig(): SessionRowConfig {
 export type RowPresetId = 'minimal' | 'default' | 'detailed'
 
 export const ROW_PRESETS: Array<{ id: RowPresetId; label: string; description: string }> = [
-  { id: 'minimal', label: 'Minimal', description: 'Title and time. Context on the indicator.' },
-  { id: 'default', label: 'Standard', description: 'Time and model always; worktree and queue when notable.' },
-  { id: 'detailed', label: 'Detailed', description: 'Everything the row can say, always.' },
+  { id: 'minimal', get label() { return t("sessionRowConfig.057b5de48d") }, get description() { return t("sessionRowConfig.cc630e6f9a") } },
+  { id: 'default', get label() { return t("sessionRowConfig.ef6691545d") }, get description() { return t("sessionRowConfig.828ef55a58") } },
+  { id: 'detailed', get label() { return t("sessionRowConfig.6d46fcd50a") }, get description() { return t("sessionRowConfig.5538805b67") } },
 ]
 
 export function presetConfig(id: RowPresetId): SessionRowConfig {

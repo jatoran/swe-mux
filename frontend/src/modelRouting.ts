@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 /**
  * Which model every model-backed feature calls, and the one place that decides it.
  *
@@ -71,44 +72,44 @@ export type ModelRoute = {
  */
 export const MODEL_ROUTES: readonly ModelRoute[] = [
   {
-    feature: 'Cheap model', key: 'openrouter_cheap_model', kind: 'routed',
-    where: 'Accounts → Models',
+    get feature() { return t("modelRouting.f2a72ce9a5") }, key: 'openrouter_cheap_model', kind: 'routed',
+    get where() { return t("modelRouting.0c45498a3b") },
     target: { tab: 'accounts', setting: 'openrouter_cheap_model' },
-    note: 'Observers, conversation titles and summaries, and every override left blank.',
+    get note() { return t("modelRouting.6f6883a021") },
   },
   {
-    feature: 'Standard model', key: 'openrouter_standard_model', kind: 'routed',
-    fallback: 'openrouter_cheap_model', where: 'Accounts → Models',
+    get feature() { return t("modelRouting.c75a106235") }, key: 'openrouter_standard_model', kind: 'routed',
+    fallback: 'openrouter_cheap_model', get where() { return t("modelRouting.0c45498a3b") },
     target: { tab: 'accounts', setting: 'openrouter_standard_model' },
-    note: 'Observer retries the cheap model failed, and manually re-run observer batches.',
+    get note() { return t("modelRouting.3a05d64605") },
   },
   {
-    feature: 'Scan timeline', key: 'scan_timeline_model', kind: 'pinned',
-    where: 'Accounts → Models',
+    get feature() { return t("modelRouting.446eb6eb25") }, key: 'scan_timeline_model', kind: 'pinned',
+    get where() { return t("modelRouting.0c45498a3b") },
     target: { tab: 'accounts', setting: 'scan_timeline_model' },
-    note: 'Samples continuously over long transcript slices, so it has to be cheap at volume and reliable at structured output at once.',
+    get note() { return t("modelRouting.8ee7129e04") },
   },
   {
-    feature: 'Attention narration', key: 'attention_narration_model', kind: 'override',
-    fallback: 'openrouter_cheap_model', where: 'Accounts → Models',
+    get feature() { return t("modelRouting.c3fe4b56e7") }, key: 'attention_narration_model', kind: 'override',
+    fallback: 'openrouter_cheap_model', get where() { return t("modelRouting.0c45498a3b") },
     target: { tab: 'accounts', setting: 'attention_narration_model' },
   },
   {
-    feature: 'Spoken summary', key: 'tts_summary_model', kind: 'override',
-    fallback: 'openrouter_cheap_model', where: 'Accounts → Models',
+    get feature() { return t("heading.aeba66a52f") }, key: 'tts_summary_model', kind: 'override',
+    fallback: 'openrouter_cheap_model', get where() { return t("modelRouting.0c45498a3b") },
     target: { tab: 'accounts', setting: 'tts_summary_model' },
   },
   {
-    feature: 'Mux assistant', key: 'assistant_model', kind: 'pinned',
-    where: 'Accounts → Models',
+    get feature() { return t("heading.0fe741492b") }, key: 'assistant_model', kind: 'pinned',
+    get where() { return t("modelRouting.0c45498a3b") },
     target: { tab: 'accounts', setting: 'assistant_model' },
-    note: 'An agentic tool-calling loop: a model that only sometimes emits a well-formed call fails as a broken assistant rather than a cheap one.',
+    get note() { return t("modelRouting.ad8e4015b1") },
   },
   {
-    feature: 'Project context card', key: 'project_card_model', kind: 'override',
-    fallback: 'openrouter_cheap_model', where: 'Accounts → Models',
+    get feature() { return t("modelRouting.2a9cf1f8da") }, key: 'project_card_model', kind: 'override',
+    fallback: 'openrouter_cheap_model', get where() { return t("modelRouting.0c45498a3b") },
     target: { tab: 'accounts', setting: 'project_card_model' },
-    note: 'Beside the budget and the per-build token ceilings that bound one rebuild of the card.',
+    get note() { return t("modelRouting.521873bb95") },
   },
 ]
 

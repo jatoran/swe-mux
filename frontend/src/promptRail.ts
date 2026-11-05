@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // Prompt-library templates as command-rail buttons.
 //
 // A 'prompt' rail item stores only the template's `scope:id` key, never its body:
@@ -51,9 +52,9 @@ export function findPromptTemplate(items: PromptTemplate[], key: string): Prompt
 
 /** Short settings/drawer caption for a prompt item: its title, or that it is dangling. */
 export function promptItemSummary(item: RailItem, templates: PromptTemplate[] | null): string {
-  if (!item.promptKey) return 'no template attached'
+  if (!item.promptKey) return t("promptRail.31b1c3a268")
   if (!templates) return item.promptKey
-  return findPromptTemplate(templates, item.promptKey)?.title || 'missing template'
+  return findPromptTemplate(templates, item.promptKey)?.title || t("promptRail.6e5ce9f507")
 }
 
 /**
@@ -125,17 +126,17 @@ export async function activatePromptRailItem(
   ctx: { sessionId: string; projectId?: string },
 ): Promise<PromptRailActivation> {
   const key = item.promptKey
-  if (!key) return { status: 'error', message: `“${item.label}” has no prompt template attached. Re-add it from Configure Actions.` }
+  if (!key) return { status: 'error', get message() { return t("promptRail.66e5a9e7de", { label: item.label }) } }
   let templates: PromptTemplate[]
   try {
     templates = await fetchPromptTemplates(ctx.projectId)
   } catch (cause) {
-    return { status: 'error', message: cause instanceof Error ? cause.message : 'Could not load prompt templates.' }
+    return { status: 'error', message: cause instanceof Error ? cause.message : t("promptRail.793bbd4c00") }
   }
   const template = findPromptTemplate(templates, key)
   // A template can be deleted, or its Project scope switched off, long after a rail
   // button was made. Say which button is dangling rather than failing silently.
-  if (!template) return { status: 'error', message: `“${item.label}” points at a prompt template that is no longer available.` }
+  if (!template) return { status: 'error', get message() { return t("promptRail.5f09b0a7d3", { label: item.label }) } }
   return activatePromptTemplate(template, {
     projectId: ctx.projectId,
     // `insertIntoTerminal` rather than a bare dispatch: it carries a request id and

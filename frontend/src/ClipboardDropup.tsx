@@ -1,3 +1,5 @@
+import { locale as uiLocale } from './localization/index.ts'
+import { rich, t } from './localization/index.ts'
 import { useEffect, useState } from 'preact/hooks'
 
 import {
@@ -62,28 +64,28 @@ export function ClipboardDropup({ anchor, onClose, onInsert, onOpenSection }: Pr
 
   const entries = history?.entries || []
   return <RailDropup
-    label="Recent clipboard"
+    label={t("ClipboardDropup.a96363c972")}
     anchor={anchor}
     onClose={onClose}
     sticky={{
-      label: 'All clipboard history…',
-      title: 'Open the Clipboard section of the Actions drawer, where entries can be read, searched, pinned and deleted',
+      get label() { return t("ClipboardDropup.fd5353ee11") },
+      get title() { return t("ClipboardDropup.9606b9e6d5") },
       run: onOpenSection,
     }}
   >
-    {!history && !note && <p class="rail-dropup-empty">Loading…</p>}
-    {history && !history.enabled && <p class="rail-dropup-empty">Clipboard history is off, so nothing is being kept.</p>}
-    {history?.enabled && !entries.length && <p class="rail-dropup-empty">Nothing copied yet. Copies made inside swe-mux land here.</p>}
+    {!history && !note && <p class="rail-dropup-empty">{t("ClipboardDropup.ba3bbbe10d")}</p>}
+    {history && !history.enabled && <p class="rail-dropup-empty">{t("ClipboardDropup.b7bdc09072")}</p>}
+    {history?.enabled && !entries.length && <p class="rail-dropup-empty">{t("ClipboardDropup.c4b608cdce")}</p>}
     {entries.map(entry => <button
       key={entry.id}
       type="button"
       class="rail-dropup-row"
       disabled={!!busy}
-      title={`Insert this copy into the composer\n${entry.char_count.toLocaleString()} chars · ${sourceLabel(entry.source)}`}
+      title={t("ClipboardDropup.8c7f5950bd", { value1: entry.char_count.toLocaleString(uiLocale.value), value2: sourceLabel(entry.source) })}
       onClick={() => void insert(entry.id)}
     >
-      <span>{busy === entry.id ? 'Inserting…' : entry.preview}</span>
-      <small>{entry.pinned ? '★ ' : ''}{sourceLabel(entry.source)} · {relativeAge(entry.updated_at)} · {entry.char_count.toLocaleString()} chars</small>
+      <span>{busy === entry.id ? t("ClipboardDropup.9d42b19528") : entry.preview}</span>
+      <small>{rich("ClipboardDropup.15f0a6bdfb", { value1: (entry.pinned) ? 'yes' : 'no', value2: sourceLabel(entry.source), value3: relativeAge(entry.updated_at), value4: entry.char_count.toLocaleString(uiLocale.value) })}</small>
     </button>)}
     {note && <p class="rail-dropup-note" role="alert">{note}</p>}
   </RailDropup>

@@ -62,6 +62,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import Config, load_config
+from .ui_messages import error_text
 
 log = logging.getLogger(__name__)
 
@@ -395,7 +396,7 @@ def _run_external(config: Config, result: ResetResult) -> None:
         except Exception as exc:  # noqa: BLE001 - an external undo must not stop a start
             log.warning("factory reset could not undo %s: %s", label, exc, exc_info=True)
             result.external.append(
-                {"item": label, "path": "", "action": "failed", "detail": str(exc)}
+                {"item": label, "path": "", "action": "failed", "detail": error_text(exc)}
             )
     for item, detail in EXTERNAL_LEFT:
         result.external.append({"item": item, "path": "", "action": "left", "detail": detail})

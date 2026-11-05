@@ -14,6 +14,7 @@ from .leaf_names import validate_leaf_name
 from .models import ProjectGroupRecord, ProjectRecord
 from .path_identity import same_path
 from .project_files import DEFAULT_NOTE_STORAGE_ID, ensure_project_local_data_ignored, note_header
+from .ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -51,21 +52,23 @@ def canonical_project_root(value: str | Path, *, create: bool = False) -> Path:
     if create and not root.exists():
         parent = root.parent
         if parent == root:
-            raise ValueError(f"cannot create a project folder at a filesystem root: {root}")
+            raise ValueError(ui_message("projects.8f24ebd2d8", value1=root))
         if not parent.is_dir():
-            raise ValueError(f"parent folder does not exist: {parent}")
+            raise ValueError(ui_message("projects.b13387ebd6", value1=parent))
         # Server-side, so every create path is covered: the dialog suggests a safe
         # leaf but its Folder field is free text, and the assistant path has no
         # dialog at all. Adopting a folder that already exists skips this - it is
         # on disk under whatever name it has.
         validate_leaf_name(
-            root.name, label="project folder name", reserved_names=RESERVED_PROJECT_FOLDER_NAMES
+            root.name,
+            label=ui_message("projects.94819a6cd7"),
+            reserved_names=RESERVED_PROJECT_FOLDER_NAMES,
         )
         root.mkdir()
     if not root.exists():
-        raise ValueError(f"project folder does not exist: {root}")
+        raise ValueError(ui_message("projects.11f96cb102", value1=root))
     if not root.is_dir():
-        raise ValueError(f"project root must be a folder: {root}")
+        raise ValueError(ui_message("projects.3069fc33e2", value1=root))
     return root
 
 
@@ -94,7 +97,7 @@ def _prepare_project_root(
     # two Projects over the same tree. Both then own the same `.swe-mux/`, and
     # nothing downstream can tell them apart.
     if any(same_path(existing, resolved) for _project_id, existing in registered):
-        raise ValueError("that folder is already registered as a project")
+        raise ValueError(ui_message("projects.83b830cc0d"))
     canonical = canonical_project_root(resolved, create=create)
     initialize_project_files(canonical, label)
     return canonical
@@ -123,8 +126,7 @@ def initialize_project_files(root: Path, name: str | None = None) -> None:
     if not note.exists():
         label = name or root.name
         note.write_text(
-            note_header(DEFAULT_NOTE_STORAGE_ID, f"{label} notes")
-            + project_note_template(label),
+            note_header(DEFAULT_NOTE_STORAGE_ID, f"{label} notes") + project_note_template(label),
             encoding="utf-8",
             newline="\n",
         )
@@ -193,10 +195,10 @@ class ProjectManager:
     ) -> ProjectRegistrationResult:
         label = name.strip()
         if not label:
-            raise ValueError("project name is required")
+            raise ValueError(ui_message("projects.65459fb448"))
         if not str(root).strip():
             # An empty root used to resolve to the daemon's own working directory.
-            raise ValueError("project folder is required")
+            raise ValueError(ui_message("projects.bdd6fa9b19"))
         async with self._register_lock:
             return await self._register(label, root, group_id, create_missing)
 
@@ -206,7 +208,7 @@ class ProjectManager:
         # Registration conflicts and an unknown group are checked before the folder is
         # created, so a rejected request never leaves a stray directory behind.
         if group_id is not None and group_id not in self.groups:
-            raise ValueError("unknown project group")
+            raise ValueError(ui_message("projects.e4b46c8e40"))
         registered = [(item.id, item.root) for item in self.projects.values()]
         canonical = await asyncio.to_thread(
             _prepare_project_root, root, label, registered, create=create_missing
@@ -214,9 +216,9 @@ class ProjectManager:
         removed = await self.history.removed_project_for_root(str(canonical))
         if removed is not None:
             removed.name = label
-            removed.position = max(
-                (item.position for item in self.projects.values()), default=-1
-            ) + 1
+            removed.position = (
+                max((item.position for item in self.projects.values()), default=-1) + 1
+            )
             removed.group_id = group_id
             removed.sidebar_visible = True
             self.projects[removed.id] = removed
@@ -252,20 +254,18 @@ class ProjectManager:
         async with self._order_lock:
             current = [item.id for item in self.ordered_projects()]
             if expected_order != current:
-                raise ValueError("project order changed; refresh and try again")
+                raise ValueError(ui_message("projects.e556a2c66b"))
             if len(ordered_ids) != len(current) or set(ordered_ids) != set(current):
-                raise ValueError("project order must contain every registered project once")
+                raise ValueError(ui_message("projects.2dc8ebf902"))
             await self._apply_order(ordered_ids)
             return self.ordered_projects()
 
-    async def touch_used(
-        self, project_id: str, *, used_at: float | None = None
-    ) -> ProjectRecord:
+    async def touch_used(self, project_id: str, *, used_at: float | None = None) -> ProjectRecord:
         """Advance the shared explicit-use timestamp for one Project."""
 
         stamp = time.time() if used_at is None else float(used_at)
         if not math.isfinite(stamp) or stamp < 0:
-            raise ValueError("project use timestamp must be a non-negative finite number")
+            raise ValueError(ui_message("projects.6e0f12ac05"))
         async with self._project_write_lock:
             project = self.projects[project_id]
             next_stamp = max(project.last_used_at, stamp)
@@ -282,7 +282,7 @@ class ProjectManager:
     async def _update(self, project_id: str, **changes: object) -> ProjectRecord:
         project = self.projects[project_id]
         if "position" in changes:
-            raise ValueError("use the Project order endpoint to change position")
+            raise ValueError(ui_message("projects.87a5e6625b"))
         expected = changes.pop("layout_revision", None)
         if (
             "layout" in changes
@@ -291,7 +291,11 @@ class ProjectManager:
             and int(expected) != project.layout_revision
         ):
             raise LayoutRevisionConflict(
-                f"stale layout revision: expected {project.layout_revision}, received {expected}"
+                ui_message(
+                    "projects.layout_revision_conflict",
+                    expected=project.layout_revision,
+                    received=expected,
+                )
             )
         if "root" in changes:
             renamed = changes.get("name")
@@ -309,16 +313,16 @@ class ProjectManager:
         if "group_id" in changes:
             group_id = changes["group_id"]
             if group_id is not None and group_id not in self.groups:
-                raise ValueError("unknown project group")
+                raise ValueError(ui_message("projects.e4b46c8e40"))
         if changes.get("resource_open_mode") not in {None, "dock", "popout"}:
-            raise ValueError("resource_open_mode must be dock, popout, or null")
+            raise ValueError(ui_message("projects.2122a158b9"))
         default_backend = changes.get("default_backend")
         if (
             default_backend is not None
             and default_backend != "shell"
             and not is_agent_harness(default_backend)
         ):
-            raise ValueError("default_backend must be shell, a registered agent, or null")
+            raise ValueError(ui_message("projects.6814f544bf"))
         if "git_compare_ref" in changes:
             compare_ref = changes["git_compare_ref"]
             if compare_ref is not None and (
@@ -328,11 +332,9 @@ class ProjectManager:
                 or len(compare_ref) > 200
                 or any(ord(character) < 32 or ord(character) == 127 for character in compare_ref)
             ):
-                raise ValueError(
-                    "git_compare_ref must be null or a non-empty Git ref of at most 200 characters"
-                )
+                raise ValueError(ui_message("projects.798cc06418"))
         if "name" in changes and not str(changes["name"]).strip():
-            raise ValueError("project name is required")
+            raise ValueError(ui_message("projects.65459fb448"))
         if "layout" in changes:
             changes["layout"] = normalize_layout(changes["layout"])
         if "sidebar_visible" in changes:
@@ -380,7 +382,7 @@ class ProjectManager:
     async def create_group(self, name: str) -> ProjectGroupRecord:
         label = name.strip()
         if not label:
-            raise ValueError("group name is required")
+            raise ValueError(ui_message("projects.40957f8bc7"))
         # Past the highest position rather than at ``len(groups)``: after a delete the
         # count no longer matches the occupied slots, and two groups sharing a position
         # would make a reorder drag land somewhere the user did not aim for.
@@ -410,9 +412,9 @@ class ProjectManager:
         async with self._order_lock:
             current = [item.id for item in self.ordered_groups()]
             if expected_order != current:
-                raise ValueError("group order changed; refresh and try again")
+                raise ValueError(ui_message("projects.8bb0ad3443"))
             if len(ordered_ids) != len(current) or set(ordered_ids) != set(current):
-                raise ValueError("group order must contain every group once")
+                raise ValueError(ui_message("projects.993c279f2a"))
             await self._apply_group_order(ordered_ids)
             return self.ordered_groups()
 
@@ -426,7 +428,7 @@ class ProjectManager:
 
         group = self.groups.get(group_id)
         if group is None:
-            raise ValueError("unknown group")
+            raise ValueError(ui_message("projects.47e373db37"))
         return group
 
     async def update_group(self, group_id: str, **changes: object) -> ProjectGroupRecord:
@@ -434,7 +436,7 @@ class ProjectManager:
         if "name" in changes:
             label = str(changes["name"]).strip()
             if not label:
-                raise ValueError("group name is required")
+                raise ValueError(ui_message("projects.40957f8bc7"))
             group.name = label
         if "position" in changes:
             group.position = int(str(changes["position"]))

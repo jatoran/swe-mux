@@ -1,16 +1,17 @@
+import { withCatalogText } from './support/localizedSource.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 
-const source = (name: string) => readFileSync(join(import.meta.dirname, '..', 'src', name), 'utf8')
+const source = (name: string) => withCatalogText(readFileSync(join(import.meta.dirname, '..', 'src', name), 'utf8'))
 
 test('the drawer exposes one Actions tab with three named catalog views', () => {
   const tabs = source('drawerTabs.ts')
   const drawer = source('UtilityDrawer.tsx')
   const actions = source('ActionsTab.tsx')
 
-  assert.ok(tabs.includes("id: 'actions', label: 'Actions'"))
+  assert.match(tabs,/id:\s*'actions',\s*label:\s*'Actions'/)
   assert.doesNotMatch(tabs, /id: 'commands'|id: 'prompts'/)
   assert.ok(drawer.includes("case 'actions':"))
   assert.doesNotMatch(drawer, /case 'commands':|case 'prompts':/)
@@ -54,8 +55,8 @@ test('Configure Actions is a Settings tab reached from every intended entry poin
   assert.ok(source('RailEditor.tsx').includes('Detach {contextProjectName} to edit directly'))
   assert.doesNotMatch(actions, /onConfigureActions|Configure command rail/, 'Actions no longer duplicates command-rail configuration')
   assert.doesNotMatch(actions, /id="quick"|Quick actions/)
-  assert.ok(settings.includes('<h3>Action rail</h3>'))
-  assert.ok(settings.includes('<h3>Action layout</h3>'))
+  assert.match(settings,/<h3\b[^>]*>Action rail<\/h3>/)
+  assert.match(settings,/<h3\b[^>]*>Action layout<\/h3>/)
 })
 
 // The rail's three pickers are one pattern, and a fourth surface would be a fourth

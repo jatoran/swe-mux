@@ -1,3 +1,5 @@
+import { codeLabel } from './localization/codeLabels.ts'
+import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 
@@ -85,19 +87,19 @@ export function EdgeTtsSettings({value,onChange}:{
         method:'POST',headers:{'Content-Type':'application/json','X-Mux-User-Gesture':'edge-tts-install'},body:'{}',
       })
       const next=await response.json() as EdgeProviderStatus&{started?:boolean;error?:string}
-      if(!response.ok)throw new Error(next.error||'Managed Edge TTS installation failed to start.')
+      if(!response.ok)throw new Error(next.error||t("EdgeTtsSettings.4b397179b2"))
       setProvider(next);setCatalog(next.catalog)
       if(next.managed.status!=='installing')setBusy('')
     }catch(cause){setBusy('');setError(cause instanceof Error?cause.message:String(cause))}
   }
 
-  const locales=useMemo(()=>[...new Set((catalog?.voices||[]).map(voice=>voice.locale))].sort(),[catalog])
+  const locales=useMemo(()=>[...new Set((catalog?.voices||[]).map(voice=>voice.locale))].sort(), [catalog, uiLocale.value, catalogRevision.value])
   const filtered=useMemo(()=>{
     const needle=query.trim().toLowerCase()
     return (catalog?.voices||[]).filter(voice=>(!locale||voice.locale===locale)&&(
       !needle||`${voice.id} ${voice.name} ${voice.locale} ${voice.gender} ${voice.categories.join(' ')} ${voice.personalities.join(' ')}`.toLowerCase().includes(needle)
     ))
-  },[catalog,locale,query])
+  }, [catalog, locale, query, uiLocale.value, catalogRevision.value])
   const selected=(catalog?.voices||[]).find(voice=>voice.id===value.tts_edge_voice)
 
   const preview=()=>{
@@ -109,42 +111,42 @@ export function EdgeTtsSettings({value,onChange}:{
 
   return <div class="edge-tts-settings">
     <div class="provider-disclosure">
-      <strong>Experimental external integration</strong>
-      <p>Edge TTS sends each spoken segment to Microsoft through an undocumented consumer endpoint. It has no API key, SLA, or published third-party commercial-use grant. Microsoft can change or refuse it at any time. Summary mode may send session-derived text to OpenRouter first and the resulting summary to Microsoft.</p>
-      <label class="check" data-setting="tts_edge_risk_ack_version"><span>I understand the service, privacy, reliability, and commercial-use uncertainty</span><input type="checkbox" checked={value.tts_edge_risk_ack_version>=1} onChange={event=>onChange('tts_edge_risk_ack_version',event.currentTarget.checked?1:0)}/></label>
+      <strong>{t("EdgeTtsSettings.c66e240d37")}</strong>
+      <p>{t("EdgeTtsSettings.f6341e0840")}</p>
+      <label class="check" data-setting="tts_edge_risk_ack_version"><span>{t("EdgeTtsSettings.a1194e2da8")}</span><input type="checkbox" checked={value.tts_edge_risk_ack_version>=1} onChange={event=>onChange('tts_edge_risk_ack_version',event.currentTarget.checked?1:0)}/></label>
     </div>
     <div class="edge-managed-install">
-      <p aria-live="polite"><span class={`state-dot ${provider?.managed.status==='ready'?'idle':provider?.managed.status==='installing'?'running':'stopped'}`}/> managed::{provider?.managed.status||'loading'}{provider?.managed.phase?` · ${provider.managed.phase.replaceAll('_',' ')}`:''}{provider?.managed.version?` · edge-tts ${provider.managed.version}`:''}{provider?.managed.error?` · ${provider.managed.error}`:''}</p>
-      <div class="theme-actions"><button type="button" disabled={!!busy||provider?.managed.status==='installing'||provider?.managed.install_method===null} onClick={()=>void install()}>{provider?.managed.status==='installing'?'Installing…':provider?.managed.status==='ready'?'Repair / reinstall managed Edge TTS':provider?.managed.status==='error'?'Retry managed installation':'Install Edge TTS integration'}</button></div>
-      <small>swe-mux asks <code>{provider?.managed.install_method==='venv'?'python -m venv':'uv'}</code> to build an isolated environment and fetch <code>{provider?.managed.requirement||'edge-tts==7.2.8'}</code> directly from PyPI into the environment containing <code>{provider?.managed.python||'<data_dir>/integrations/edge-tts/current/python'}</code>, verifies it, and activates it atomically. The package remains inspectable and replaceable under its <a href="https://github.com/rany2/edge-tts/blob/master/LICENSE" target="_blank" rel="noreferrer">LGPL-3.0 license</a>. Nothing installs merely because this provider is selected.</small>
-      {provider?.managed.install_method==='venv'&&<p class="tts-lexicon-hint"><code>uv</code> was not found, so swe-mux will build the environment with this install's own Python (<code>python -m venv</code>). uv is preferred because it can also provide the interpreter; installing it is not required here.</p>}
-      {provider?.managed.install_method===null&&<p class="tts-lexicon-hint">Managed installation needs either <code>uv</code> or a real Python interpreter to build an environment with, and this build has neither. Install uv, or use the external interpreter override below.</p>}
-      {provider?.managed.status==='ready'&&provider.managed.last_install_error&&<p class="tts-lexicon-hint tts-lexicon-error">The current managed integration is still active, but its last repair failed: {provider.managed.last_install_error}</p>}
-      {provider?.managed.status==='ready'&&!!value.tts_edge_python.trim()&&<p class="tts-lexicon-hint">The managed environment is ready, but the external interpreter override is active. Clear the override and Save to use the managed installation.</p>}
+      <p aria-live="polite">{rich("EdgeTtsSettings.b94d4324b5", { value1: <span class={`state-dot ${provider?.managed.status==='ready'?'idle':provider?.managed.status==='installing'?'running':'stopped'}`}/>, value2: provider?.managed.status || t("EdgeTtsSettings.b4a070a2d3"), value3: provider?.managed.phase ? t("EdgeTtsSettings.f6b53f9c8a", { value1: provider.managed.phase.replaceAll('_',' ') }) : '', value4: provider?.managed.version ? t("EdgeTtsSettings.38a6695039", { version: provider.managed.version }) : '', value5: provider?.managed.error ? t("EdgeTtsSettings.f3b99994b4", { error: provider.managed.error }) : '' })}</p>
+      <div class="theme-actions"><button type="button" disabled={!!busy||provider?.managed.status==='installing'||provider?.managed.install_method===null} onClick={()=>void install()}>{provider?.managed.status==='installing' ? t("EdgeTtsSettings.530bcc355f") : provider?.managed.status==='ready' ? t("EdgeTtsSettings.2737c05fce") : provider?.managed.status==='error' ? t("EdgeTtsSettings.aa0059593e") : t("EdgeTtsSettings.98ca60a5f4")}</button></div>
+      <small>{rich("EdgeTtsSettings.adff565c68", { value1: <code>{provider?.managed.install_method==='venv' ? t("EdgeTtsSettings.18c6c46cc8") : t("EdgeTtsSettings.e6184ce10e")}</code>, value2: <code>{provider?.managed.requirement || t("EdgeTtsSettings.ca4a6ce65a")}</code>, value3: <code>{provider?.managed.python || t("EdgeTtsSettings.53f5be6c49")}</code>, value4: <a href="https://github.com/rany2/edge-tts/blob/master/LICENSE" target="_blank" rel="noreferrer">{t("EdgeTtsSettings.6045bd9812")}</a> })}</small>
+      {provider?.managed.install_method==='venv' && <p class="tts-lexicon-hint">{rich("EdgeTtsSettings.4f8928685f", { value1: <code>{t("EdgeTtsSettings.e6184ce10e")}</code>, value2: <code>{t("EdgeTtsSettings.18c6c46cc8")}</code> })}</p>}
+      {provider?.managed.install_method===null && <p class="tts-lexicon-hint">{rich("EdgeTtsSettings.ccb248fa48", { value1: <code>{t("EdgeTtsSettings.e6184ce10e")}</code> })}</p>}
+      {provider?.managed.status==='ready'&&provider.managed.last_install_error && <p class="tts-lexicon-hint tts-lexicon-error">{rich("EdgeTtsSettings.3b51dc21db", { last_install_error: provider.managed.last_install_error })}</p>}
+      {provider?.managed.status==='ready'&&!!value.tts_edge_python.trim() && <p class="tts-lexicon-hint">{t("EdgeTtsSettings.b7ff427442")}</p>}
     </div>
-    <label data-setting="tts_edge_python">External Python interpreter override<input value={value.tts_edge_python} placeholder="Blank uses the managed installation" onInput={event=>onChange('tts_edge_python',event.currentTarget.value)}/><small>Advanced escape hatch for an environment you maintain yourself. Save before checking it.</small></label>
-    <p aria-live="polite"><span class={`state-dot ${provider?.integration==='ready'?'idle':busy?'running':'stopped'}`}/> integration::{provider?.integration||'unknown'}{provider?.package_version?` · edge-tts ${provider.package_version}${provider.tested_version?' tested':' untested'}`:''}{provider?.diagnostic?` · ${provider.diagnostic}`:''}</p>
+    <label data-setting="tts_edge_python">{rich("EdgeTtsSettings.8e909d2db2", { value1: <input value={value.tts_edge_python} placeholder={t("EdgeTtsSettings.53cecde8d2")} onInput={event=>onChange('tts_edge_python',event.currentTarget.value)}/>, value2: <small>{t("EdgeTtsSettings.1399c678fc")}</small> })}</label>
+    <p aria-live="polite">{rich("EdgeTtsSettings.220ced15c9", { value1: <span class={`state-dot ${provider?.integration==='ready'?'idle':busy?'running':'stopped'}`}/>, value2: provider?.integration || t("EdgeTtsSettings.b23a6a8439"), value3: provider?.package_version ? t("EdgeTtsSettings.7b30b65d9d", { package_version: provider.package_version, value2: (provider.tested_version) ? 'yes' : 'no' }) : '', value4: provider?.diagnostic ? t("EdgeTtsSettings.2a54e33e60", { diagnostic: provider.diagnostic }) : '' })}</p>
     <div class="theme-actions">
-      <button type="button" disabled={!!busy} onClick={()=>void run('probe')}>{busy==='probe'?'Checking…':'Check integration'}</button>
-      <button type="button" disabled={!!busy} onClick={()=>void run('refresh')}>{busy==='refresh'?'Refreshing…':catalog?.voices.length?'Refresh voices':'Load voices from Microsoft'}</button>
+      <button type="button" disabled={!!busy} onClick={()=>void run('probe')}>{busy==='probe' ? t("EdgeTtsSettings.ec963ffc91") : t("EdgeTtsSettings.43a5e0bd47")}</button>
+      <button type="button" disabled={!!busy} onClick={()=>void run('refresh')}>{busy==='refresh' ? t("EdgeTtsSettings.1c0def7be0") : catalog?.voices.length ? t("EdgeTtsSettings.f84d095fb7") : t("EdgeTtsSettings.cf69437569")}</button>
     </div>
-    {catalog?.voices.length?<>
-      <p>catalog::{catalog.status}{catalog.stale?' · stale':''} · voices::{catalog.voices.length}{catalog.package_version?` · edge-tts ${catalog.package_version}`:''}{catalog.error?` · last refresh failed: ${catalog.error}`:''}</p>
+    {catalog?.voices.length ? <>
+      <p>{rich("EdgeTtsSettings.dc97f875b7", { status: codeLabel(catalog.status), value2: (catalog.stale) ? 'yes' : 'no', length: catalog.voices.length, value4: catalog.package_version ? t("EdgeTtsSettings.847afecc00", { package_version: catalog.package_version }) : '', value5: catalog.error ? t("EdgeTtsSettings.5590b95d2a", { error: catalog.error }) : '' })}</p>
       <div class="edge-voice-filters">
-        <label>Find a voice<input value={query} placeholder="Name, locale, personality" onInput={event=>setQuery(event.currentTarget.value)}/></label>
-        <label>Locale<select value={locale} onChange={event=>setLocale(event.currentTarget.value)}><option value="">All locales</option>{locales.map(item=><option value={item}>{item}</option>)}</select></label>
+        <label>{rich("EdgeTtsSettings.75a81dcfce", { value1: <input value={query} placeholder={t("EdgeTtsSettings.3a30e1a624")} onInput={event=>setQuery(event.currentTarget.value)}/> })}</label>
+        <label>{rich("EdgeTtsSettings.c49ed82bf3", { value1: <select value={locale} onChange={event=>setLocale(event.currentTarget.value)}><option value="">{t("EdgeTtsSettings.a9f854d579")}</option>{locales.map(item=><option value={item}>{item}</option>)}</select> })}</label>
       </div>
-      <label data-setting="tts_edge_voice">Edge voice<select size={Math.min(9,Math.max(3,filtered.length))} value={value.tts_edge_voice} onChange={event=>onChange('tts_edge_voice',event.currentTarget.value)}>
-        {!filtered.some(voice=>voice.id===value.tts_edge_voice)&&<option value={value.tts_edge_voice}>{selected?`${selected.locale} · ${selected.name} · selected`:`${value.tts_edge_voice} · not in latest catalog`}</option>}
-        {filtered.map(voice=><option value={voice.id}>{voice.locale} · {voice.name} · {voice.gender}{voice.status&&voice.status!=='GA'?` · ${voice.status}`:''}</option>)}
-      </select><small>{selected?`${selected.id}${selected.personalities.length?` · ${selected.personalities.join(', ')}`:''}`:`${value.tts_edge_voice} is preserved but missing from the latest catalog.`}</small></label>
-      <button type="button" title={!provider?.risk_acknowledged?'Save the acknowledgement before previewing':undefined} disabled={!provider?.risk_acknowledged||provider.integration!=='ready'||!value.tts_edge_voice} onClick={preview}>♪ Preview selected voice</button>
-    </>:<p>No cached service catalog. Loading voices is an explicit network request and never happens merely because Settings opened.</p>}
+      <label data-setting="tts_edge_voice">{rich("EdgeTtsSettings.609b506230", { value1: <select size={Math.min(9,Math.max(3,filtered.length))} value={value.tts_edge_voice} onChange={event=>onChange('tts_edge_voice',event.currentTarget.value)}>
+        {!filtered.some(voice=>voice.id===value.tts_edge_voice) && <option value={value.tts_edge_voice}>{selected ? t("EdgeTtsSettings.af3f15095e", { locale: selected.locale, name: selected.name }) : t("EdgeTtsSettings.5ed135a143", { tts_edge_voice: value.tts_edge_voice })}</option>}
+        {filtered.map(voice=><option value={voice.id}>{voice.locale} · {voice.name} · {voice.gender}{voice.status&&voice.status!=='GA' ? t("EdgeTtsSettings.b27ab680e4", { status: codeLabel(voice.status) }) : ''}</option>)}
+      </select>, value2: <small>{selected ? t("EdgeTtsSettings.fb25f6f59c", { id: selected.id, value2: selected.personalities.length?` · ${selected.personalities.join(', ')}`:'' }) : t("EdgeTtsSettings.4f2486b005", { tts_edge_voice: value.tts_edge_voice })}</small> })}</label>
+      <button type="button" title={!provider?.risk_acknowledged ? t("EdgeTtsSettings.2943c228c0") : undefined} disabled={!provider?.risk_acknowledged||provider.integration!=='ready'||!value.tts_edge_voice} onClick={preview}>{t("EdgeTtsSettings.d99fbe7902")}</button>
+    </> : <p>{t("EdgeTtsSettings.0db05c8e03")}</p>}
     <div class="edge-prosody-grid">
-      <label data-setting="tts_edge_rate_percent">Rate (%)<input type="number" min="-100" max="100" value={value.tts_edge_rate_percent} onInput={event=>onChange('tts_edge_rate_percent',Number(event.currentTarget.value))}/></label>
-      <label data-setting="tts_edge_volume_percent">Volume (%)<input type="number" min="-100" max="100" value={value.tts_edge_volume_percent} onInput={event=>onChange('tts_edge_volume_percent',Number(event.currentTarget.value))}/></label>
-      <label data-setting="tts_edge_pitch_hz">Pitch (Hz)<input type="number" min="-100" max="100" value={value.tts_edge_pitch_hz} onInput={event=>onChange('tts_edge_pitch_hz',Number(event.currentTarget.value))}/></label>
+      <label data-setting="tts_edge_rate_percent">{rich("EdgeTtsSettings.6f111d0ca6", { value1: <input type="number" min="-100" max="100" value={value.tts_edge_rate_percent} onInput={event=>onChange('tts_edge_rate_percent',Number(event.currentTarget.value))}/> })}</label>
+      <label data-setting="tts_edge_volume_percent">{rich("EdgeTtsSettings.e84d42b977", { value1: <input type="number" min="-100" max="100" value={value.tts_edge_volume_percent} onInput={event=>onChange('tts_edge_volume_percent',Number(event.currentTarget.value))}/> })}</label>
+      <label data-setting="tts_edge_pitch_hz">{rich("EdgeTtsSettings.06bca263eb", { value1: <input type="number" min="-100" max="100" value={value.tts_edge_pitch_hz} onInput={event=>onChange('tts_edge_pitch_hz',Number(event.currentTarget.value))}/> })}</label>
     </div>
-    {error&&<p class="assistant-error" role="alert">{error}</p>}
+    {error && <p class="assistant-error" role="alert">{error}</p>}
   </div>
 }

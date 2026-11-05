@@ -103,6 +103,7 @@ from .gateway_discovery import STOP_NONE, live_identity, stop_gateway
 from .spawn_contract import scrub_claude_session_markers
 from .subprocess_flags import popen_outside_job
 from .supervisor import discovery_path
+from .ui_messages import ui_message
 
 #: The three bundle directories, under the names both `dist/` and the installer's
 #: `{app}` use. The app bundle is the one every install has and the one every
@@ -1250,7 +1251,7 @@ def apply_staged(
     ship, and a stale registry line is not a reason to say it did not.
     """
     if mode not in MODES:
-        raise ValueError(f"unknown apply mode {mode!r}")
+        raise ValueError(ui_message("bundle_apply.56f0dd45a1", value1=repr(mode)))
     names = bundles_for_mode(layout, mode)
     required = required_bundles(mode)
     outcome.describe(mode=mode, bundles=names)
@@ -1428,7 +1429,7 @@ def apply_archive(
     script's. Every refusal before `apply_staged` has touched nothing.
     """
     if mode not in MODES:
-        raise ValueError(f"unknown apply mode {mode!r}")
+        raise ValueError(ui_message("bundle_apply.56f0dd45a1", value1=repr(mode)))
     log(f"install root {layout.install_root}; mode {mode}")
     outcome.describe(mode=mode, install_root=str(layout.install_root))
     if preflight_supervisor(config, layout, mode=mode, force=force):

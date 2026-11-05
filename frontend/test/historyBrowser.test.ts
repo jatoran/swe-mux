@@ -1,3 +1,4 @@
+import { withCatalogText } from './support/localizedSource.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -7,9 +8,9 @@ import {
   HISTORY_TIMELINE_PREVIEW, sectionKeysVisible, speakerLabel, splitRecentScans,
 } from '../src/historyDetail.ts'
 
-const source=readFileSync(join(import.meta.dirname,'..','src','HistoryBrowser.tsx'),'utf8')
-const css=readFileSync(join(import.meta.dirname,'..','src','style.css'),'utf8')
-const app=readFileSync(join(import.meta.dirname,'..','src','App.tsx'),'utf8')
+const source=withCatalogText(readFileSync(join(import.meta.dirname,'..','src','HistoryBrowser.tsx'),'utf8'))
+const css=withCatalogText(readFileSync(join(import.meta.dirname,'..','src','style.css'),'utf8'))
+const app=withCatalogText(readFileSync(join(import.meta.dirname,'..','src','App.tsx'),'utf8'))
 
 test('history detail actions stay ahead of the collapsible run sections',()=>{
   const actions=source.indexOf('<div class="transcript-actions">')
@@ -27,7 +28,7 @@ test('history detail actions stay ahead of the collapsible run sections',()=>{
   // conversation inside one sizes to its text instead of taking the leftover height.
   assert.match(css,/\.transcript-section-toggle \{[^}]*flex:none/)
   assert.match(source,/<button type="button" class="transcript-section-toggle" aria-expanded=\{sections\.transcript\} aria-controls="history-transcript-body"/)
-  assert.match(source,/\{sections\.transcript&&<div class="messages" id="history-transcript-body"/)
+  assert.match(source,/\{sections\.transcript\s*&&\s*<div class="messages" id="history-transcript-body"/)
   assert.ok(!/<details[^>]*>\s*<summary>[^]{0,400}?class="messages"/.test(source))
 })
 

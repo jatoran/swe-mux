@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { LATENCY_STAGE_LABELS } from './voiceLatency'
 import type { LatencyReportPayload, LatencyStages } from './voiceLatency'
 
@@ -18,14 +19,13 @@ export function VoiceLatencyReport({ report, onRefresh, onReset }: {
   const stages = report?.stages
   return <div class="voice-latency">
     <div class="voice-latency-actions">
-      <span>{report ? `${report.count} sample${report.count === 1 ? '' : 's'}` : 'unavailable'}</span>
-      <button onClick={onRefresh}>Refresh</button>
-      <button onClick={onReset} disabled={!report?.count} title="Discard the recorded samples and start a fresh measurement run">Reset</button>
+      <span>{report ? t("VoiceLatencyReport.84ba09ab1c", { count: report.count, value2: (report.count === 1) ? 'yes' : 'no' }) : t("VoiceLatencyReport.ba691ba042")}</span>
+      <button onClick={onRefresh}>{t("VoiceLatencyReport.0e91610117")}</button>
+      <button onClick={onReset} disabled={!report?.count} title={t("VoiceLatencyReport.7ecc3a849c")}>{t("VoiceLatencyReport.daee7606b3")}</button>
     </div>
-    {report && report.count > 0
-      ? <>
+    {report && report.count > 0 ? <>
         <table class="voice-latency-table">
-          <thead><tr><th>stage</th><th>p50</th><th>p95</th><th>max</th></tr></thead>
+          <thead><tr><th>{t("VoiceLatencyReport.c7ff6dcd94")}</th><th>{t("VoiceLatencyReport.875636a511")}</th><th>{t("VoiceLatencyReport.f771f4d32e")}</th><th>{t("VoiceLatencyReport.9baf3a4031")}</th></tr></thead>
           <tbody>
             {LATENCY_STAGE_LABELS.map(stage => {
               const stat = stages?.[stage.key as keyof LatencyStages]
@@ -36,8 +36,8 @@ export function VoiceLatencyReport({ report, onRefresh, onReset }: {
                 <td>{ms(stat?.max || 0)}</td>
               </tr>
             })}
-            <tr class="voice-latency-total" title="End of speech to executed action, all utterances.">
-              <td>total</td>
+            <tr class="voice-latency-total" title={t("VoiceLatencyReport.d35a3b9ff1")}>
+              <td>{t("VoiceLatencyReport.11239872d1")}</td>
               <td>{ms(report.total_ms.p50)}</td>
               <td>{ms(report.total_ms.p95)}</td>
               <td>{ms(report.total_ms.max)}</td>
@@ -45,11 +45,8 @@ export function VoiceLatencyReport({ report, onRefresh, onReset }: {
           </tbody>
         </table>
         <p class={report.command_total_ms.count && report.command_total_ms.p50 > 500 ? 'settings-inline-error' : ''}>
-          {report.command_total_ms.count
-            ? `Commands only (${report.command_total_ms.count}): p50 ${ms(report.command_total_ms.p50)}, p95 ${ms(report.command_total_ms.p95)}. Target is under 500 ms.`
-            : 'No wake-word command has been spoken yet, so the command-only total has nothing in it.'}
+          {report.command_total_ms.count ? t("VoiceLatencyReport.0d695533fd", { count: report.command_total_ms.count, value2: ms(report.command_total_ms.p50), value3: ms(report.command_total_ms.p95) }) : t("VoiceLatencyReport.88d118bab0")}
         </p>
-      </>
-      : <p>Nothing measured yet. Turn Talk on, speak an utterance, and refresh.</p>}
+      </> : <p>{t("VoiceLatencyReport.5f247dafd3")}</p>}
   </div>
 }

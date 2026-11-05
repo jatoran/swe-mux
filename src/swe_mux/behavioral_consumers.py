@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any
 from . import budget
 from .openrouter import OpenRouterError
 from .scan_consumers import first_nonempty, target_set
+from .ui_messages import ui_message
 
 if TYPE_CHECKING:
     from .scan_timeline import ScanContext
@@ -461,7 +462,9 @@ class BehavioralConsumerService:
             return None
         global_spend = await self.store.spend()
         if budget.spent_out(
-            self.config.automation_daily_budget, global_spend, label="the global daily automation"
+            self.config.automation_daily_budget,
+            global_spend,
+            label=ui_message("behavioral_consumers.acfc9410dc"),
         ).exhausted:
             log.info("adaptive title skipped for run=%s: daily automation budget spent", run_id)
             return None

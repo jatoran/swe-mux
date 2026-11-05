@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // Turning a keystroke into a chord, and a chord back into something readable.
 //
 // The token comes from `event.code`, the PHYSICAL key, not from `event.key`, which
@@ -99,7 +100,7 @@ const PRETTY: Record<string, string> = {
 }
 
 const MODIFIER_LABELS: Record<'win' | 'mac', Record<string, string>> = {
-  win: { ctrl: 'Ctrl', shift: 'Shift', alt: 'Alt', meta: 'Win' },
+  win: { get ctrl() { return t("keys.e2ee2909fe") }, get shift() { return t("keys.2e544a292f") }, get alt() { return t("keys.c91da2e020") }, get meta() { return t("keys.b980a145c5") } },
   mac: { ctrl: '⌃', shift: '⇧', alt: '⌥', meta: '⌘' },
 }
 

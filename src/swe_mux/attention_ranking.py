@@ -43,6 +43,7 @@ from typing import Any
 
 from .background_tasks import background
 from .deterministic_consumers import ConsumerContext, loop_finding_unsupported
+from .ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -591,9 +592,7 @@ class AttentionRankingService:
             annotation = await self.store.annotation(str(event.payload.get("annotation_id")))
             if annotation is None:
                 return None
-            if tag == "loop-detected" and loop_finding_unsupported(
-                annotation.get("evidence_json")
-            ):
+            if tag == "loop-detected" and loop_finding_unsupported(annotation.get("evidence_json")):
                 # The same retraction the Findings read applies. `loop-detected`
                 # feeds the `stuck` class, which is expensive-blocking, so a
                 # finding whose evidence carries no discriminator would spend a
@@ -606,9 +605,7 @@ class AttentionRankingService:
                 project_id=annotation.get("project_id"),
                 summary=str(annotation.get("content") or "")[:600],
                 confidence=float(annotation.get("confidence") or 0.9),
-                evidence=[
-                    {"source": "annotation", "annotation_id": annotation["id"], "tag": tag}
-                ],
+                evidence=[{"source": "annotation", "annotation_id": annotation["id"], "tag": tag}],
                 source="annotation",
                 source_id=str(annotation["id"]),
             )
@@ -657,9 +654,7 @@ class AttentionRankingService:
             incident_class=policy.incident_class,
             anchor=anchor,
             now=now,
-            window_seconds=float(
-                getattr(self.config, "attention_incident_window_seconds", 3600.0)
-            ),
+            window_seconds=float(getattr(self.config, "attention_incident_window_seconds", 3600.0)),
         )
         existing = await self._existing(key)
         if existing is not None:
@@ -742,9 +737,7 @@ class AttentionRankingService:
             action=str(existing.get("action") or "") or policy.action,
             channel=str(existing["channel"]),
             cost_to_resolve=str(existing["cost_to_resolve"]),
-            score=score_for(
-                policy, confidence=finding.confidence, contributions=contributions
-            ),
+            score=score_for(policy, confidence=finding.confidence, contributions=contributions),
             confidence=finding.confidence,
             evidence=finding.evidence,
         )
@@ -797,18 +790,14 @@ class AttentionRankingService:
             return
         if item["channel"] == DIGEST:
             return
-        task = asyncio.create_task(
-            self._narrate(item), name=f"attention-narration-{item['id']}"
-        )
+        task = asyncio.create_task(self._narrate(item), name=f"attention-narration-{item['id']}")
         self._narrations.add(task)
         task.add_done_callback(self._narrations.discard)
 
     async def _narrate(self, item: dict[str, Any]) -> None:
         assert self.narrator is not None
         text, status = await self.narrator.narrate(item)
-        await self.store.update_attention_item(
-            item["id"], narration=text, narration_status=status
-        )
+        await self.store.update_attention_item(item["id"], narration=text, narration_status=status)
         log.info("attention narration %s status=%s", item["id"], status)
 
     # ---- reads -----------------------------------------------------------
@@ -828,8 +817,7 @@ class AttentionRankingService:
             [
                 session
                 for session in self.sessions.sessions.values()
-                if session.record.agent_run_id
-                and session.record.state not in {"exited", "crashed"}
+                if session.record.agent_run_id and session.record.state not in {"exited", "crashed"}
             ]
         )
         return {
@@ -898,8 +886,7 @@ class AttentionRankingService:
                         "reason": row["reason"],
                         "created_at": row["created_at"],
                         "note": (
-                            "You cleared this session here; "
-                            "what follows is a new conversation."
+                            "You cleared this session here; what follows is a new conversation."
                         ),
                     }
                 )
@@ -961,7 +948,7 @@ class AttentionRankingService:
     async def feedback(self, item_id: str, action: str) -> dict[str, Any] | None:
         """Record what the human did with one item; this is the only learning input."""
         if action not in {"acted", "dismissed"}:
-            raise ValueError("action must be acted or dismissed")
+            raise ValueError(ui_message("attention_ranking.d2a21e8fb0"))
         item = await self.store.attention_item(item_id)
         if item is None:
             return None
@@ -1049,9 +1036,7 @@ class AttentionRankingService:
 
     def status(self) -> dict[str, Any]:
         loops = background.health().get("loops", [])
-        running = any(
-            item.get("name") == ATTENTION_LOOP and item.get("running") for item in loops
-        )
+        running = any(item.get("name") == ATTENTION_LOOP and item.get("running") for item in loops)
         return {
             "ranked": self.ranked,
             "interrupts": self.interrupts,

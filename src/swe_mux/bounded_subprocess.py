@@ -45,6 +45,7 @@ from typing import Any
 from . import background_containment
 from .background_containment import ContainedRun, ContainmentPolicy, ResourceSample
 from .subprocess_flags import background_creation_flags, reap_process_tree
+from .ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -327,7 +328,9 @@ def _spawn_lane(lane: str) -> _SpawnLoop:
     try:
         return _spawn_lanes[lane]
     except KeyError:
-        raise ValueError(f"unknown spawn lane {lane!r}; expected one of {LANES}") from None
+        raise ValueError(
+            ui_message("bounded_subprocess.3ed74e9258", value1=repr(lane), value2=LANES)
+        ) from None
 
 
 def _resolve_on(loop: asyncio.AbstractEventLoop, future: asyncio.Future[Any], task: Any) -> None:
@@ -540,7 +543,7 @@ async def _run_bounded_here(
                     bounded_read(
                         process.stderr,
                         output_limit if stderr_limit is None else stderr_limit,
-                        label=f"{label} stderr",
+                        label=ui_message("bounded_subprocess.6b1ecca275", value1=label),
                     )
                 )
             exit_code, timed_out, stalled = await _await_exit(
@@ -556,8 +559,7 @@ async def _run_bounded_here(
                 _rate_limited(
                     "stall",
                     label,
-                    "bounded_command_stalled label=%s executable=%s stall_s=%g "
-                    "operation_id=%s",
+                    "bounded_command_stalled label=%s executable=%s stall_s=%g operation_id=%s",
                     label,
                     argv[0] if argv else "",
                     stall_seconds or 0.0,
@@ -567,8 +569,7 @@ async def _run_bounded_here(
                 _rate_limited(
                     "timeout",
                     label,
-                    "bounded_command_timed_out label=%s executable=%s timeout_s=%g "
-                    "operation_id=%s",
+                    "bounded_command_timed_out label=%s executable=%s timeout_s=%g operation_id=%s",
                     label,
                     argv[0] if argv else "",
                     timeout_seconds,

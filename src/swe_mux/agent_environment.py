@@ -38,6 +38,7 @@ from .adapters.codex import codex_data_home
 from .agent_skills import discover_skills, parse_frontmatter
 from .harness import Backend, descriptor, is_agent_harness, require_backend
 from .path_identity import same_path, same_path_lexically
+from .ui_messages import ui_message
 
 Scope = Literal["built_in", "managed", "user", "project", "local", "session", "unknown"]
 
@@ -74,8 +75,27 @@ _HOOK_EVENT_RANK = {event: index for index, event in enumerate(_HOOK_EVENTS)}
 _MUX_HOOK_MARKER = "swe_mux.hook_client"
 _SCRIPT_SUFFIXES = frozenset(
     {
-        ".bash", ".bat", ".cjs", ".cmd", ".com", ".exe", ".fish", ".jar", ".js", ".lua",
-        ".mjs", ".pl", ".php", ".ps1", ".psm1", ".py", ".pyw", ".rb", ".sh", ".ts", ".zsh",
+        ".bash",
+        ".bat",
+        ".cjs",
+        ".cmd",
+        ".com",
+        ".exe",
+        ".fish",
+        ".jar",
+        ".js",
+        ".lua",
+        ".mjs",
+        ".pl",
+        ".php",
+        ".ps1",
+        ".psm1",
+        ".py",
+        ".pyw",
+        ".rb",
+        ".sh",
+        ".ts",
+        ".zsh",
     }
 )
 _CREDENTIAL_WORD = re.compile(r"(?i)\b(secret|token|password|passwd|bearer|api[_-]?key)\b")
@@ -83,8 +103,24 @@ _MODULE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\Z"
 # A command starting with one of these is a shell snippet, not a program: reporting
 # `if` as the hook's program is worse than saying nothing.
 _SHELL_KEYWORDS = frozenset(
-    {".", "[", "[[", "case", "do", "done", "eval", "exec", "fi", "for", "if",
-     "source", "test", "then", "until", "while"}
+    {
+        ".",
+        "[",
+        "[[",
+        "case",
+        "do",
+        "done",
+        "eval",
+        "exec",
+        "fi",
+        "for",
+        "if",
+        "source",
+        "test",
+        "then",
+        "until",
+        "while",
+    }
 )
 
 
@@ -506,9 +542,7 @@ def _config_sources(backend: Backend, cwd: Path, args: list[str]) -> list[Config
             )
     elif backend == "codex":
         home = codex_data_home()
-        user_config = _load_source(
-            home / "config.toml", "~/.codex/config.toml", "user", "toml"
-        )
+        user_config = _load_source(home / "config.toml", "~/.codex/config.toml", "user", "toml")
         _source_once(sources, user_config)
         profile = _value_after(args, "--profile", "-p")
         if profile and re.fullmatch(r"[A-Za-z0-9_-]{1,80}", profile):
@@ -522,9 +556,7 @@ def _config_sources(backend: Backend, cwd: Path, args: list[str]) -> list[Config
                 _source_once(sources, source)
         _source_once(
             sources,
-            _load_source(
-                cwd / ".codex" / "config.toml", ".codex/config.toml", "project", "toml"
-            ),
+            _load_source(cwd / ".codex" / "config.toml", ".codex/config.toml", "project", "toml"),
         )
         codex_hook_sources: tuple[tuple[Path, str, Scope], ...] = (
             (home / "hooks.json", "~/.codex/hooks.json", "user"),
@@ -602,7 +634,7 @@ def _config_sources(backend: Backend, cwd: Path, args: list[str]) -> list[Config
                 ),
             )
     elif backend == "shell":
-        raise ValueError("shell sessions do not have agent configuration")
+        raise ValueError(ui_message("agent_environment.7ec686e38e"))
     else:
         assert_never(backend)
     return sources
@@ -750,7 +782,7 @@ def _plugin_inventory(
     elif backend == "pi" or backend == "opencode":
         pass
     elif backend == "shell":
-        raise ValueError("shell sessions do not have agent plugins")
+        raise ValueError(ui_message("agent_environment.be80fde30a"))
     else:
         assert_never(backend)
     return items, roots, material
@@ -1054,7 +1086,7 @@ def _mcp_entries_from_data(
         # its dist references no MCP config. There is no table to read.
         return []
     elif backend == "shell":
-        raise ValueError("shell sessions do not have agent MCP configuration")
+        raise ValueError(ui_message("agent_environment.07d28614f3"))
     else:
         assert_never(backend)
     direct = data.get(key)
@@ -1098,9 +1130,7 @@ def _mcp_entries_from_data(
                         scope=scope,
                         origin=origin,
                         state="configured" if enabled else "disabled",
-                        description=(
-                            "Configured passively; connection and tool health are not probed."
-                        ),
+                        description=(ui_message("agent_environment.ab643c2fc0")),
                         source=source,
                         meta=meta,
                     ),
@@ -1177,7 +1207,7 @@ def resolve_mcp_servers(
     """
     resolved = require_backend(backend)
     if not is_agent_harness(resolved):
-        raise ValueError("agent environment is available only for registered agent sessions")
+        raise ValueError(ui_message("agent_environment.7aae77db2b"))
     root = Path(cwd).resolve()
     sources = _config_sources(resolved, root, args)
     _, plugin_roots, _ = _plugin_inventory(resolved, root, sources)
@@ -1242,19 +1272,13 @@ def _agent_inventory(
     items: list[dict[str, Any]] = []
     if backend == "claude":
         items.extend(
-            _markdown_agents(
-                claude_data_home() / "agents", "user", "user agents", sources
-            )
+            _markdown_agents(claude_data_home() / "agents", "user", "user agents", sources)
         )
         items.extend(
-            _markdown_agents(
-                cwd / ".claude" / "agents", "project", "project agents", sources
-            )
+            _markdown_agents(cwd / ".claude" / "agents", "project", "project agents", sources)
         )
         for root, plugin_id, scope in plugin_roots:
-            items.extend(
-                _markdown_agents(root / "agents", scope, f"plugin: {plugin_id}", sources)
-            )
+            items.extend(_markdown_agents(root / "agents", scope, f"plugin: {plugin_id}", sources))
         for name, description in (
             ("general-purpose", "Built-in general-purpose subagent"),
             ("Explore", "Built-in codebase exploration subagent"),
@@ -1306,7 +1330,7 @@ def _agent_inventory(
     elif backend == "pi" or backend == "opencode":
         pass
     elif backend == "shell":
-        raise ValueError("shell sessions do not have agent definitions")
+        raise ValueError(ui_message("agent_environment.27210cae9b"))
     else:
         assert_never(backend)
     return items
@@ -1316,7 +1340,7 @@ def _tool_inventory(
     backend: Backend, sources: list[ConfigSource], args: list[str]
 ) -> list[dict[str, Any]]:
     if backend == "shell":
-        raise ValueError("shell sessions do not have agent tools")
+        raise ValueError(ui_message("agent_environment.c5a4e73460"))
     catalog = descriptor(backend).tool_catalog
     items = [
         _item(
@@ -1409,7 +1433,7 @@ def _policy_inventory(backend: Backend, sources: list[ConfigSource]) -> list[dic
     elif backend == "pi" or backend == "opencode":
         keys = ()
     elif backend == "shell":
-        raise ValueError("shell sessions do not have agent policy")
+        raise ValueError(ui_message("agent_environment.1094584053"))
     else:
         assert_never(backend)
     winners: dict[str, tuple[Any, ConfigSource]] = {}
@@ -1443,7 +1467,7 @@ def _feature_inventory(backend: Backend, sources: list[ConfigSource]) -> list[di
     if backend == "pi" or backend == "opencode":
         return []
     if backend == "shell":
-        raise ValueError("shell sessions do not have agent features")
+        raise ValueError(ui_message("agent_environment.bd0ba4f353"))
     if backend == "codex":
         pass
     else:
@@ -1554,8 +1578,7 @@ def _fingerprints(scan: _ConfigScan) -> dict[str, str]:
         if rows is not None:
             rows.append(extra)
     return {
-        source_id: _opaque("fp", "\n".join(sorted(rows)))
-        for source_id, rows in material.items()
+        source_id: _opaque("fp", "\n".join(sorted(rows))) for source_id, rows in material.items()
     }
 
 
@@ -1593,7 +1616,7 @@ def capture_config_baseline(*, backend: str, cwd: Path | str, args: list[str]) -
     """
     resolved = require_backend(backend)
     if not is_agent_harness(resolved):
-        raise ValueError("agent environment is available only for registered agent sessions")
+        raise ValueError(ui_message("agent_environment.7aae77db2b"))
     return _fingerprints(_scan_config(resolved, Path(cwd).resolve(), list(args)))
 
 
@@ -1672,7 +1695,7 @@ def discover_agent_environment(
     user-owned and do not churn.
     """
     if not is_agent_harness(backend):
-        raise ValueError("agent environment is available only for registered agent sessions")
+        raise ValueError(ui_message("agent_environment.7aae77db2b"))
     backend = require_backend(backend)
     root = Path(cwd).resolve()
     cache_key = (
@@ -1719,7 +1742,9 @@ def discover_agent_environment(
             {
                 "kind": "skills",
                 "source_id": None,
-                "message": f"{len(skill_inventory['errors'])} skill entries could not be read",
+                "message": ui_message(
+                    "agent_environment.aebca61a33", value1=len(skill_inventory["errors"])
+                ),
             }
         )
 

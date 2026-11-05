@@ -1,3 +1,4 @@
+import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { GrantGate } from './GrantGate'
@@ -47,7 +48,7 @@ export function UsageAgentsView({onConfigure}:{onConfigure:()=>void}) {
     readUsage().then(value=>{if(mounted.current)void follow(value)}).catch(cause=>{if(mounted.current)setError(String(cause))})
     return()=>{mounted.current=false}
   },[])
-  const sourceList=useMemo(()=>Object.values(usage?.cache?.sources||{}).filter((source):source is UsageSource=>!!source).sort((a,b)=>a.source_label.localeCompare(b.source_label)),[usage])
+  const sourceList=useMemo(()=>Object.values(usage?.cache?.sources||{}).filter((source):source is UsageSource=>!!source).sort((a,b)=>a.source_label.localeCompare(b.source_label)), [usage, uiLocale.value, catalogRevision.value])
   const visibleSources=sourceList.filter(source=>!hiddenSources.includes(source.source_id))
   const daily=usageWindow(visibleSources,Number(range))
   const dates=new Set(daily.map(row=>row.date!))
@@ -72,37 +73,37 @@ export function UsageAgentsView({onConfigure}:{onConfigure:()=>void}) {
     try{setUsage(await api<UsageStatus>('DELETE','/api/usage/cache'))}catch(cause){setError(String(cause))}
   }
   return <>
-    <AnalyticsNav label="Agent usage views" value={view} onChange={setView} items={[{id:'summary',label:'Summary'},{id:'trends',label:'Trends'},{id:'models',label:'Models'}]}/>
+    <AnalyticsNav label={t("UsageDashboardView.e0a4c655e0")} value={view} onChange={setView} items={[{id:'summary',get label() { return t("UsageDashboardView.8e76a94ac8") }},{id:'trends',get label() { return t("UsageDashboardView.e856c6c6a4") }},{id:'models',get label() { return t("UsageDashboardView.d17d2d78d7") }}]}/>
     <div class="analytics-toolbar">
-      <label>Range<select value={range} onChange={event=>setRange(event.currentTarget.value)}><option value="7">7 days</option><option value="30">30 days</option><option value="90">90 days</option><option value="0">All cached</option></select></label>
-      <details class="analytics-filter-menu"><summary>Sources ({visibleSources.length}/{sourceList.length})</summary><div>
-        <button onClick={()=>setHiddenSources([])}>Select all</button>
+      <label>{rich("UsageDashboardView.6287ca43ed", { value1: <select value={range} onChange={event=>setRange(event.currentTarget.value)}><option value="7">{t("UsageDashboardView.7f920bb639")}</option><option value="30">{t("UsageDashboardView.ffd7280513")}</option><option value="90">{t("UsageDashboardView.38825b0f64")}</option><option value="0">{t("UsageDashboardView.4410994e21")}</option></select> })}</label>
+      <details class="analytics-filter-menu"><summary>{rich("UsageDashboardView.7dea462dd5", { length: visibleSources.length, value2: sourceList.length })}</summary><div>
+        <button onClick={()=>setHiddenSources([])}>{t("UsageDashboardView.1fc9a38765")}</button>
         {sourceList.map(source=><label key={source.source_id}><input type="checkbox" checked={!hiddenSources.includes(source.source_id)} onChange={()=>setHiddenSources(current=>current.includes(source.source_id)?current.filter(id=>id!==source.source_id):[...current,source.source_id])}/>{source.source_label}</label>)}
       </div></details>
-      {view!=='summary'&&<label>Metric<select value={metric} onChange={event=>setMetric(event.currentTarget.value as typeof metric)}><option value="tokens">Tokens</option><option value="cost">Estimated cost</option></select></label>}
-      {view==='trends'&&<label>Interval<select value={resolution} onChange={event=>setResolution(event.currentTarget.value as typeof resolution)}><option value="daily">Daily</option><option value="monthly">Monthly</option></select></label>}
-      <button class="analytics-refresh" disabled={!usage?.enabled||busy} onClick={()=>void refresh('auto')}>{busy?'Refreshing…':'Refresh'}</button>
+      {view!=='summary' && <label>{rich("UsageDashboardView.965cfaa58b", { value1: <select value={metric} onChange={event=>setMetric(event.currentTarget.value as typeof metric)}><option value="tokens">{t("UsageDashboardView.a039dfb962")}</option><option value="cost">{t("UsageDashboardView.9ccba222f8")}</option></select> })}</label>}
+      {view==='trends' && <label>{rich("UsageDashboardView.bdfbbe633f", { value1: <select value={resolution} onChange={event=>setResolution(event.currentTarget.value as typeof resolution)}><option value="daily">{t("UsageDashboardView.b36c2611dc")}</option><option value="monthly">{t("UsageDashboardView.9b11f6b707")}</option></select> })}</label>}
+      <button class="analytics-refresh" disabled={!usage?.enabled||busy} onClick={()=>void refresh('auto')}>{busy ? t("UsageDashboardView.1c0def7be0") : t("UsageDashboardView.0e91610117")}</button>
     </div>
     <main class="analytics-content">
-      {activity&&<div class={`usage-progress ${busy?'running':''}`} role="status" aria-live="polite"><span>{busy?'◌':'·'}</span><strong>{activity}</strong></div>}
-      {error&&<div class="usage-error" role="alert">{error}</div>}
-      {usage?.collector.error&&<div class="usage-error" role="alert">{usage.collector.error} Cached results are preserved.</div>}
-      {!usage&&!error?<p>Loading agent usage…</p>:usage&&!usage.enabled?<GrantGate ids={['usage.ccusage']} heading="Agent usage collection is off" onGranted={async()=>setUsage(await api<UsageStatus>('GET','/api/usage'))}><p>Enable collection, then refresh to read local transcript totals.</p></GrantGate>:!sourceList.length?<p>No cached usage. Refresh to collect historical sources.</p>:!visibleSources.length?<p>Select at least one source.</p>:<>
-        <p class="analytics-caption">{daily.length?`${daily[daily.length-1].date} to ${daily[0].date}`:'No dated records'} · transcript totals · estimated cost</p>
-        {view==='summary'&&<>
-          <div class="analytics-headlines"><article><span>Tokens</span><strong><MetricValue value={totals.total_tokens}/></strong></article><article><span>Estimated cost</span><strong><MetricValue value={totals.cost_method==='unavailable'?null:totals.cost_usd} money/></strong></article></div>
-          <UsageDetails row={totals}/><UsageTrend rows={daily}/><UsageBreakdown title="By source" rows={sourceRows}/>
+      {activity && <div class={`usage-progress ${busy?'running':''}`} role="status" aria-live="polite"><span>{busy ? '◌' : '·'}</span><strong>{activity}</strong></div>}
+      {error && <div class="usage-error" role="alert">{error}</div>}
+      {usage?.collector.error && <div class="usage-error" role="alert">{rich("UsageDashboardView.acc9f66289", { error: usage.collector.error })}</div>}
+      {!usage&&!error ? <p>{t("UsageDashboardView.80003db053")}</p> : usage&&!usage.enabled ? <GrantGate ids={['usage.ccusage']} heading={t("UsageDashboardView.c4ea661e29")} onGranted={async()=>setUsage(await api<UsageStatus>('GET','/api/usage'))}><p>{t("UsageDashboardView.b0eee02beb")}</p></GrantGate> : !sourceList.length ? <p>{t("UsageDashboardView.9663469dea")}</p> : !visibleSources.length ? <p>{t("UsageDashboardView.507aad6df1")}</p> : <>
+        <p class="analytics-caption">{rich("UsageDashboardView.7070e8490d", { value1: daily.length ? t("UsageDashboardView.f942c5e30c", { date: daily[daily.length-1].date, value2: daily[0].date }) : t("UsageDashboardView.cbe5243f42") })}</p>
+        {view==='summary' && <>
+          <div class="analytics-headlines"><article><span>{t("UsageDashboardView.a039dfb962")}</span><strong><MetricValue value={totals.total_tokens}/></strong></article><article><span>{t("UsageDashboardView.9ccba222f8")}</span><strong><MetricValue value={totals.cost_method==='unavailable'?null:totals.cost_usd} money/></strong></article></div>
+          <UsageDetails row={totals}/><UsageTrend rows={daily}/><UsageBreakdown title={t("UsageDashboardView.9504fd56c1")} rows={sourceRows}/>
         </>}
-        {view==='trends'&&<><UsageTrend rows={periods} metric={metric}/><UsageBreakdown title="Period details" rows={periods.map(row=>({id:row.date!,label:row.date!,row}))}/></>}
-        {view==='models'&&<UsageModelBreakdown sources={visibleSources} visibleDates={dates} resolution={resolution} metric={metric}/>}
+        {view==='trends' && <><UsageTrend rows={periods} metric={metric}/><UsageBreakdown title={t("UsageDashboardView.1a00666222")} rows={periods.map(row=>({id:row.date!,label:row.date!,row}))}/></>}
+        {view==='models' && <UsageModelBreakdown sources={visibleSources} visibleDates={dates} resolution={resolution} metric={metric}/>}
       </>}
-      <details class="analytics-diagnostics"><summary>Source and collection details{usage?.cache?.updated_at?` · updated ${new Date(usage.cache.updated_at*1000).toLocaleString()}`:''}</summary>
-        <p>ccusage reads local transcripts across sources. Historical totals cannot be attributed to saved accounts. Estimated token cost is not a subscription bill.</p>
-        <p>A refresh re-reads only the days since the last one and runs at background priority, so it yields to everything else on this machine. Rebuild re-reads every transcript, which can take a long time on a large history.</p>
-        <p>{usage?.collector.status||'Loading'}{usage?.collector.ccusage_version?` · ccusage ${usage.collector.ccusage_version}`:''}</p>
-        {lastRun&&<p class="analytics-muted">{lastRun}</p>}
-        {!!usage?.collector.advisories?.length&&<ul class="usage-advisories">{usage.collector.advisories.map(note=><li key={note}>{note}</li>)}</ul>}
-        <div class="analytics-actions"><button onClick={onConfigure}>Collection settings</button><button disabled={!usage?.enabled||busy} onClick={rebuild}>{confirmRebuild?'Confirm rebuild history':'Rebuild history'}</button>{confirmRebuild&&<button onClick={()=>setConfirmRebuild(false)}>Cancel rebuild</button>}<button disabled={busy} onClick={()=>void clear()}>{confirmClear?'Confirm clear cache':'Clear cache'}</button>{confirmClear&&<button onClick={()=>setConfirmClear(false)}>Cancel</button>}</div>
+      <details class="analytics-diagnostics"><summary>{rich("UsageDashboardView.2aef7fb94b", { value1: usage?.cache?.updated_at ? t("UsageDashboardView.1381120916", { value1: new Date(usage.cache.updated_at*1000).toLocaleString(uiLocale.value) }) : '' })}</summary>
+        <p>{t("UsageDashboardView.940bf60fd2")}</p>
+        <p>{t("UsageDashboardView.e723264605")}</p>
+        <p>{usage?.collector.status || t("UsageDashboardView.dc380888c4")}{usage?.collector.ccusage_version ? t("UsageDashboardView.ce22511b38", { ccusage_version: usage.collector.ccusage_version }) : ''}</p>
+        {lastRun && <p class="analytics-muted">{lastRun}</p>}
+        {!!usage?.collector.advisories?.length && <ul class="usage-advisories">{usage.collector.advisories.map(note=><li key={note}>{note}</li>)}</ul>}
+        <div class="analytics-actions"><button onClick={onConfigure}>{t("UsageDashboardView.8f21abd48a")}</button><button disabled={!usage?.enabled||busy} onClick={rebuild}>{confirmRebuild ? t("UsageDashboardView.b19931e61c") : t("UsageDashboardView.47f819abaa")}</button>{confirmRebuild && <button onClick={()=>setConfirmRebuild(false)}>{t("UsageDashboardView.2dd5b9cfa7")}</button>}<button disabled={busy} onClick={()=>void clear()}>{confirmClear ? t("UsageDashboardView.8f0cf24220") : t("UsageDashboardView.d33461e6c0")}</button>{confirmClear && <button onClick={()=>setConfirmClear(false)}>{t("UsageDashboardView.19766ed6cc")}</button>}</div>
       </details>
     </main>
   </>

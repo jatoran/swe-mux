@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from .settings_patch import apply_operations
+from .ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -76,6 +77,8 @@ def domain_digest(document: Any) -> str:
     """
     encoded = json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
 NOTIFICATION_EVENTS: tuple[str, ...] = ("complete", "waiting", "attention", "failure", "reset")
 #: Which presence silences a profile's push. See ``default_notifications``.
 SUPPRESS_MODES: tuple[str, ...] = ("never", "focused", "anyDevice")
@@ -241,19 +244,21 @@ class SettingsStore:
 
     def update(self, profile: str, patch: Any) -> dict[str, Any]:
         if profile not in PROFILES:
-            raise ValueError("profile must be desktop or mobile")
+            raise ValueError(ui_message("settings_store.0c519d8970"))
         if not isinstance(patch, dict):
-            raise ValueError("settings body must be an object")
+            raise ValueError(ui_message("settings_store.5fed4e65c1"))
         unknown = set(patch) - set(DOMAINS)
         if unknown:
-            raise ValueError(f"unknown settings domain: {', '.join(sorted(unknown))}")
+            raise ValueError(
+                ui_message("settings_store.4c2c996599", value1=", ".join(sorted(unknown)))
+            )
         profiles = self._profiles()
         current = dict(profiles[profile])
         for domain, value in patch.items():
             if not isinstance(value, dict):
-                raise ValueError(f"{domain} settings must be an object")
+                raise ValueError(ui_message("settings_store.a2a0ffea77", value1=domain))
             if len(json.dumps(value).encode("utf-8")) > _MAX_DOMAIN_BYTES:
-                raise ValueError(f"{domain} settings exceed the size limit")
+                raise ValueError(ui_message("settings_store.fd1905d147", value1=domain))
             current[domain] = value
         profiles[profile] = current
         _atomic_write(
@@ -284,9 +289,9 @@ class SettingsStore:
         would be a lock invented to protect nothing.
         """
         if profile not in PROFILES:
-            raise ValueError("profile must be desktop or mobile")
+            raise ValueError(ui_message("settings_store.0c519d8970"))
         if name not in DOMAINS:
-            raise ValueError(f"unknown settings domain: {name}")
+            raise ValueError(ui_message("settings_store.4c2c996599", value1=name))
         document = self._profiles()[profile].get(name)
         document = document if isinstance(document, dict) else {}
         return {
@@ -321,9 +326,11 @@ class SettingsStore:
         current = self.domain(profile, name)
         if expected_digest and expected_digest != current["digest"]:
             raise ValueError(
-                "these settings changed since you read them "
-                f"(you have {expected_digest[:12]}, they are now {current['digest'][:12]}); "
-                "read them again before editing"
+                ui_message(
+                    "settings_store.12fa064c7f",
+                    value1=expected_digest[:12],
+                    value2=current["digest"][:12],
+                )
             )
         document, notes = apply_operations(current["document"], operations)
         self._backup()

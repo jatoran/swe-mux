@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 /**
  * The in-app help surface: which topics exist, where each is reached from, and where the
  * text of each one comes from.
@@ -63,71 +64,71 @@ export const DOCS_BASE = 'https://swemux.dev/docs/'
 export const HELP_TOPICS: HelpTopic[] = [
   {
     id: 'scan-timeline',
-    title: 'Scan timeline',
-    blurb: 'A readable history of what a run actually did, built from its transcript. It costs money, so three separate switches have to be on before anything is scanned - which is why an empty Timeline is usually a switch rather than a quiet session.',
+    get title() { return t("helpTopics.446eb6eb25") },
+    get blurb() { return t("helpTopics.6f76fd98b8") },
     anchor: { tab: 'activity', segment: 'timeline' },
     docs: 'control-plane',
   },
   {
     id: 'prompt-queue',
-    title: 'Prompt queue',
-    blurb: 'Messages staged for one agent and delivered one at a time, surviving a daemon or browser restart without sending anything twice.',
+    get title() { return t("helpTopics.ac87afaf2f") },
+    get blurb() { return t("helpTopics.9bfb14a712") },
     anchor: { tab: 'queue' },
     docs: 'queue',
   },
   {
     id: 'git',
-    title: 'Git and worktrees',
-    blurb: 'What each session’s working directory looks like to Git, one row per worktree, and which session produced each commit.',
+    get title() { return t("helpTopics.71b6da4552") },
+    get blurb() { return t("helpTopics.9770bbb9f9") },
     anchor: { tab: 'git' },
     docs: 'git',
   },
   {
     id: 'scheduled-runs',
-    title: 'Scheduled runs',
-    blurb: 'A session this Project starts on its own at a time you chose, through exactly the same launch path a button press uses.',
+    get title() { return t("helpTopics.19110a1000") },
+    get blurb() { return t("helpTopics.442fe00454") },
     anchor: { tab: 'schedule' },
     docs: 'automation',
   },
   {
     id: 'attention-ranking',
-    title: 'Alerts and attention',
-    blurb: 'What decides which of many running sessions is worth interrupting you for, and holds back the rest.',
+    get title() { return t("helpTopics.8e3d843367") },
+    get blurb() { return t("helpTopics.69aa826255") },
     anchor: { tab: 'notifications' },
     docs: 'automation',
   },
   {
     id: 'agent-environment',
-    title: 'Agent environment',
-    blurb: 'What this session’s CLI is running with - its configuration, its tools, and the instruction files it reads. Opening the tab probes nothing; every reading says which evidence produced it.',
+    get title() { return t("helpTopics.1774cca7f6") },
+    get blurb() { return t("helpTopics.86542b3f92") },
     anchor: { tab: 'agent' },
     docs: 'sessions',
   },
   {
     id: 'processes-and-previews',
-    title: 'Processes and previews',
-    blurb: 'What a session actually started, what is still listening, and how a local development server is opened as a pane.',
+    get title() { return t("helpTopics.9002e23562") },
+    get blurb() { return t("helpTopics.eeebad8445") },
     anchor: { tab: 'processes' },
     docs: 'notes-files',
   },
   {
     id: 'project-resources',
-    title: 'Files and notes',
-    blurb: 'The Project’s own tree and its working documents - browse or search here, open what you find as a tab in this panel, and move it into a pane beside the terminal when you want the width.',
+    get title() { return t("helpTopics.471fff1131") },
+    get blurb() { return t("helpTopics.0c11a7d783") },
     anchor: { tab: 'files' },
     docs: 'notes-files',
   },
   {
     id: 'transcript-branches',
-    title: 'Transcript',
-    blurb: 'This conversation as the agent recorded it. A retry or a rewind leaves the branch it abandoned behind, and the reader marks those rather than hiding them.',
+    get title() { return t("helpTopics.721164f0dc") },
+    get blurb() { return t("helpTopics.4488883b2e") },
     anchor: { tab: 'transcript' },
     docs: 'history',
   },
   {
     id: 'project-actions',
-    title: 'Run menu and Project tasks',
-    blurb: 'The one launcher for an agent, a shell, a worktree session, or a task this repository declares. A repository-provided command is approved by exact content before it runs.',
+    get title() { return t("helpTopics.7590a4b8ee") },
+    get blurb() { return t("helpTopics.d6c053584c") },
     anchor: { tab: 'actions' },
     docs: 'sessions',
   },
@@ -135,8 +136,8 @@ export const HELP_TOPICS: HelpTopic[] = [
     // No `anchor`: the keyboard is not a drawer tab, and this is the one topic
     // somebody looks for before they know where anything is.
     id: 'keybindings',
-    title: 'Keyboard shortcuts',
-    blurb: 'Every command behind one leader key, a preset for whichever tool you already know, and an honest answer about which chords your browser will actually give the app.',
+    get title() { return t("heading.e9bef0b0f3") },
+    get blurb() { return t("helpTopics.e5e0806895") },
     docs: 'keyboard',
   },
 ]

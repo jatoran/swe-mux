@@ -16,6 +16,7 @@ from .harness import (
     resolve_launch_model,
     strip_model_args,
 )
+from .ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -244,7 +245,7 @@ def resolve_contained_cwd(value: str, root: Path) -> str:
     try:
         target.relative_to(root.resolve(strict=False))
     except ValueError as exc:
-        raise ValueError("cwd must stay inside the Project root") from exc
+        raise ValueError(ui_message("spawn_contract.c20d54d7ce")) from exc
     return str(target)
 
 
@@ -253,16 +254,16 @@ def parse_spawn_env(value: Any) -> dict[str, str]:
     if value is None:
         return {}
     if not isinstance(value, dict) or len(value) > MAX_SPAWN_ENV:
-        raise ValueError(f"env must be an object with at most {MAX_SPAWN_ENV} entries")
+        raise ValueError(ui_message("spawn_contract.8b5b846eee", value1=MAX_SPAWN_ENV))
     result: dict[str, str] = {}
     for key, item in value.items():
         if not isinstance(key, str) or not key or "=" in key or "\0" in key:
-            raise ValueError("env names must be non-empty strings without '=' or NUL")
+            raise ValueError(ui_message("spawn_contract.d3efe8bbe9"))
         if not isinstance(item, (str, int, float, bool)):
-            raise ValueError("env values must be strings or scalar values")
+            raise ValueError(ui_message("spawn_contract.948f6235ed"))
         text = str(item)
         if "\0" in text:
-            raise ValueError("env values cannot contain NUL")
+            raise ValueError(ui_message("spawn_contract.c84845d7d6"))
         result[key] = text
     return result
 

@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { createPortal } from 'preact/compat'
 import { useCallback, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import {
@@ -333,7 +334,7 @@ export function Dropdown({
         {option.detail && <span class="dropdown-option-detail">{option.detail}</span>}
         <span class="dropdown-option-check" aria-hidden="true">{index === selectedIndex ? '✓' : ''}</span>
     </div>)}
-    {!rows.length && <div class="dropdown-empty">{query.trim() ? 'No matches' : 'No options'}</div>}
+    {!rows.length && <div class="dropdown-empty">{query.trim() ? t("Dropdown.2df01a03ff") : t("Dropdown.d7a8974566")}</div>}
   </>
 
   // Two shapes, because an `<input>` is not a legal child of `role="listbox"`. Without a
@@ -353,8 +354,8 @@ export function Dropdown({
             type="text"
             role="combobox"
             value={query}
-            placeholder={filterPlaceholder || 'Type to filter…'}
-            aria-label={`Filter ${listLabel || ariaLabel || 'options'}`}
+            placeholder={filterPlaceholder || t("Dropdown.098156b3c9")}
+            aria-label={t("Dropdown.046b24e9c2", { value1: listLabel || ariaLabel || 'options' })}
             aria-autocomplete="list"
             aria-expanded
             aria-controls={listId}

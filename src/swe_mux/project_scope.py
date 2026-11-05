@@ -17,6 +17,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from .ui_messages import ui_message
+
 #: Reserved `project` values. A Project genuinely named "fleet" or "self" is
 #: still reachable by its id, which is what the refusal text points at.
 FLEET = "fleet"
@@ -91,14 +93,18 @@ def own_scope(record: Any) -> ProjectScope:
         fleet=False,
         project_id=project_id,
         scope_id=scope_id,
-        label="your Project",
+        label=ui_message("project_scope.1fbab084de"),
         requested=OWN,
     )
 
 
 def fleet_scope() -> ProjectScope:
     return ProjectScope(
-        fleet=True, project_id="", scope_id="", label="every Project", requested=FLEET
+        fleet=True,
+        project_id="",
+        scope_id="",
+        label=ui_message("project_scope.85f58e630e"),
+        requested=FLEET,
     )
 
 
@@ -135,11 +141,7 @@ def _find_project(text: str, projects: Any) -> Any:
     if exact is not None:
         return exact
     folded = text.casefold()
-    matches = [
-        project
-        for project in known.values()
-        if str(project.name).casefold() == folded
-    ]
+    matches = [project for project in known.values() if str(project.name).casefold() == folded]
     if len(matches) == 1:
         return matches[0]
     if matches:

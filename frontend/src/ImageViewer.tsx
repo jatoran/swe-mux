@@ -1,3 +1,4 @@
+import { catalogRevision, t, locale as uiLocale } from './localization/index.ts'
 import { useEffect, useMemo, useState } from 'preact/hooks'
 
 type Props = {
@@ -26,7 +27,7 @@ export function ImageViewer({ projectId, path, revision, mime, width, height, fr
     const params = new URLSearchParams({ path, revision })
     if (worktree) params.set('worktree', worktree)
     return `/api/projects/${encodeURIComponent(projectId)}/file/content?${params}`
-  }, [projectId, path, revision, worktree])
+  }, [projectId, path, revision, worktree, uiLocale.value, catalogRevision.value])
 
   useEffect(() => {
     setFailed(false)
@@ -36,17 +37,15 @@ export function ImageViewer({ projectId, path, revision, mime, width, height, fr
 
   return <div class="image-viewer">
     <div class="image-toolbar">
-      <span>{mime} · {width.toLocaleString()} × {height.toLocaleString()} · {fileSize(size)}{frames > 1 ? ` · ${frames.toLocaleString()} frames` : ''}</span>
+      <span>{mime} · {width.toLocaleString(uiLocale.value)} × {height.toLocaleString(uiLocale.value)} · {fileSize(size)}{frames > 1 ? t("ImageViewer.16d00ad334", { value1: frames.toLocaleString(uiLocale.value) }) : ''}</span>
       <div>
-        <button class={fit ? 'active' : ''} onClick={() => setFit(true)}>Fit</button>
+        <button class={fit ? 'active' : ''} onClick={() => setFit(true)}>{t("ImageViewer.9f872ed43d")}</button>
         <button class={!fit && zoom === 1 ? 'active' : ''} onClick={() => { setFit(false); setZoom(1) }}>100%</button>
-        <button disabled={fit || zoom <= .25} aria-label="Zoom out" onClick={() => setZoom(value => Math.max(.25, value - .25))}>−</button>
-        <button disabled={fit || zoom >= 4} aria-label="Zoom in" onClick={() => setZoom(value => Math.min(4, value + .25))}>+</button>
+        <button disabled={fit || zoom <= .25} aria-label={t("ImageViewer.bc7b631a68")} onClick={() => setZoom(value => Math.max(.25, value - .25))}>−</button>
+        <button disabled={fit || zoom >= 4} aria-label={t("ImageViewer.0e47f09a74")} onClick={() => setZoom(value => Math.min(4, value + .25))}>+</button>
       </div>
     </div>
-    {failed
-      ? <div class="resource-unavailable">The image changed or could not be decoded. Retry the file tab after it refreshes.</div>
-      : <div class={`image-stage ${fit ? 'fit' : 'actual'}`}>
+    {failed ? <div class="resource-unavailable">{t("ImageViewer.c5a75d1cbd")}</div> : <div class={`image-stage ${fit ? 'fit' : 'actual'}`}>
           <img
             src={source}
             alt={path.split('/').pop() || path}

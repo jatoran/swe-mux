@@ -8,6 +8,7 @@
 //
 // The panel's open state is owned here exactly as `App` owns it, so the harness exercises
 // the same prop contract the shell does rather than a private one.
+import { installTestChinese } from './localizationFixture'
 import { render } from 'preact'
 import { useState } from 'preact/hooks'
 import { Settings, harvestedSettingsSearch } from '../../src/Settings'
@@ -158,6 +159,10 @@ const EDGE_PROVIDER = {
     requirement:'edge-tts==7.2.8',uv_available:true,installed_at:null,updated_at:null},
 }
 
+if(new URLSearchParams(location.search).has('localization')){
+  installTestChinese()
+  BUNDLE.config.ui_language = sessionStorage.getItem('localization-harness-language') || ''
+}
 const RESPONSES: Record<string, unknown> = {
   '/api/settings/bundle': BUNDLE,
   '/api/projects': [
@@ -303,6 +308,14 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if(profile&&init?.method==='PUT'){
     deviceSettings[profile]={...deviceSettings[profile],...requestBody as Record<string,unknown>}
     sessionStorage.setItem('settings-harness-profiles',JSON.stringify(deviceSettings))
+  }
+  if(path==='/api/config' && init?.method==='PATCH' && requestBody && typeof requestBody==='object' && 'ui_language' in requestBody){
+    if(new URLSearchParams(location.search).get('fail')==='language')return new Response('{}',{status:503})
+    const language=String(requestBody.ui_language)
+    BUNDLE.config.ui_language=language
+    BUNDLE.config.revision++
+    sessionStorage.setItem('localization-harness-language',language)
+    return new Response(JSON.stringify(BUNDLE.config),{status:200,headers:{'Content-Type':'application/json'}})
   }
   const body = path==='/api/settings'?{profiles:deviceSettings}:path in RESPONSES ? RESPONSES[path] : {}
   return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })

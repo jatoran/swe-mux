@@ -1,3 +1,4 @@
+import { rich, t } from './localization/index.ts'
 /**
  * The one control every spending cap is edited with.
  *
@@ -25,15 +26,15 @@ import type { Budget, BudgetMode } from './types'
 
 /** Every mode, with the sentence that says what it does rather than its name. */
 const MODES: { value: BudgetMode; label: string; hint: string }[] = [
-  { value: 'either', label: 'First hit', hint: 'Both limits apply; whichever is reached first stops it.' },
-  { value: 'tokens', label: 'Tokens', hint: 'Only the token limit applies.' },
-  { value: 'usd', label: 'Dollars', hint: 'Only the dollar limit applies.' },
+  { value: 'either', get label() { return t("BudgetControl.9780905021") }, get hint() { return t("BudgetControl.432f375253") } },
+  { value: 'tokens', get label() { return t("BudgetControl.a039dfb962") }, get hint() { return t("BudgetControl.ad109a1e6b") } },
+  { value: 'usd', get label() { return t("BudgetControl.4227cb0785") }, get hint() { return t("BudgetControl.70b00e6a1c") } },
 ]
 
-export const COST_BLIND_WARNING =
-  'This provider does not report what a completion costs, so a dollar limit ' +
-  'cannot bind here - unreported cost is unknown, never zero. Use tokens, or ' +
-  'first hit, so the token limit is the backstop.'
+export const costBlindWarning =
+  () => (t("BudgetControl.babe975122") +
+  t("BudgetControl.9e10454d5a") +
+  t("BudgetControl.d70a2697d7"))
 
 type Props = {
   /** Config key. Also the `data-setting` mark a deep link scrolls to. */
@@ -90,7 +91,7 @@ export function BudgetControl({
     <fieldset class="budget-control" data-setting={name}>
       <legend>{label}</legend>
       {hint && <p class="budget-hint">{hint}</p>}
-      <div class="budget-modes" role="radiogroup" aria-label={`${label} — what is limited`}>
+      <div class="budget-modes" role="radiogroup" aria-label={t("BudgetControl.76b8d1d3ed", { label: label })}>
         {MODES.map(option => (
           <label key={option.value} class="budget-mode" title={option.hint}>
             <input
@@ -106,41 +107,26 @@ export function BudgetControl({
       </div>
       <p class="budget-mode-hint">{MODES.find(item => item.value === mode)?.hint}</p>
       <div class="budget-axes">
-        <label class={tokensOn ? 'budget-axis' : 'budget-axis budget-axis-off'}>
-          Tokens
-          <input
+        <label class={tokensOn ? 'budget-axis' : 'budget-axis budget-axis-off'}>{rich("BudgetControl.5761a50cfd", { value1: <input
             type="number"
             min={minTokens}
             max={maxTokens}
             value={value.tokens ?? ''}
-            aria-label={`${label} token limit`}
+            aria-label={t("BudgetControl.2d1be05d7f", { label: label })}
             onInput={event => setTokens(event.currentTarget.value)}
-          />
-          {!tokensOn && <small>Not enforced in this mode. Kept so switching back does not lose it.</small>}
-        </label>
-        <label class={usdOn ? 'budget-axis' : 'budget-axis budget-axis-off'}>
-          Dollars
-          <input
+          />, value2: !tokensOn && <small>{t("BudgetControl.a2916ea458")}</small> })}</label>
+        <label class={usdOn ? 'budget-axis' : 'budget-axis budget-axis-off'}>{rich("BudgetControl.dc2d9347ac", { value1: <input
             type="number"
             min="0"
             max={maxUsd}
             step={usdStep}
             value={value.usd ?? ''}
-            aria-label={`${label} dollar limit`}
+            aria-label={t("BudgetControl.e9320701a9", { label: label })}
             onInput={event => setUsd(event.currentTarget.value)}
-          />
-          {!usdOn && <small>Not enforced in this mode. Kept so switching back does not lose it.</small>}
-        </label>
+          />, value2: !usdOn && <small>{t("BudgetControl.a2916ea458")}</small> })}</label>
       </div>
-      {usdOn && reportsCost === false && (
-        <p class="settings-warning budget-warning">{COST_BLIND_WARNING}</p>
-      )}
-      {usdOn && unpricedCalls > 0 && (
-        <p class="budget-warning">
-          {unpricedCalls} {unpricedCalls === 1 ? 'call' : 'calls'} in this window reported no cost,
-          so the dollar total is a floor rather than the whole bill.
-        </p>
-      )}
+      {usdOn && reportsCost === false && (<p class="settings-warning budget-warning">{costBlindWarning()}</p>)}
+      {usdOn && unpricedCalls > 0 && (<p class="budget-warning">{rich("BudgetControl.6b6ec0bfe3", { unpricedCalls: unpricedCalls, value2: (unpricedCalls === 1) ? 'yes' : 'no' })}</p>)}
     </fieldset>
   )
 }

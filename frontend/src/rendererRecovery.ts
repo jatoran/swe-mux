@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // Safe mode after the desktop page crashed or hung (`swe_mux/desktop_renderer.py`).
 //
 // The desktop shell reloads a crashed or hung page at `/?mux_recovered=<reason>`. The
@@ -16,14 +17,14 @@ export const RECOVERY_PARAM = 'mux_recovered'
 export type RecoveryNotice = { reason: string; message: string }
 
 const REASONS: Record<string, string> = {
-  renderer_hung: 'The swe-mux page stopped responding and was reloaded.',
-  renderer_unresponsive: 'The swe-mux page stopped responding and was reloaded.',
-  renderer_exited: 'The swe-mux page crashed and was reloaded.',
-  operator_reload: 'The swe-mux window was reloaded from the tray.',
+  get renderer_hung() { return t("rendererRecovery.c3821df4c2") },
+  get renderer_unresponsive() { return t("rendererRecovery.c3821df4c2") },
+  get renderer_exited() { return t("rendererRecovery.2a65b075e4") },
+  get operator_reload() { return t("rendererRecovery.20792917da") },
 }
 
 export function recoveryMessage(reason: string): string {
-  return REASONS[reason] ?? 'swe-mux was opened in safe mode.'
+  return REASONS[reason] ?? t("rendererRecovery.9a7f4c28ee")
 }
 
 /** Only `[a-z_]` survives, so the value is never rendered as anything but a word. */

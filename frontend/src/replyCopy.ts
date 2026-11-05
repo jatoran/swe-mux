@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 export type ReplyIdentity = {
   id: string
   native_session_id: string
@@ -47,10 +48,10 @@ export class ReplyCopyRequest {
     }
     if (generation !== this.generation || identity !== this.identity) return null
     if (replyIdentity({...snapshot, id: snapshot.session_id}) !== identity) {
-      throw new Error('The conversation changed. Try Copy again.')
+      throw new Error(t("replyCopy.51994e2c8b"))
     }
     if (!snapshot.text || !snapshot.message_id || !snapshot.revision) {
-      throw new Error('No completed assistant answer is available yet.')
+      throw new Error(t("replyCopy.dcee5d5c55"))
     }
     return snapshot
   }

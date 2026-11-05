@@ -73,6 +73,7 @@ from ..history import (
     HistoryIndex,
     canonical_worktree_root,
 )
+from ..ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -516,14 +517,10 @@ def _scan_transcript(owner: HistoryOwner) -> list[CommitCall]:
                         observed_at,
                         owner.cwd,
                     )
-                if event.get("type") != "message" or not isinstance(
-                    event.get("message"), dict
-                ):
+                if event.get("type") != "message" or not isinstance(event.get("message"), dict):
                     continue
                 message = event["message"]
-                if message.get("role") == "assistant" and isinstance(
-                    message.get("content"), list
-                ):
+                if message.get("role") == "assistant" and isinstance(message.get("content"), list):
                     for block in message["content"]:
                         if isinstance(block, dict) and block.get("type") == "toolCall":
                             add_use(
@@ -575,7 +572,7 @@ def _git(root: Path, *args: str, timeout: float = 30) -> subprocess.CompletedPro
 def _commit_catalog(root: Path) -> dict[str, CommitObject]:
     result = _git(root, "log", "--all", "--reflog", "--format=%H%x00%ct%x00%P%x00%s")
     if result.returncode:
-        raise RuntimeError("unable to read the Project Git object catalog")
+        raise RuntimeError(ui_message("git_provenance_backfill.e770f108c7"))
     commits: dict[str, CommitObject] = {}
 
     def add(line: str) -> None:
@@ -681,9 +678,7 @@ def _commit_changes(root: Path, oid: str, *, merge: bool = False) -> tuple[GitCo
     )
     if result.returncode:
         return ()
-    return (
-        parse_combined_changes(result.stdout) if merge else parse_raw_changes(result.stdout)
-    )
+    return parse_combined_changes(result.stdout) if merge else parse_raw_changes(result.stdout)
 
 
 def _is_ancestor(catalog: dict[str, CommitObject], ancestor: str, commit: str) -> bool:
@@ -930,9 +925,11 @@ def _plan_repairs(
             # This pass withdrew the row and now reads the same move differently.
             restorations.append(str(row["id"]))
             stats["repair_restored"] += 1
-        if withdrawn or row.get("ambiguous") or str(
-            row.get("match_method") or ""
-        ) != f"monitor_{move.kind}":
+        if (
+            withdrawn
+            or row.get("ambiguous")
+            or str(row.get("match_method") or "") != f"monitor_{move.kind}"
+        ):
             promotions.append(
                 {
                     "session_id": session_id,
@@ -1039,9 +1036,7 @@ def _reattribute_committers(
                 "parent_oids": commit.parents,
                 "subject": commit.subject,
                 "committed_at": commit.committed_at,
-                "previous_head": previous_head or (
-                    commit.parents[0] if commit.parents else None
-                ),
+                "previous_head": previous_head or (commit.parents[0] if commit.parents else None),
                 "relationship": relationship,
                 "confidence": "exact",
                 "ambiguous": False,
@@ -1129,9 +1124,7 @@ def _plan_branch_authors(
             continue
         confidence = str(row.get("confidence") or "correlated")
         entry = authors[oid].get(session_id)
-        if entry is not None and rank.get(confidence, 0) <= rank.get(
-            str(entry["confidence"]), 0
-        ):
+        if entry is not None and rank.get(confidence, 0) <= rank.get(str(entry["confidence"]), 0):
             continue
         authors[oid][session_id] = {
             "session_name": str(row.get("session_name") or ""),
@@ -1246,8 +1239,7 @@ def _plan_contributors(
             if budget <= 0 or not candidate.blob:
                 continue
             if not any(
-                fact.get("content_hash")
-                for fact in (*candidate.positional, *candidate.confirmable)
+                fact.get("content_hash") for fact in (*candidate.positional, *candidate.confirmable)
             ):
                 continue
             digests[candidate.path] = _blob_digest(root, candidate.blob)
@@ -1325,9 +1317,7 @@ def _plan(inputs: ProjectInputs) -> PlanResult:
         direct: set[str] = set()
         for prefix in _HASH.findall(output):
             matches = [oid for oid in catalog if oid.startswith(prefix.casefold())]
-            if len(matches) == 1 and near(
-                matches[0], call.observed_at, _DIRECT_TOLERANCE_SECONDS
-            ):
+            if len(matches) == 1 and near(matches[0], call.observed_at, _DIRECT_TOLERANCE_SECONDS):
                 direct.add(matches[0])
         subject = _message_subject(call.command)
         subject_matches = {
@@ -1397,9 +1387,9 @@ def _plan(inputs: ProjectInputs) -> PlanResult:
     records: list[dict[str, Any]] = []
     for item in deduped.values():
         ambiguous = item.ambiguous
-        relationship = "rewrote" if re.search(
-            r"(?:^|\s)--amend(?:\s|$)", item.call.command
-        ) else "created"
+        relationship = (
+            "rewrote" if re.search(r"(?:^|\s)--amend(?:\s|$)", item.call.command) else "created"
+        )
         # The same split the live path makes, on the same fact: a commit with two
         # parents was merged rather than written. An import that called it
         # `committer` would re-introduce, from history, exactly the claim the live
@@ -1461,9 +1451,7 @@ def _plan(inputs: ProjectInputs) -> PlanResult:
             continue
         known[oid] = (str(row.get("worktree_root") or project["root"]), known_commit)
     ordered = sorted(known.values(), key=lambda item: item[1].committed_at, reverse=True)
-    contributor_records, contributor_stats = _plan_contributors(
-        project, inputs, ordered, catalog
-    )
+    contributor_records, contributor_stats = _plan_contributors(project, inputs, ordered, catalog)
     records.extend(contributor_records)
     stats.update(contributor_stats)
 
@@ -1514,9 +1502,7 @@ def _plan(inputs: ProjectInputs) -> PlanResult:
         "committer_records": sum(record["role"] == ROLE_COMMITTER for record in records),
         "integrator_records": sum(record["role"] == ROLE_INTEGRATOR for record in records),
         "contributor_records": sum(record["role"] == ROLE_CONTRIBUTOR for record in records),
-        "branch_author_records": sum(
-            record["role"] == ROLE_BRANCH_AUTHOR for record in records
-        ),
+        "branch_author_records": sum(record["role"] == ROLE_BRANCH_AUTHOR for record in records),
         "ref_moves_planned": len(moves),
         "retractions_planned": len(retractions),
         "restorations_planned": len(restorations),
@@ -1556,9 +1542,7 @@ async def _backfill_project(
         try:
             # Restore before writing, so a reconsidered row is standing when its
             # promotion lands and the upsert has nothing to argue with.
-            report["restorations_written"] = await history.restore_git_provenance(
-                plan.restorations
-            )
+            report["restorations_written"] = await history.restore_git_provenance(plan.restorations)
             for start in range(0, len(records), 1000):
                 report["records_written"] += await history.record_git_provenance_batch(
                     records[start : start + 1000]
@@ -1618,9 +1602,7 @@ async def backfill_git_provenance(
     started = time.monotonic()
     since = time.time() - max(1, since_days) * 86400
     projects = await asyncio.to_thread(_read_inputs, database, project_selector, since=since)
-    reports = [
-        await _backfill_project(database, inputs, apply=apply) for inputs in projects
-    ]
+    reports = [await _backfill_project(database, inputs, apply=apply) for inputs in projects]
     if len(reports) == 1:
         report = dict(reports[0])
     else:
@@ -1631,9 +1613,7 @@ async def backfill_git_provenance(
             "committer_records": sum(item["committer_records"] for item in reports),
             "integrator_records": sum(item["integrator_records"] for item in reports),
             "contributor_records": sum(item["contributor_records"] for item in reports),
-            "branch_author_records": sum(
-                item["branch_author_records"] for item in reports
-            ),
+            "branch_author_records": sum(item["branch_author_records"] for item in reports),
             "exact_records": sum(item["exact_records"] for item in reports),
             "correlated_records": sum(item["correlated_records"] for item in reports),
             "ambiguous_records": sum(item["ambiguous_records"] for item in reports),
@@ -1672,37 +1652,34 @@ def _configure_logging(data_dir: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="python -m swe_mux.tools.git_provenance_backfill",
-        description=(
-            "Re-derive committer and contributor attribution for recorded commits, "
-            "and import historical commits from native transcripts."
-        ),
+        description=(ui_message("git_provenance_backfill.ec4852ae2a")),
     )
     parser.add_argument(
         "project",
         nargs="?",
-        help="registered Project id, exact name, or exact root; omit with --all-projects",
+        help=ui_message("git_provenance_backfill.1d0566c564"),
     )
     parser.add_argument(
         "--all-projects",
         action="store_true",
-        help="sweep every registered Project instead of one",
+        help=ui_message("git_provenance_backfill.1647de8fd3"),
     )
     parser.add_argument(
         "--database",
         type=Path,
         default=default_data_dir() / "mux.db",
-        help="swe-mux SQLite database (default: ~/.mux/mux.db)",
+        help=ui_message("git_provenance_backfill.255966f40d"),
     )
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="write the planned rows; omission is a read-only dry run",
+        help=ui_message("git_provenance_backfill.6ad1e66b84"),
     )
     parser.add_argument(
         "--since-days",
         type=int,
         default=30,
-        help="age of the oldest write fact considered for contributors (default: 30)",
+        help=ui_message("git_provenance_backfill.38588533c5"),
     )
     args = parser.parse_args()
     if bool(args.project) == bool(args.all_projects):

@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 /**
  * Stage timing for the spoken-command path, end of speech to executed action.
  *
@@ -134,10 +135,10 @@ export function latencyStages(sample: LatencySample): LatencyStages {
 
 /** Order and labels for the four stages, so every surface names them identically. */
 export const LATENCY_STAGE_LABELS: { key: keyof LatencyStages; label: string; hint: string }[] = [
-  { key: 'to_post_ms', label: 'endpoint → sent', hint: 'Trailing-silence wait, WAV encode, and any queueing behind an earlier utterance.' },
-  { key: 'to_decode_ms', label: 'sent → decoding', hint: 'Transport plus the daemon queueing before decode starts. A cold model load lands here.' },
-  { key: 'decode_ms', label: 'decoding', hint: 'Whisper turning audio into text.' },
-  { key: 'action_ms', label: 'text → action', hint: 'Matching the command and running it, or appending to the draft.' },
+  { key: 'to_post_ms', get label() { return t("voiceLatency.d0c16d2d53") }, get hint() { return t("voiceLatency.93ad4cda30") } },
+  { key: 'to_decode_ms', get label() { return t("voiceLatency.3781ba696f") }, get hint() { return t("voiceLatency.5991508a23") } },
+  { key: 'decode_ms', get label() { return t("voiceLatency.b73f72d02d") }, get hint() { return t("voiceLatency.07feec14b3") } },
+  { key: 'action_ms', get label() { return t("voiceLatency.bc251525b4") }, get hint() { return t("voiceLatency.94696db6b0") } },
 ]
 
 /** What `GET /api/voice/stt-latency` returns. Mirrors `latency_report` in `voice.py`. */
@@ -154,5 +155,5 @@ export type LatencyReportPayload = {
 export function formatLatency(sample: LatencySample): string {
   const stages = latencyStages(sample)
   const round = (value: number) => Math.round(value)
-  return `${round(sample.total_ms)} ms — endpoint ${round(stages.to_post_ms)} · send ${round(stages.to_decode_ms)} · decode ${round(stages.decode_ms)} · act ${round(stages.action_ms)}`
+  return t("voiceLatency.ef9c2e8793", { value1: round(sample.total_ms), value2: round(stages.to_post_ms), value3: round(stages.to_decode_ms), value4: round(stages.decode_ms), value5: round(stages.action_ms) })
 }

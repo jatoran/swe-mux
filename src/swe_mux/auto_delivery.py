@@ -72,6 +72,7 @@ from .prompt_queue import (
     delivery_mode,
     schedule_status,
 )
+from .ui_messages import ui_message
 
 log = logging.getLogger("swe_mux.auto_delivery")
 
@@ -110,9 +111,7 @@ COUNTER_PROVING_SINCE = "proving_since"
 COUNTER_LAPSED = "auto_lapsed"
 
 DEFAULT_POLICY_BY = "conversation-default"
-FAILED_DELIVERY_REASON = (
-    "a delivery failed mid-send; verify the terminal before re-enabling"
-)
+FAILED_DELIVERY_REASON = "a delivery failed mid-send; verify the terminal before re-enabling"
 # A grant that ran out while nobody was using the conversation. Distinct from
 # every other disable reason because it is the only one that is *not* a decision:
 # an opt-out, an exhausted send budget, and a failed delivery each record
@@ -459,9 +458,7 @@ class AutoDeliveryController:
 
     @staticmethod
     def merge_solicited_sources(
-        *sources: Callable[
-            [Sequence[str], float], Awaitable[dict[str, dict[str, Any]]]
-        ],
+        *sources: Callable[[Sequence[str], float], Awaitable[dict[str, dict[str, Any]]]],
     ) -> Callable[[Sequence[str], float], Awaitable[dict[str, dict[str, Any]]]]:
         """One callable over several open-request pipes, later sources winning.
 
@@ -472,9 +469,7 @@ class AutoDeliveryController:
         last: for a session holding both, the later entry replaces the earlier.
         """
 
-        async def merged(
-            session_ids: Sequence[str], since: float
-        ) -> dict[str, dict[str, Any]]:
+        async def merged(session_ids: Sequence[str], since: float) -> dict[str, dict[str, Any]]:
             windows: dict[str, dict[str, Any]] = {}
             for source in sources:
                 windows.update(await source(session_ids, since))
@@ -484,8 +479,7 @@ class AutoDeliveryController:
 
     def set_solicited_requests(
         self,
-        source: Callable[[Sequence[str], float], Awaitable[dict[str, dict[str, Any]]]]
-        | None,
+        source: Callable[[Sequence[str], float], Awaitable[dict[str, dict[str, Any]]]] | None,
     ) -> None:
         """Register the second source of open-exchange evidence.
 
@@ -496,9 +490,7 @@ class AutoDeliveryController:
         """
         self._solicited_requests = source
 
-    async def reply_windows(
-        self, session_ids: Collection[str]
-    ) -> dict[str, dict[str, Any]]:
+    async def reply_windows(self, session_ids: Collection[str]) -> dict[str, dict[str, Any]]:
         """Which of these sessions are mid-exchange and owed an answer.
 
         The one thing that holds off the idle lapse, and it holds off *only* the
@@ -564,8 +556,7 @@ class AutoDeliveryController:
                     "peer_session_id": None,
                     "sent_at": float(entry.get("updated_at") or 0.0),
                     "expires_at": float(
-                        entry.get("expires_at")
-                        or float(entry.get("updated_at") or 0.0) + span
+                        entry.get("expires_at") or float(entry.get("updated_at") or 0.0) + span
                     ),
                     "window_minutes": minutes,
                     "thread_messages_used": 0,
@@ -778,9 +769,7 @@ class AutoDeliveryController:
                     "reply_window": windows.get(session_id),
                     "enabled": bool(row.get("enabled")),
                     "accept_agent_messages": bool(row.get("accept_agent_messages")),
-                    "accept_agent_interjections": bool(
-                        row.get("accept_agent_interjections")
-                    ),
+                    "accept_agent_interjections": bool(row.get("accept_agent_interjections")),
                     "live": bool(record is not None and record.state not in {"exited", "crashed"}),
                     "label": getattr(record, "name", None),
                     "run_matches": bool(
@@ -903,14 +892,14 @@ class AutoDeliveryController:
         session = self.sessions.sessions.get(session_id)
         if session is None or session.record.state in {"exited", "crashed"}:
             await self.disable_session(
-                session_id, reason="target session ended", by="controller"
+                session_id, reason=ui_message("auto_delivery.1c82abc233"), by="controller"
             )
             return None
         record = session.record
         bound_run = policy.get("agent_run_id")
         if bound_run and record.agent_run_id and bound_run != record.agent_run_id:
             await self.disable_session(
-                session_id, reason="target agent run was replaced", by="controller"
+                session_id, reason=ui_message("auto_delivery.4708a18acb"), by="controller"
             )
             return None
         # The grant is bounded by *idleness*, not by the conversation's age.

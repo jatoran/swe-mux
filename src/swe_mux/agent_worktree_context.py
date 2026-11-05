@@ -23,6 +23,7 @@ from typing import Any
 
 from .git_monitor import read_git
 from .path_identity import same_path
+from .ui_messages import ui_message
 from .worktree_mutation import listed_worktree_entries, worktree_root_matches
 
 log = logging.getLogger(__name__)
@@ -75,10 +76,7 @@ def session_occupies_worktree(record: Any, root: str) -> bool:
     """Whether this live record can currently be writing inside ``root``."""
     live_cwd = str(getattr(record, "git_cwd", "") or "")
     selected = bound_worktree_root(record)
-    return bool(
-        (live_cwd and _inside(live_cwd, root))
-        or (selected and same_path(selected, root))
-    )
+    return bool((live_cwd and _inside(live_cwd, root)) or (selected and same_path(selected, root)))
 
 
 def _entry_for(entries: dict[str, dict[str, Any]], root: str) -> dict[str, Any] | None:
@@ -237,7 +235,7 @@ async def worktree_context(caller: Any, project_root: str, sessions: Any) -> dic
             "source": "unavailable",
             "landable": False,
             "code": "worktree_context_unavailable",
-            "message": "this session's live checkout is not registered to its Project.",
+            "message": ui_message("agent_worktree_context.97be5849c8"),
             "live_cwd": str(getattr(record, "git_cwd", "") or ""),
             "worktree_root": None,
             "branch": None,
@@ -250,7 +248,7 @@ async def worktree_context(caller: Any, project_root: str, sessions: Any) -> dic
                 "source": "live_cwd",
                 "landable": False,
                 "code": "detached_worktree",
-                "message": "the live linked worktree is detached and cannot be landed.",
+                "message": ui_message("agent_worktree_context.e8fd23c7e9"),
                 "live_cwd": str(getattr(record, "git_cwd", "") or ""),
                 "worktree_root": str(live_entry["worktree"]),
                 "branch": None,
@@ -262,7 +260,7 @@ async def worktree_context(caller: Any, project_root: str, sessions: Any) -> dic
                 "source": "live_cwd",
                 "landable": False,
                 "code": "trunk_branch",
-                "message": "the live linked worktree carries the Project's trunk branch.",
+                "message": ui_message("agent_worktree_context.950f0ffb70"),
                 "live_cwd": str(getattr(record, "git_cwd", "") or ""),
                 "worktree_root": str(live_entry["worktree"]),
                 "branch": _short_branch(branch),
@@ -272,7 +270,7 @@ async def worktree_context(caller: Any, project_root: str, sessions: Any) -> dic
             "source": "live_cwd",
             "landable": True,
             "code": None,
-            "message": "the live linked-worktree cwd is authoritative.",
+            "message": ui_message("agent_worktree_context.faf0f743d4"),
             "live_cwd": str(getattr(record, "git_cwd", "") or ""),
             "worktree_root": str(live_entry["worktree"]),
             "branch": _short_branch(branch),
@@ -295,7 +293,7 @@ async def worktree_context(caller: Any, project_root: str, sessions: Any) -> dic
         "source": selected.source,
         "landable": True,
         "code": None,
-        "message": "the run-bound worktree selection is authoritative while cwd stays on trunk.",
+        "message": ui_message("agent_worktree_context.a1ec04dff5"),
         "live_cwd": str(getattr(record, "git_cwd", "") or ""),
         "worktree_root": selected.root,
         "branch": selected.branch,
@@ -365,10 +363,7 @@ async def use_worktree(
                 source="primary_cwd",
                 landable=False,
                 code="worktree_context_required",
-                message=(
-                    "the worktree selection was cleared; call use_worktree before "
-                    "requesting a land from the primary checkout."
-                ),
+                message=(ui_message("agent_worktree_context.28d7d78d8a")),
                 worktree_root=None,
                 branch=None,
             )
@@ -453,7 +448,7 @@ async def use_worktree(
             "source": "live_cwd",
             "landable": True,
             "code": None,
-            "message": "the live linked-worktree cwd is authoritative.",
+            "message": ui_message("agent_worktree_context.faf0f743d4"),
             "live_cwd": str(getattr(record, "git_cwd", "") or ""),
             "worktree_root": str(live_entry["worktree"]),
             "branch": _short_branch(live_branch),
@@ -463,7 +458,7 @@ async def use_worktree(
         "source": "bound",
         "landable": True,
         "code": None,
-        "message": "the run-bound worktree selection is authoritative while cwd stays on trunk.",
+        "message": ui_message("agent_worktree_context.a1ec04dff5"),
         "live_cwd": str(getattr(record, "git_cwd", "") or ""),
         "worktree_root": exact_root,
         "branch": _short_branch(branch),

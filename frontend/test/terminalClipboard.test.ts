@@ -1,3 +1,4 @@
+import { withCatalogText } from './support/localizedSource.ts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -197,15 +198,15 @@ test('an empty native paste remains available to non-text handlers', () => {
 
 test('every terminal message is drawn over the terminal, never inside the rail', () => {
   const root = dirname(fileURLToPath(import.meta.url))
-  const pane = readFileSync(join(root, '..', 'src', 'TerminalPane.tsx'), 'utf8')
-  const styles = readFileSync(join(root, '..', 'src', 'style.css'), 'utf8')
+  const pane = withCatalogText(readFileSync(join(root, '..', 'src', 'TerminalPane.tsx'), 'utf8'))
+  const styles = withCatalogText(readFileSync(join(root, '..', 'src', 'style.css'), 'utf8'))
 
   // One toast, and nothing left in the rail to compete with it. The selection readout was
   // the last message living there, in a trailing cluster that does not shrink and under a
   // `34vw` cap, so a split pane narrower than that lost its chips behind the readout.
-  assert.match(pane, /\{clipboardStatus&&<div class="terminal-clip-toast" role="status">\{clipboardStatus\}<\/div>\}/)
+  assert.match(pane, /\{clipboardStatus\s*&&\s*<div class="terminal-clip-toast" role="status">\{clipboardStatus\}<\/div>\}/)
   assert.doesNotMatch(pane, /<RailStrip[^\n]*status=/)
-  assert.match(pane, /showClipboardStatus\(`\$\{text\.length\.toLocaleString\(\)\} selected/)
+  assert.match(pane, /showClipboardStatus\(`\$\{text\.length\.toLocaleString\(uiLocale\.value\)\} selected/)
   // A readout goes when its selection goes; a confirmation is about something that already
   // happened and runs out its own timer instead.
   assert.match(pane, /const clearSelectionStatus = \(\) => \{\n\s*if\(clipboardStatusKindRef\.current!=='selection'\)return/)

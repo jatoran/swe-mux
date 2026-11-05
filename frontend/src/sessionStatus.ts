@@ -1,3 +1,5 @@
+import { codeLabel } from './localization/codeLabels.ts'
+import { t } from './localization/index.ts'
 import type { Session, SessionState, StandingActivity } from './types'
 import { hasHarnessMeasurement, isAgentBackend, isObservedHarness } from './harnessRegistry.ts'
 
@@ -61,12 +63,12 @@ export function hasRunningActivity(session: Session): boolean {
  */
 export function awaitingLabel(session: Session): string {
   switch (session.awaiting_reason) {
-    case 'authentication': return 'awaiting SSH authentication'
-    case 'question': return 'awaiting answer'
-    case 'elicitation': return 'awaiting input'
-    case 'rate_limit': return 'rate limited'
+    case 'authentication': return t("sessionStatus.a8ab102f93")
+    case 'question': return t("sessionStatus.b8888cdfbe")
+    case 'elicitation': return t("sessionStatus.bc2767c7bf")
+    case 'rate_limit': return t("sessionStatus.d292012eb3")
     case 'approval':
-    default: return 'awaiting approval'
+    default: return t("sessionStatus.84e3eb92c7")
   }
 }
 
@@ -78,8 +80,8 @@ export function awaitingLabel(session: Session): string {
  */
 export function idleLabel(session: Session): string {
   return session.idle_reason === 'waiting_on_background'
-    ? 'ready · background work running'
-    : 'ready · turn complete'
+    ? t("sessionStatus.ff90af80ad")
+    : t("sessionStatus.a081d707be")
 }
 
 /** One compact affordance per standing-activity annotation. */
@@ -108,21 +110,21 @@ export function activityBadges(session: Session): ActivityBadge[] {
   const annotations: StandingActivity[] = session.standing_activity ?? []
   const byKind = (kind: string) => annotations.find(item => item.kind === kind)
   const loop = byKind('loop')
-  if (loop) badges.push({ glyph: '⟳', label: 'loop armed', title: `loop armed${loop.detail ? ` · ${loop.detail}` : ''}` })
+  if (loop) badges.push({ glyph: '⟳', get label() { return t("sessionStatus.5a4b86c699") }, get title() { return t("sessionStatus.0580196d90", { value1: loop.detail ? ` · ${loop.detail}` : '' }) } })
   const cron = byKind('cron')
   if (cron) {
-    const label = cron.count > 1 ? plural(cron.count, 'cron job') : 'cron scheduled'
-    badges.push({ glyph: '⟳', label, title: `${label}${cron.detail ? ` · ${cron.detail}` : ''}`, count: cron.count })
+    const label = cron.count > 1 ? plural(cron.count, t("sessionStatus.af63f398e7")) : t("sessionStatus.b9f715cceb")
+    badges.push({ glyph: '⟳', label, get title() { return t("sessionStatus.be9e11092d", { label: label, value2: cron.detail ? ` · ${cron.detail}` : '' }) }, count: cron.count })
   }
   const background = byKind('background_tasks')
   if (background) {
-    const label = plural(background.count, 'background task')
-    badges.push({ glyph: '≡', label, title: `${label} running${background.detail ? ` · ${background.detail}` : ''}`, count: background.count })
+    const label = plural(background.count, t("sessionStatus.3614c7707a"))
+    badges.push({ glyph: '≡', label, get title() { return t("sessionStatus.40b1e31923", { label: label, value2: background.detail ? ` · ${background.detail}` : '' }) }, count: background.count })
   }
   const subagents = byKind('subagents')
   if (subagents) {
     const label = plural(subagents.count, 'subagent')
-    badges.push({ glyph: '⑂', label, title: `${label} running${subagents.detail ? ` · ${subagents.detail}` : ''}`, count: subagents.count })
+    badges.push({ glyph: '⑂', label, get title() { return t("sessionStatus.40b1e31923", { label: label, value2: subagents.detail ? ` · ${subagents.detail}` : '' }) }, count: subagents.count })
   }
   return badges
 }
@@ -150,42 +152,42 @@ export function sessionFaults(session: Session): string[] {
   const faults: string[] = []
   if (session.runtime_boundary === 'remote' || session.runtime_boundary === 'unknown') {
     faults.push(
-      'non-local terminal boundary; local cwd, Git, transcript, hooks, shim PATH repair, ' +
-        'and agent promotion are unavailable',
+      t("sessionStatus.0b2da531c9") +
+        t("sessionStatus.a4f502330a"),
     )
   }
   if (session.observation_stale_since) {
     faults.push(
       session.observation_diagnostic ||
-        'observation stale: the followed transcript may no longer be this session’s conversation',
+        t("sessionStatus.bd5d5926a7"),
     )
   }
   // The degraded wording already names the schema and the unrecognized share; the fallback
   // covers a degrade recorded before any diagnostic was written.
   if (session.parser_status === 'degraded') {
-    faults.push(session.parser_diagnostic || 'transcript parser degraded: measurements are stale')
+    faults.push(session.parser_diagnostic || t("sessionStatus.ae5abb289c"))
   }
   return faults
 }
 
 /** Status line text shown next to a session; total over SessionState. */
 export function sessionStatus(session: Session): string {
-  if (session.runtime_boundary === 'unknown') return 'terminal boundary unknown'
+  if (session.runtime_boundary === 'unknown') return t("sessionStatus.ffb51c84d3")
   if (session.runtime_boundary === 'remote') {
-    if (session.awaiting_reason === 'authentication') return 'awaiting SSH authentication'
-    if (session.remote_transport_state === 'ended') return 'SSH connection ended'
-    return `remote boundary · ${session.state}`
+    if (session.awaiting_reason === 'authentication') return t("sessionStatus.a8ab102f93")
+    if (session.remote_transport_state === 'ended') return t("sessionStatus.cbd307b213")
+    return t("sessionStatus.14149ec865", { value1: codeLabel(session.state) })
   }
   if (!isAgentBackend(session.backend)) return session.state
-  if (!isObservedHarness(session.backend)) return 'not observed by mux'
+  if (!isObservedHarness(session.backend)) return t("sessionStatus.86fdf36145")
   const context = session.parser_status === 'degraded'
-    ? ' · measurements stale'
+    ? t("sessionStatus.fb3e12bdd3")
     : hasHarnessMeasurement(session.backend) && session.context_pct > 0
       ? ` · ${Math.round(session.context_pct * 100)}%`
       : ''
   const badges = activityBadges(session)
   const standing = badges.map(badge => ` · ${badge.label}`).join('')
-  if (session.state === 'working' && session.interrupt_pending_at) return `interrupt requested${standing}${context}`
+  if (session.state === 'working' && session.interrupt_pending_at) return t("sessionStatus.6bf7be19e7", { value1: standing, value2: context })
   if (session.state === 'working') return `working${session.state_detail ? ` · ${session.state_detail}` : ''}${standing}${context}`
   if (session.state === 'idle') {
     // The background annotation supersedes the derived idle_reason text: one
@@ -195,6 +197,6 @@ export function sessionStatus(session: Session): string {
     return `${base}${standing}${context}`
   }
   if (session.state === 'awaiting') return `${awaitingLabel(session)}${session.state_detail ? ` · ${session.state_detail}` : ''}${standing}${context}`
-  if (session.state === 'starting') return 'starting agent…'
+  if (session.state === 'starting') return t("sessionStatus.6f58d4e6b0")
   return `${session.state}${context}`
 }

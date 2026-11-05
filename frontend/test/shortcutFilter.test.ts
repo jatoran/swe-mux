@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { commandCategoryLabel, shortcutMatches, UNBOUND_CHORD } from '../src/commands.ts'
+import { commandCategoryLabel, shortcutMatches, unboundChord } from '../src/commands.ts'
 
 const command = (id: string, label: string, category: string) => ({ id, label, category })
 const palette = command('palette.open', 'Open command palette', 'view')
@@ -37,8 +37,8 @@ test('a chord matches in both spellings, so neither typing habit misses it', () 
 })
 
 test('an unbound row answers to what it reads as', () => {
-  assert.equal(shortcutMatches(palette, undefined, UNBOUND_CHORD), true)
-  assert.equal(shortcutMatches(palette, 'ctrl+k', UNBOUND_CHORD), false)
+  assert.equal(shortcutMatches(palette, undefined, unboundChord()), true)
+  assert.equal(shortcutMatches(palette, 'ctrl+k', unboundChord()), false)
 })
 
 test('every term must match, so extra words narrow rather than widen', () => {

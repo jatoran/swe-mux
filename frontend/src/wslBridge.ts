@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // Types and decision logic for the WSL agent bridge setup surface.
 //
 // Split from the component (`wslBridge.tsx`) rather than living beside it because
@@ -46,24 +47,24 @@ export type WslBridgeStatus = {
 export function blockers(status: WslBridgeStatus, distro: WslDistro): string[] {
   if (!status.enabled) {
     return [
-      'The bridge is off. Turn it on to run an agent natively inside this distribution and have mux observe it.',
+      t("wslBridge.214da0041d"),
     ]
   }
   const bridge = distro.bridge
-  if (!bridge) return ['Not checked yet - use "Check distributions".']
+  if (!bridge) return [t("wslBridge.fb1e0435d6")]
   const found: string[] = []
   if (!bridge.harnesses.length) {
     found.push(
-      'No agent CLI is installed natively inside this distribution. A Windows CLI reached through /mnt does not count - it would run, but write its transcript on the Windows side where mux cannot follow it.',
+      t("wslBridge.471c663416"),
     )
   }
   if (bridge.reachable === false) {
     found.push(
-      'This distribution cannot reach the daemon. WSL forwards localhost inwards only, so the daemon must listen on the WSL adapter and Windows Defender Firewall must allow it.',
+      t("wslBridge.0acbd678a5"),
     )
   }
   if (bridge.harnesses.length && !bridge.installed) {
-    found.push('The distro-side bridge is not installed yet.')
+    found.push(t("wslBridge.0c27b6ecb1"))
   }
   // Anything the daemon reported that the cases above do not already cover - a
   // missing python3, a distribution that would not start. Falling back to the

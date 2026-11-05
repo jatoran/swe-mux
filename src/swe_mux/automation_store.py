@@ -22,6 +22,7 @@ from .sqlite_store import (
     run_sqlite_operation,
     write_schema_version,
 )
+from .ui_messages import ui_message
 
 T = TypeVar("T")
 
@@ -671,7 +672,7 @@ class AutomationStore:
         returns the existing row tagged ``duplicate`` instead of a second finding.
         """
         if not agent_run_id and not project_id:
-            raise ValueError("an annotation must be anchored to an agent run or a project")
+            raise ValueError(ui_message("automation_store.bf89068b8d"))
         identity = str(uuid.uuid4())
         created = time.time()
         evidence_json = (
@@ -1289,8 +1290,7 @@ class AutomationStore:
             # `none` is the schema's "not blocked"; NULL is a record that predates
             # the field or had it withheld. Neither is a live blocker.
             sql += (
-                " AND COALESCE(json_extract(record_json,'$.blocked_on'),'none')"
-                " NOT IN ('','none')"
+                " AND COALESCE(json_extract(record_json,'$.blocked_on'),'none') NOT IN ('','none')"
             )
         if target_fragment:
             # `target` is a JSON array, so the substring test runs against its
@@ -1302,8 +1302,7 @@ class AutomationStore:
             # `land_store` otherwise also matched `land-store` and `landAstore`,
             # widening a caller's filter without telling it.
             sql += (
-                " AND lower(COALESCE(json_extract(record_json,'$.target'),''))"
-                " LIKE ? ESCAPE '\\'"
+                " AND lower(COALESCE(json_extract(record_json,'$.target'),'')) LIKE ? ESCAPE '\\'"
             )
             args.append(f"%{escape_like(str(target_fragment).casefold())}%")
         order = "DESC" if newest_first else "ASC"
@@ -1861,9 +1860,7 @@ class AutomationStore:
         args.extend([time.time(), item_id])
 
         def op() -> dict[str, Any] | None:
-            self._db.execute(
-                f"UPDATE attention_items SET {','.join(assignments)} WHERE id=?", args
-            )
+            self._db.execute(f"UPDATE attention_items SET {','.join(assignments)} WHERE id=?", args)
             self._db.commit()
             row = self._db.execute(
                 "SELECT * FROM attention_items WHERE id=?", (item_id,)
@@ -2054,13 +2051,15 @@ class AutomationStore:
             for row in models:
                 rule = str(row["rule_id"])
                 by_rule.setdefault(rule, []).append(str(row["requested_model"]))
-                usage_by_rule.setdefault(rule, []).append({
-                    "model": str(row["requested_model"]),
-                    "cached_tokens": int(row["cached_tokens"]),
-                    "cache_write_tokens": int(row["cache_write_tokens"]),
-                    "today_cached_tokens": int(row["today_cached_tokens"]),
-                    "today_cache_write_tokens": int(row["today_cache_write_tokens"]),
-                })
+                usage_by_rule.setdefault(rule, []).append(
+                    {
+                        "model": str(row["requested_model"]),
+                        "cached_tokens": int(row["cached_tokens"]),
+                        "cache_write_tokens": int(row["cache_write_tokens"]),
+                        "today_cached_tokens": int(row["today_cached_tokens"]),
+                        "today_cache_write_tokens": int(row["today_cache_write_tokens"]),
+                    }
+                )
             return {
                 "rules": [
                     {
@@ -2072,7 +2071,8 @@ class AutomationStore:
                         "cache_write_tokens": int(row["cache_write_tokens"]),
                         "cache_discount_usd": (
                             float(row["cache_discount_usd"])
-                            if row["cache_discount_usd"] is not None else None
+                            if row["cache_discount_usd"] is not None
+                            else None
                         ),
                         "cache_discount_calls": int(row["cache_discount_calls"]),
                         "cost_usd": float(row["cost"]),
@@ -2083,7 +2083,8 @@ class AutomationStore:
                         "today_cache_write_tokens": int(row["today_cache_write_tokens"]),
                         "today_cache_discount_usd": (
                             float(row["today_cache_discount_usd"])
-                            if row["today_cache_discount_usd"] is not None else None
+                            if row["today_cache_discount_usd"] is not None
+                            else None
                         ),
                         "today_cost_usd": float(row["today_cost"]),
                         # Calls this rule made whose cost the provider never
@@ -2107,28 +2108,41 @@ class AutomationStore:
         result["days"] = window
         result["start_day"] = start
         result["today"] = today
-        result["totals"] = {
-            key: sum(rule[key] for rule in rules)
-            for key in (
-                "calls", "tokens", "input_tokens", "cached_tokens", "cache_write_tokens",
-                "cache_discount_calls",
-                "today_calls", "today_tokens", "today_input_tokens", "today_cached_tokens",
-                "today_cache_write_tokens",
-                "unpriced_calls", "today_unpriced_calls",
-            )
-        } | {
-            key: round(sum(rule[key] for rule in rules), 6)
-            for key in ("cost_usd", "today_cost_usd")
-        } | {
-            # Summed only across the rules that reported one, and `None` when no
-            # rule did. Treating an unreported discount as 0 in a *total* is how
-            # "nobody measured this" becomes "caching saved nothing".
-            key: (
-                round(sum(rule[key] for rule in rules if rule[key] is not None), 6)
-                if any(rule[key] is not None for rule in rules) else None
-            )
-            for key in ("cache_discount_usd", "today_cache_discount_usd")
-        }
+        result["totals"] = (
+            {
+                key: sum(rule[key] for rule in rules)
+                for key in (
+                    "calls",
+                    "tokens",
+                    "input_tokens",
+                    "cached_tokens",
+                    "cache_write_tokens",
+                    "cache_discount_calls",
+                    "today_calls",
+                    "today_tokens",
+                    "today_input_tokens",
+                    "today_cached_tokens",
+                    "today_cache_write_tokens",
+                    "unpriced_calls",
+                    "today_unpriced_calls",
+                )
+            }
+            | {
+                key: round(sum(rule[key] for rule in rules), 6)
+                for key in ("cost_usd", "today_cost_usd")
+            }
+            | {
+                # Summed only across the rules that reported one, and `None` when no
+                # rule did. Treating an unreported discount as 0 in a *total* is how
+                # "nobody measured this" becomes "caching saved nothing".
+                key: (
+                    round(sum(rule[key] for rule in rules if rule[key] is not None), 6)
+                    if any(rule[key] is not None for rule in rules)
+                    else None
+                )
+                for key in ("cache_discount_usd", "today_cache_discount_usd")
+            }
+        )
         return result
 
     async def dashboard(self) -> dict[str, Any]:
@@ -2278,9 +2292,7 @@ class AutomationStore:
         """
 
         def op() -> None:
-            self._db.execute(
-                "DELETE FROM llm_provider_verification WHERE provider=?", (provider,)
-            )
+            self._db.execute("DELETE FROM llm_provider_verification WHERE provider=?", (provider,))
             self._db.commit()
 
         await self._run(op)

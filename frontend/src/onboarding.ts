@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { api, type ApiError } from './api.ts'
 import type { Budget } from './types'
@@ -53,7 +54,7 @@ export function useOnboarding() {
     let attempt=0
     const read=()=>void reload().catch(cause=>{
       if (!alive.current) return
-      setError(`Setup is waiting for the daemon. ${String((cause as Error).message)}`)
+      setError(t("onboarding.b0a6f065ce", { value1: String((cause as Error).message) }))
       timer=setTimeout(read,Math.min(10000,1000*2**attempt++))
     })
     const changed=()=>read()

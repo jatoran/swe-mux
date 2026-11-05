@@ -1,3 +1,4 @@
+import { rich, t } from './localization/index.ts'
 import { useEffect, useState } from 'preact/hooks'
 
 import { RailDropup } from './RailDropup'
@@ -74,37 +75,37 @@ export function PromptsDropup({ projectId, backend, anchor, onClose, onInsert, o
   const rows = orderPromptTemplates((templates || [])
     .filter(item => !item.backends.length || (item.backends as readonly string[]).includes(backend)))
   return <RailDropup
-    label="Prompt templates"
+    label={t("PromptsDropup.d3a289c7a7")}
     anchor={anchor}
     onClose={onClose}
     sticky={[
       {
-        label: 'All prompt templates…',
-        title: 'Open the Prompt templates section of the Actions drawer, where templates can be searched, filled in and pinned',
+        get label() { return t("PromptsDropup.5d45198338") },
+        get title() { return t("PromptsDropup.5de9e21617") },
         run: onOpenSection,
       },
-      { label: '+ New', title: 'Open the prompt library on a new template', run: onCreate },
+      { get label() { return t("PromptsDropup.af6aa8e6e2") }, get title() { return t("PromptsDropup.351dd03831") }, run: onCreate },
     ]}
   >
-    {!templates && !error && <p class="rail-dropup-empty">Reading the prompt library…</p>}
+    {!templates && !error && <p class="rail-dropup-empty">{t("PromptsDropup.4bb85e8fcc")}</p>}
     {error && <p class="rail-dropup-note" role="alert">{error}</p>}
     {templates && !rows.length && <p class="rail-dropup-empty">
-      {templates.length ? 'No template applies to this session type.' : 'No prompt templates yet. “+ New” starts one.'}
+      {templates.length ? t("PromptsDropup.f2edf2700a") : t("PromptsDropup.1a0edcc066")}
     </p>}
     {rows.map(template => <button
       key={promptTemplateRef(template)}
       type="button"
       class="rail-dropup-row"
       disabled={!!busy}
-      title={`${template.title}\n${promptTemplateExcerpt(template.body, 200)}${template.variables.length ? `\nOpens Prompt templates to fill: ${template.variables.join(', ')}` : '\nInserts without sending'}`}
+      title={t("PromptsDropup.276b15cff1", { title: template.title, value2: promptTemplateExcerpt(template.body, 200), value3: template.variables.length ? t("PromptsDropup.80fc204337", { value1: template.variables.join(', ') }) : t("PromptsDropup.fabed521c3") })}
       onClick={() => void run(template)}
     >
       <span>
         {template.favorite && <code>★</code>}
-        {busy === promptTemplateRef(template) ? 'Inserting…' : template.title}
+        {busy === promptTemplateRef(template) ? t("PromptsDropup.9d42b19528") : template.title}
         {/* A template with fields cannot be injected as it stands, so the button
             says where the tap actually goes before it goes there. */}
-        {!!template.variables.length && <b class="skill-flag">{template.variables.length} field{template.variables.length === 1 ? '' : 's'}</b>}
+        {!!template.variables.length && <b class="skill-flag">{rich("PromptsDropup.5fbe7bc964", { length: template.variables.length, value2: (template.variables.length === 1) ? 'yes' : 'no' })}</b>}
       </span>
       <small>{template.project_name || template.scope} · {promptTemplateExcerpt(template.body, 64)}</small>
     </button>)}

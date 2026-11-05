@@ -24,6 +24,7 @@ from ..project_files import (
     write_note,
 )
 from ..projects import ProjectManager
+from ..ui_messages import error_text, ui_message
 from .support import _registered_identity
 
 log = logging.getLogger(__name__)
@@ -32,7 +33,7 @@ log = logging.getLogger(__name__)
 def _notes_project(request: web.Request):  # type: ignore[no-untyped-def]
     project = request.app[keys.PROJECTS].projects.get(request.match_info["project_id"])
     if not project:
-        raise ValueError("unknown project")
+        raise ValueError(ui_message("notes.e222820974"))
     return project
 
 
@@ -45,7 +46,7 @@ def _storage_note_id(project, note_id: str) -> str:  # type: ignore[no-untyped-d
 def _global_note_id(request: web.Request) -> str:
     note_id = request.match_info["note_id"]
     if note_id != GLOBAL_SCRATCHPAD_ID:
-        raise ValueError("unknown global note")
+        raise ValueError(ui_message("notes.d79c149edb"))
     return note_id
 
 
@@ -63,18 +64,18 @@ async def put_global_note(request: web.Request) -> web.Response:
     note_id = _global_note_id(request)
     body = await request.json()
     if not isinstance(body, dict):
-        raise ValueError("note request body must be an object")
+        raise ValueError(ui_message("notes.43df6a472f"))
     try:
         result = await write_global_note(
             request.app[keys.CONFIG].data_dir,
             note_id,
             str(body.get("markdown") or ""),
             str(body.get("revision") or "missing"),
-            title="Scratchpad",
+            title=ui_message("notes.17bd998ee0"),
         )
     except ValueError as exc:
         if "changed externally" in str(exc):
-            return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+            return json_response({"error": error_text(exc), "code": "revision_conflict"}, 409)
         raise
     log.info(
         "global note saved note_id=%s revision=%s bytes=%d",
@@ -126,7 +127,7 @@ async def list_notes(request: web.Request) -> web.Response:
         if not requested or project.id == requested
     ]
     if requested and not projects:
-        raise ValueError("unknown project")
+        raise ValueError(ui_message("notes.e222820974"))
     items: list[dict[str, Any]] = []
     for project in projects:
         for summary in await _project_note_items(request, project):
@@ -140,7 +141,7 @@ async def note_save_loop_diagnostic(request: web.Request) -> web.Response:
     try:
         sample = note_save_loop_sample(await request.json())
     except ValueError as exc:
-        return json_response({"error": str(exc)}, 400)
+        return json_response({"error": error_text(exc)}, 400)
     return json_response(sample)
 
 
@@ -148,7 +149,7 @@ async def create_project_note(request: web.Request) -> web.Response:
     project = _notes_project(request)
     body = await request.json()
     if not isinstance(body, dict):
-        raise ValueError("note request body must be an object")
+        raise ValueError(ui_message("notes.43df6a472f"))
     result = await create_note(
         project.root,
         str(body.get("title") or ""),
@@ -184,7 +185,7 @@ async def get_note(request: web.Request) -> web.Response:
         project=_registered_identity(project),
     )
     if not note["exists"]:
-        raise ValueError("unknown note")
+        raise ValueError(ui_message("notes.c5fdd13cf1"))
     note.update({"id": note_id, "project_id": project.id, "project_name": project.name})
     return json_response(note)
 
@@ -196,7 +197,7 @@ async def _write_project_note(request: web.Request, *, title_only: bool = False)
     storage_id = _storage_note_id(project, note_id)
     body = await request.json()
     if not isinstance(body, dict):
-        raise ValueError("note request body must be an object")
+        raise ValueError(ui_message("notes.43df6a472f"))
     current = await read_note(
         project.root,
         storage_id,
@@ -204,7 +205,7 @@ async def _write_project_note(request: web.Request, *, title_only: bool = False)
         project=_registered_identity(project),
     )
     if not current["exists"]:
-        raise ValueError("unknown note")
+        raise ValueError(ui_message("notes.c5fdd13cf1"))
     try:
         result = await write_note(
             project.root,
@@ -217,7 +218,7 @@ async def _write_project_note(request: web.Request, *, title_only: bool = False)
         )
     except ValueError as exc:
         if "changed externally" in str(exc):
-            return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+            return json_response({"error": error_text(exc), "code": "revision_conflict"}, 409)
         raise
     result.update({"id": note_id, "project_id": project.id, "project_name": project.name})
     log.info(
@@ -252,7 +253,7 @@ async def delete_project_note(request: web.Request) -> web.Response:
     await _project_note_items(request, project)
     body = await request.json()
     if not isinstance(body, dict):
-        raise ValueError("note request body must be an object")
+        raise ValueError(ui_message("notes.43df6a472f"))
     try:
         result = await delete_note(
             project.root,
@@ -262,7 +263,7 @@ async def delete_project_note(request: web.Request) -> web.Response:
         )
     except ValueError as exc:
         if "changed externally" in str(exc):
-            return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+            return json_response({"error": error_text(exc), "code": "revision_conflict"}, 409)
         raise
     log.info(
         "project note deleted project_id=%s note_id=%s bytes=%d trashed=%s",

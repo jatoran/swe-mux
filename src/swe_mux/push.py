@@ -58,6 +58,7 @@ from .device_presence import DevicePresenceStore
 from .event_bus import EventBus
 from .models import MuxEvent
 from .settings_store import SettingsStore, in_quiet_time
+from .ui_messages import localize_payload, resolve_ui_locale, ui_message
 
 log = logging.getLogger(__name__)
 
@@ -164,32 +165,30 @@ def notification_classification(event: MuxEvent) -> NotificationClassification |
             provider = str(payload.get("provider") or "provider")
             note = {
                 "category": "reset",
-                "title": "swe-mux",
-                "body": f"Unexpected quota reset on {count} {provider} accounts.",
+                "title": ui_message("push.142caaf1c5"),
+                "body": ui_message("push.db1ddc210f", value1=count, value2=provider),
             }
         else:
             note = {
                 "category": "reset",
-                "title": "swe-mux",
-                "body": "Unexpected quota reset.",
+                "title": ui_message("push.142caaf1c5"),
+                "body": ui_message("push.f3d1c3ed25"),
             }
         return NotificationClassification("reset", note, "route", "eligible", "classified")
     if kind == "approval_needed":
         if payload.get("kind") == "input":
             note = {
                 "category": "attention",
-                "title": "swe-mux — question",
-                "body": "The agent is waiting for your answer.",
+                "title": ui_message("push.f34cf56c03"),
+                "body": ui_message("push.449eac123b"),
             }
         else:
             note = {
                 "category": "attention",
-                "title": "swe-mux — approval",
-                "body": "The agent needs your approval.",
+                "title": ui_message("push.6e3e056486"),
+                "body": ui_message("push.415d3bcb6c"),
             }
-        return NotificationClassification(
-            "attention", note, "route", "eligible", "classified"
-        )
+        return NotificationClassification("attention", note, "route", "eligible", "classified")
     # `turn_aborted` is cancellation, including deliberate session shutdown. A
     # real provider/process failure is reported by turn_failed/session_crashed.
     if kind in ("turn_failed", "session_crashed") or (
@@ -197,8 +196,8 @@ def notification_classification(event: MuxEvent) -> NotificationClassification |
     ):
         note = {
             "category": "failure",
-            "title": "swe-mux — failed",
-            "body": "The agent run failed.",
+            "title": ui_message("push.d954e02623"),
+            "body": ui_message("push.695bdf016f"),
         }
         return NotificationClassification("failure", note, "route", "eligible", "classified")
     if running_work(payload) and (
@@ -209,14 +208,12 @@ def notification_classification(event: MuxEvent) -> NotificationClassification |
         # alert — the next completion is. Suppressing here keeps "the alert means
         # the agent is done" true instead of training the user to ignore it.
         category = "complete" if kind == "turn_ended" else "waiting"
-        return NotificationClassification(
-            category, None, "suppress", "suppressed", "running_work"
-        )
+        return NotificationClassification(category, None, "suppress", "suppressed", "running_work")
     if kind == "turn_ended":
         note = {
             "category": "complete",
-            "title": "swe-mux",
-            "body": "The agent finished a turn.",
+            "title": ui_message("push.142caaf1c5"),
+            "body": ui_message("push.85ba4ce483"),
         }
         return NotificationClassification("complete", note, "route", "eligible", "classified")
     if kind == "state_changed" and payload.get("state") == "idle":
@@ -230,8 +227,8 @@ def notification_classification(event: MuxEvent) -> NotificationClassification |
             )
         note = {
             "category": "waiting",
-            "title": "swe-mux — ready",
-            "body": "The agent is waiting for your input.",
+            "title": ui_message("push.bf21c25152"),
+            "body": ui_message("push.2081750c45"),
         }
         return NotificationClassification("waiting", note, "settle", "held", "waiting_settle")
     return None
@@ -359,19 +356,19 @@ class PushStore:
 
     def add(self, subscription: Any, profile: str) -> None:
         if not isinstance(subscription, dict):
-            raise ValueError("subscription must be an object")
+            raise ValueError(ui_message("push.ec461f1b12"))
         endpoint = subscription.get("endpoint")
         keys = subscription.get("keys")
         if not isinstance(endpoint, str) or not endpoint.startswith("https://"):
-            raise ValueError("subscription endpoint must be an https URL")
+            raise ValueError(ui_message("push.f40142a0c6"))
         if (
             not isinstance(keys, dict)
             or not isinstance(keys.get("p256dh"), str)
             or not isinstance(keys.get("auth"), str)
         ):
-            raise ValueError("subscription is missing p256dh/auth keys")
+            raise ValueError(ui_message("push.454eff814f"))
         if profile not in ("desktop", "mobile"):
-            raise ValueError("profile must be desktop or mobile")
+            raise ValueError(ui_message("push.0c519d8970"))
         subs = [item for item in self._read() if item.get("endpoint") != endpoint]
         subs.append(
             {
@@ -415,6 +412,7 @@ class PushSender:
         presence: DevicePresenceStore | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         decision_store: Any | None = None,
+        language: Callable[[], str] | None = None,
     ) -> None:
         self._store = store
         self._settings = settings
@@ -423,6 +421,7 @@ class PushSender:
         self._presence = presence or DevicePresenceStore(clock=clock)
         self._sleep = sleep
         self._decision_store = decision_store
+        self._language = language or (lambda: "en")
         self._recent: dict[tuple[str, str], float] = {}
         self._failures: dict[str, int] = {}
         self._deferred: dict[tuple[str, str, str], asyncio.Task[None]] = {}
@@ -460,11 +459,7 @@ class PushSender:
         self, session_id: str | None = None, *, reason: str = "resolved"
     ) -> int:
         """Drop pending deferrals, for one session or all of them."""
-        keys = [
-            key
-            for key in self._deferred
-            if session_id is None or key[0] == session_id
-        ]
+        keys = [key for key in self._deferred if session_id is None or key[0] == session_id]
         for key in keys:
             self._deferred.pop(key).cancel()
             decision = self._deferred_decisions.pop(key, None)
@@ -543,9 +538,7 @@ class PushSender:
         if _resolves_attention(event):
             # The user dealt with this session (typed into it, or the agent resumed),
             # so anything held for it is answered and must not arrive late.
-            await self.cancel_pending(
-                event.session_id or "", reason=f"resolved_by_{event.type}"
-            )
+            await self.cancel_pending(event.session_id or "", reason=f"resolved_by_{event.type}")
         classification = notification_classification(event)
         if classification is None:
             return
@@ -575,9 +568,7 @@ class PushSender:
             return
         await self._dispatch(context, classification.note)
 
-    async def _settle(
-        self, context: NotificationDecisionContext, note: dict[str, str]
-    ) -> None:
+    async def _settle(self, context: NotificationDecisionContext, note: dict[str, str]) -> None:
         key = (context.session_id, note["category"])
         if key in self._settling:
             # Already waiting out this session's readiness; a repeat idle inside the
@@ -591,9 +582,7 @@ class PushSender:
                 reason="already_settling",
             )
             return
-        task = asyncio.create_task(
-            self._dispatch_settled(key, note, context), name="push-settle"
-        )
+        task = asyncio.create_task(self._dispatch_settled(key, note, context), name="push-settle")
         self._settling[key] = task
         self._settling_decisions[key] = context
 
@@ -633,9 +622,7 @@ class PushSender:
         )
         await self._dispatch(context, note)
 
-    async def _dispatch(
-        self, context: NotificationDecisionContext, note: dict[str, str]
-    ) -> None:
+    async def _dispatch(self, context: NotificationDecisionContext, note: dict[str, str]) -> None:
         subs = self._store.list()
         if not subs:
             await self._record_decision(
@@ -836,13 +823,16 @@ class PushSender:
 
     async def _send(self, sub: dict[str, Any], note: dict[str, str]) -> bool:
         payload = json.dumps(
-            {
-                "title": note["title"],
-                "body": note["body"],
-                "type": note["category"],
-                "tag": note["category"],
-                "url": "/",
-            }
+            localize_payload(
+                {
+                    "title": note["title"],
+                    "body": note["body"],
+                    "type": note["category"],
+                    "tag": note["category"],
+                    "url": "/",
+                },
+                resolve_ui_locale(self._language()),
+            )
         )
         try:
             await asyncio.to_thread(

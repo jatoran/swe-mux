@@ -1,3 +1,4 @@
+import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 // Settings → Appearance → Session rows.
 //
 // The row is configured by placing fields, not by ticking boxes: where a field
@@ -56,7 +57,7 @@ const PREVIEW_CONTEXT = { calm: 0.22, warn: 0.48, high: 0.68, crit: 0.94 }
 
 const PREVIEW_SESSIONS: Session[] = [
   sample({
-    id: 'preview-working', name: 'refactor tokenizer', backend: 'codex', model: 'gpt-5-codex',
+    id: 'preview-working', get name() { return t("SessionRowSettings.6d23437fd8") }, backend: 'codex', model: 'gpt-5-codex',
     state: 'working', state_detail: 'apply_patch', state_since: NOW - 1320,
     // The one session in the preview that speaks, so the read-aloud mark has something to
     // draw. `auto` rather than `on_demand`: the accent belongs to the mode that makes a
@@ -75,7 +76,7 @@ const PREVIEW_SESSIONS: Session[] = [
     provider_account_hashes: { openai: 'a1b2c3d4e5f6' },
   }),
   sample({
-    id: 'preview-ready', name: 'status detection v2', model: 'opus',
+    id: 'preview-ready', get name() { return t("SessionRowSettings.b33cd8e682") }, model: 'opus',
     state: 'idle', last_turn_ms: 72_000,
     context_pct: PREVIEW_CONTEXT.calm, context_peak_pct: 0.55,
     worked_ms: 9 * 60_000,
@@ -90,7 +91,7 @@ const PREVIEW_SESSIONS: Session[] = [
     },
   }),
   sample({
-    id: 'preview-awaiting', name: 'push notifications', model: 'opus',
+    id: 'preview-awaiting', get name() { return t("SessionRowSettings.29e77a40bc") }, model: 'opus',
     state: 'awaiting', awaiting_reason: 'approval', state_detail: 'Bash(rm -rf)',
     state_since: NOW - 300,
     context_pct: PREVIEW_CONTEXT.high, context_peak_pct: PREVIEW_CONTEXT.high,
@@ -102,7 +103,7 @@ const PREVIEW_SESSIONS: Session[] = [
     },
   }),
   sample({
-    id: 'preview-worktree', name: 'audit sweep', backend: 'codex', model: 'gpt-5-codex',
+    id: 'preview-worktree', get name() { return t("SessionRowSettings.4e585d2766") }, backend: 'codex', model: 'gpt-5-codex',
     state: 'working', state_since: NOW - 10_800,
     context_pct: PREVIEW_CONTEXT.crit, context_peak_pct: 0.97,
     worked_ms: 3 * 3600_000, turn_started_at: NOW - 10_800,
@@ -135,10 +136,10 @@ const PREVIEW_FLEET = deriveRowContext(
 )
 
 const SHAPES: Array<{ id: DotShape; label: string }> = [
-  { id: 'hexagon', label: 'Hexagon' }, { id: 'circle', label: 'Circle' }, { id: 'square', label: 'Square' },
+  { id: 'hexagon', get label() { return t("SessionRowSettings.ddcc1ac4a5") } }, { id: 'circle', get label() { return t("SessionRowSettings.b93d3bcecf") } }, { id: 'square', get label() { return t("SessionRowSettings.c11092bc08") } },
 ]
 const SIZE_PROFILES: Array<{ id: SettingsProfile; label: string }> = [
-  { id: 'desktop', label: 'Size on desktop' }, { id: 'mobile', label: 'Size on mobile' },
+  { id: 'desktop', get label() { return t("SessionRowSettings.a6a067ba7c") } }, { id: 'mobile', get label() { return t("SessionRowSettings.d609da24ce") } },
 ]
 const sizeKey = (profile: SettingsProfile): 'dotSizeDesktop' | 'dotSizeMobile' =>
   profile === 'mobile' ? 'dotSizeMobile' : 'dotSizeDesktop'
@@ -147,17 +148,17 @@ const SETTLE_MS = 250
 
 /** Shared with the top-bar editor, so the two surfaces name one choice one way. */
 export const CWD_STYLE_OPTIONS: Array<{ value: CwdStyle; label: string }> = [
-  { value: 'leaf', label: 'Folder name' },
-  { value: 'relative', label: 'Path inside the Project' },
-  { value: 'full', label: 'Full path' },
+  { value: 'leaf', get label() { return t("SessionRowSettings.14d34edf50") } },
+  { value: 'relative', get label() { return t("SessionRowSettings.39e06f1225") } },
+  { value: 'full', get label() { return t("SessionRowSettings.ff5bec3a8e") } },
 ]
 
 const CONTEXT_MODES: Array<{ id: ContextRender; label: string; hint: string }> = [
-  { id: 'arc', label: 'Around the indicator', hint: 'Costs no row width; peak marked on the outline.' },
-  { id: 'gauge', label: 'Gauge', hint: 'Four cells in the row, comparable down the list.' },
-  { id: 'percent', label: 'Percentage', hint: 'Exact number in the row.' },
-  { id: 'both', label: 'Gauge and percentage', hint: 'The cells with the exact number beside them.' },
-  { id: 'off', label: 'Off', hint: 'Context pressure is not shown.' },
+  { id: 'arc', get label() { return t("SessionRowSettings.b52d7c4843") }, get hint() { return t("SessionRowSettings.d2e6939a34") } },
+  { id: 'gauge', get label() { return t("SessionRowSettings.f6d8f4c86c") }, get hint() { return t("SessionRowSettings.2c0426c873") } },
+  { id: 'percent', get label() { return t("SessionRowSettings.379db318f5") }, get hint() { return t("SessionRowSettings.6f4c3d7fc9") } },
+  { id: 'both', get label() { return t("SessionRowSettings.0846db3956") }, get hint() { return t("SessionRowSettings.f08eea084e") } },
+  { id: 'off', get label() { return t("SessionRowSettings.ca7981b46e") }, get hint() { return t("SessionRowSettings.d725471ef5") } },
 ]
 
 /**
@@ -170,15 +171,15 @@ const CONTEXT_MODES: Array<{ id: ContextRender; label: string; hint: string }> =
 const CONTEXT_BANDS: Array<{
   key: 'contextWarn' | 'contextHigh' | 'contextCrit'; label: string
 }> = [
-  { key: 'contextWarn', label: 'Yellow from' },
-  { key: 'contextHigh', label: 'Orange from' },
-  { key: 'contextCrit', label: 'Red from' },
+  { key: 'contextWarn', get label() { return t("SessionRowSettings.9287218c00") } },
+  { key: 'contextHigh', get label() { return t("SessionRowSettings.93ea627d76") } },
+  { key: 'contextCrit', get label() { return t("SessionRowSettings.1f0ccb6dc9") } },
 ]
 
 const STANDING_MODES: Array<{ id: StandingRender; label: string; hint: string }> = [
-  { id: 'row', label: 'Glyphs in the flag strip', hint: 'Says which kind and how many (⟳ loop or cron, ≡ background tasks, ⑂ subagents).' },
-  { id: 'indicator', label: 'Pip on the indicator', hint: 'Costs no row width at all, and says only that something is standing — the kinds and counts move to the tooltip.' },
-  { id: 'off', label: 'Off', hint: 'Standing activity is not marked on the row.' },
+  { id: 'row', get label() { return t("SessionRowSettings.cb260f4b27") }, get hint() { return t("SessionRowSettings.cdb20e9607") } },
+  { id: 'indicator', get label() { return t("SessionRowSettings.877d69ffee") }, get hint() { return t("SessionRowSettings.5654240a4b") } },
+  { id: 'off', get label() { return t("SessionRowSettings.ca7981b46e") }, get hint() { return t("SessionRowSettings.cf9998e49c") } },
 ]
 
 export function SessionRowSettings() {
@@ -193,9 +194,7 @@ export function SessionRowSettings() {
   const previewMetricRef = useRef<HTMLDivElement>(null)
   const previewBudget = useRowBudget(previewMetricRef)
   const previewContext = useMemo(
-    () => ({ ...PREVIEW_FLEET, budget: previewBudget }),
-    [previewBudget],
-  )
+    () => ({ ...PREVIEW_FLEET, budget: previewBudget }), [previewBudget, uiLocale.value, catalogRevision.value])
 
   useEffect(() => {
     const sync = () => setConfig(loadSessionRowConfig())
@@ -206,7 +205,7 @@ export function SessionRowSettings() {
   const save = (next: SessionRowConfig) => {
     saveSessionRowConfig(next)
       .then(() => setError(''))
-      .catch(() => setError('Could not save the row layout. The daemon may be restarting; try again.'))
+      .catch(() => setError(t("SessionRowSettings.9bea9c5c54")))
   }
 
   const change = (next: SessionRowConfig) => {
@@ -240,17 +239,17 @@ export function SessionRowSettings() {
     return <li key={id} class="row-slot">
       <span class="row-slot-name">{descriptor.label}</span>
       <Dropdown
-        ariaLabel={`${descriptor.label} visibility`}
-        title={`Notable: ${descriptor.notable}`}
+        ariaLabel={t("SessionRowSettings.e1025b7b12", { value1: descriptor.label })}
+        title={t("SessionRowSettings.66fc791f7c", { notable: descriptor.notable })}
         value={mode}
         onChange={value => change(setFieldMode(config, id, value === 'always' ? 'always' : 'notable'))}
-        options={[{ value: 'notable', label: 'when notable' }, { value: 'always', label: 'always' }]}
+        options={[{ value: 'notable', get label() { return t("SessionRowSettings.ea44c278ae") } }, { value: 'always', get label() { return t("SessionRowSettings.9cdc6c47aa") } }]}
       />
       <span class="row-slot-actions">
-        <button type="button" title="Move earlier" disabled={index === 0} onClick={() => move(line, align, id, -1)}>↑</button>
-        <button type="button" title="Move later" disabled={index === total - 1} onClick={() => move(line, align, id, 1)}>↓</button>
-        <button type="button" title={`Move to the ${other} side`} onClick={() => change(placeField(config, id, line, other))}>{align === 'left' ? '→' : '←'}</button>
-        <button type="button" class="danger" title="Remove from the row" disabled={id === 'title'} onClick={() => change(removeField(config, id))}>×</button>
+        <button type="button" title={t("SessionRowSettings.736612d4d0")} disabled={index === 0} onClick={() => move(line, align, id, -1)}>↑</button>
+        <button type="button" title={t("SessionRowSettings.d6e856081e")} disabled={index === total - 1} onClick={() => move(line, align, id, 1)}>↓</button>
+        <button type="button" title={t("SessionRowSettings.c384d24b55", { other: other })} onClick={() => change(placeField(config, id, line, other))}>{align === 'left' ? '→' : '←'}</button>
+        <button type="button" class="danger" title={t("SessionRowSettings.1bc9326fae")} disabled={id === 'title'} onClick={() => change(removeField(config, id))}>×</button>
       </span>
     </li>
   }
@@ -258,10 +257,8 @@ export function SessionRowSettings() {
   const section = (line: RowLine, align: RowAlign) => {
     const slots = lineConfig(config, line)[align]
     return <div class="row-section-editor">
-      <h5>{align === 'left' ? 'Left' : 'Right'}</h5>
-      {slots.length
-        ? <ul>{slots.map((slot, index) => slotRow(line, align, slot.id, index, slots.length))}</ul>
-        : <p class="row-section-empty">Nothing placed here.</p>}
+      <h5>{align === 'left' ? t("SessionRowSettings.58eb9032e3") : t("SessionRowSettings.883361d5d6")}</h5>
+      {slots.length ? <ul>{slots.map((slot, index) => slotRow(line, align, slot.id, index, slots.length))}</ul> : <p class="row-section-empty">{t("SessionRowSettings.9124e73399")}</p>}
     </div>
   }
 
@@ -271,19 +268,17 @@ export function SessionRowSettings() {
     return <div class="row-line-editor">
       <h4>{heading}</h4>
       <p>{note}</p>
-      <label>Separator
-        <Dropdown value={source.separator} onChange={value => change({
+      <label>{rich("SessionRowSettings.7cfd5305e0", { value1: <Dropdown value={source.separator} onChange={value => change({
           ...config,
           [line]: { ...source, separator: value as SeparatorId },
-        })} options={SEPARATOR_IDS.map(id => ({ value: id, label: SEPARATORS[id].label }))}/>
-      </label>
+        })} options={SEPARATOR_IDS.map(id => ({ value: id, label: SEPARATORS[id].label }))}/> })}</label>
       <div class="row-section-grid">{section(line, 'left')}{section(line, 'right')}</div>
       {available.length > 0 && <div class="row-field-pool">
-        <span>Add:</span>
+        <span>{t("SessionRowSettings.f552a1e79b")}</span>
         {available.map(field => <button
           key={field.id}
           type="button"
-          title={`Notable: ${field.notable}`}
+          title={t("SessionRowSettings.66fc791f7c", { notable: field.notable })}
           onClick={() => change(placeField(config, field.id, line, 'left'))}
         >{field.label}</button>)}
       </div>}
@@ -291,12 +286,12 @@ export function SessionRowSettings() {
   }
 
   return <div class="session-row-settings">
-    <h3 data-setting="session_rows">Session rows</h3>
+    <h3 data-setting="session_rows" data-heading-message="heading.30921545c4">{t("heading.30921545c4")}</h3>
     <div class="session-row-preview-sticky">
       <div class="session-row-preview-heading">
-        <div><strong>Live preview</strong><small>{previewExpanded?'Four representative states':'One active session'}</small></div>
+        <div><strong>{t("SessionRowSettings.f65ddc1ff3")}</strong><small>{previewExpanded ? t("SessionRowSettings.835e885897") : t("SessionRowSettings.3cfe6603ab")}</small></div>
         <button type="button" aria-expanded={previewExpanded} aria-controls="session-row-preview-list" onClick={()=>setPreviewExpanded(value=>!value)}>
-          {previewExpanded?'Show one row':'Show examples'}
+          {previewExpanded ? t("SessionRowSettings.08ad2dc884") : t("SessionRowSettings.fec71e7d5b")}
         </button>
       </div>
       <div
@@ -332,7 +327,7 @@ export function SessionRowSettings() {
       </div>
     </div>
 
-    <p>The sidebar row is two lines, each with a left and a right section. A field placed nowhere is off. <strong>When notable</strong> shows a field only when its value is worth reading, so a quiet fleet stays quiet and anything visible earned its place.</p>
+    <p>{rich("SessionRowSettings.4c3bf8ddc6", { value1: <strong>{t("SessionRowSettings.f4a13765bd")}</strong> })}</p>
     {error && <p class="settings-inline-error" aria-live="polite">{error}</p>}
 
     <div class="theme-actions">
@@ -342,18 +337,16 @@ export function SessionRowSettings() {
         title={preset.description}
         onClick={() => change(presetConfig(preset.id as RowPresetId))}
       >{preset.label}</button>)}
-      <button type="button" onClick={() => change(defaultSessionRowConfig())}>Reset to default</button>
+      <button type="button" onClick={() => change(defaultSessionRowConfig())}>{t("SessionRowSettings.bc5b45ae7b")}</button>
     </div>
 
-    <h4>State indicator</h4>
-    <label>Shape
-      <Dropdown value={config.dotShape} onChange={value => change({ ...config, dotShape: value as DotShape })}
-        options={SHAPES.map(shape => ({ value: shape.id, label: shape.label }))}/>
-    </label>
+    <h4 data-heading-message="SessionRowSettings.1fff319f0d">{t("SessionRowSettings.1fff319f0d")}</h4>
+    <label>{rich("SessionRowSettings.a8a079fb83", { value1: <Dropdown value={config.dotShape} onChange={value => change({ ...config, dotShape: value as DotShape })}
+        options={SHAPES.map(shape => ({ value: shape.id, label: shape.label }))}/> })}</label>
     {SIZE_PROFILES.map(profile => <label key={profile.id} class="row-size-control">
       <span>
         {profile.label}
-        {profile.id === thisDevice ? ' (this device)' : ''}
+        {profile.id === thisDevice ? t("SessionRowSettings.41de3fbdea") : ''}
       </span>
       <input
         type="range"
@@ -361,7 +354,7 @@ export function SessionRowSettings() {
         max={DOT_SIZE_MAX}
         step={1}
         value={config[sizeKey(profile.id)]}
-        aria-label={`${profile.label} indicator size in pixels`}
+        aria-label={t("SessionRowSettings.5758f3b382", { label: profile.label })}
         onInput={event => {
           changeContinuous({
             ...config,
@@ -370,14 +363,12 @@ export function SessionRowSettings() {
           })
         }}
       />
-      <output>{config[sizeKey(profile.id)]}px</output>
+      <output>{rich("SessionRowSettings.6ae65e0651", { value1: config[sizeKey(profile.id)] })}</output>
     </label>)}
-    <p>The indicator sizes the sidebar row around it: the gutter column, the context ring, the stack thread, and the row's own height are all derived from this number, so a larger indicator gives a taller row rather than a clipped one. Desktop and mobile are separate because the same size is not read the same way at desk distance and at arm's length.</p>
-    <label>Context pressure
-      <Dropdown value={config.context} onChange={value => change({ ...config, context: value as ContextRender })}
-        options={CONTEXT_MODES.map(mode => ({ value: mode.id, label: mode.label }))}/>
-    </label>
-    <p>{CONTEXT_MODES.find(mode => mode.id === config.context)?.hint} The indicator's <em>state</em> colour, pulse, and hollow "engaged" variant are not configurable: they are the one thing every surface reads the same way. The context ramp below is separate — it colours the gauge, not the state.</p>
+    <p>{t("SessionRowSettings.acd0de08f9")}</p>
+    <label>{rich("SessionRowSettings.fbf2b0b705", { value1: <Dropdown value={config.context} onChange={value => change({ ...config, context: value as ContextRender })}
+        options={CONTEXT_MODES.map(mode => ({ value: mode.id, label: mode.label }))}/> })}</label>
+    <p>{rich("SessionRowSettings.1ea87e3bde", { hint: CONTEXT_MODES.find(mode => mode.id === config.context)?.hint, value2: <em>{t("SessionRowSettings.4ba69735ca")}</em> })}</p>
     {config.context !== 'off' && <>
       {CONTEXT_BANDS.map(band => <label key={band.key} class="row-size-control">
         <span>{band.label}</span>
@@ -387,7 +378,7 @@ export function SessionRowSettings() {
           max={99}
           step={1}
           value={Math.round(config[band.key] * 100)}
-          aria-label={`${band.label}, percent of the context window`}
+          aria-label={t("SessionRowSettings.84faf4f14b", { label: band.label })}
           onInput={event => changeContinuous(
             // Through the shared normalizer rather than clamped here, so a
             // threshold dragged past its neighbour resolves the same way it
@@ -399,47 +390,39 @@ export function SessionRowSettings() {
         />
         <output>{Math.round(config[band.key] * 100)}%</output>
       </label>)}
-      <p>Where the gauge changes colour. Below the first it is green, and each threshold is the reading at which the next colour takes over. The shipped ramp is 40 / 60 / 80, which is deliberately talkative: it makes the sidebar a reading of how much room the fleet has left rather than an alarm that only fires once compacting is already overdue. The cost is that most rows carry some colour, so what you read is the spread down the column. Set it to 70 / 85 / 95 to get back a ramp that stays quiet until it matters.</p>
+      <p>{t("SessionRowSettings.d6de57c6f4")}</p>
     </>}
-    <label>Standing activity
-      <Dropdown value={config.standing} onChange={value => change({ ...config, standing: value as StandingRender })}
-        options={STANDING_MODES.map(mode => ({ value: mode.id, label: mode.label }))}/>
-    </label>
-    <p>{STANDING_MODES.find(mode => mode.id === config.standing)?.hint} Whichever you pick applies to tab strips and menus too, so the same session never reports it twice on one screen.</p>
+    <label>{rich("SessionRowSettings.43d2867a76", { value1: <Dropdown value={config.standing} onChange={value => change({ ...config, standing: value as StandingRender })}
+        options={STANDING_MODES.map(mode => ({ value: mode.id, label: mode.label }))}/> })}</label>
+    <p>{rich("SessionRowSettings.239c1c7130", { hint: STANDING_MODES.find(mode => mode.id === config.standing)?.hint })}</p>
 
-    {lineEditor('top', 'Top line', 'Identity, plus the flag strip on the right: presence-only marks are pinned to the row’s edge so a long title ellipsizes instead of hiding them.')}
-    {lineEditor('bottom', 'Bottom line', 'Everything else. The state word is off by default because the indicator already carries it.')}
+    {lineEditor('top', t("SessionRowSettings.869730606d"), t("SessionRowSettings.f593914f97"))}
+    {lineEditor('bottom', t("SessionRowSettings.d84a88be68"), t("SessionRowSettings.297ed2cea2"))}
 
-    <h4>Git fields</h4>
-    <p>Every Git number describes the <em>checkout</em> a session is working in, never the session: <code>git status</code> answers for the whole repository however it is invoked, so sessions sharing a working tree necessarily report the same figures. A value shared by more than one live session is underlined, and its tooltip says how many.</p>
-    <p><strong>Uncommitted</strong> is measured against HEAD, so it drops to zero as soon as a session commits. <strong>Branch</strong> (marked ⎇) is measured from the merge base with the project's comparison ref, so it keeps counting committed work — usually the number you want for a worktree-per-branch fleet. Both stay blank rather than showing zero when they could not be measured.</p>
+    <h4 data-heading-message="SessionRowSettings.3066923729">{t("SessionRowSettings.3066923729")}</h4>
+    <p>{rich("SessionRowSettings.8bb46eaaab", { value1: <em>{t("SessionRowSettings.c7761e5896")}</em>, value2: <code>{t("SessionRowSettings.e62b04aadf")}</code> })}</p>
+    <p>{rich("SessionRowSettings.af422dbbbb", { value1: <strong>{t("SessionRowSettings.d8194812c0")}</strong>, value2: <strong>{t("SessionRowSettings.52656e8104")}</strong> })}</p>
 
-    <h4>Token style</h4>
-    <label>Lines changed
-      <Dropdown value={config.diffStyle} onChange={value => change({ ...config, diffStyle: value as DiffStyle })} options={[
-        { value: 'numbers', label: 'Numbers (+312 -48)' },
-        { value: 'bar', label: 'Split bar' },
-      ]}/>
-    </label>
-    <label>Small counts
-      <Dropdown value={config.countStyle} onChange={value => change({ ...config, countStyle: value as CountStyle })} options={[
-        { value: 'numbers', label: 'Numbers' },
-        { value: 'pips', label: 'Pips up to four, then numbers' },
-      ]}/>
-    </label>
-    <label>Working directory
-      <Dropdown value={config.cwdStyle} onChange={value => change({ ...config, cwdStyle: value as CwdStyle })} options={CWD_STYLE_OPTIONS}/>
-    </label>
-    <label class="check"><span>Prefix git tokens with a glyph (⎇ branch, ⌂ worktree)</span>
+    <h4 data-heading-message="SessionRowSettings.18807601d1">{t("SessionRowSettings.18807601d1")}</h4>
+    <label>{rich("SessionRowSettings.207a8bcac4", { value1: <Dropdown value={config.diffStyle} onChange={value => change({ ...config, diffStyle: value as DiffStyle })} options={[
+        { value: 'numbers', get label() { return t("SessionRowSettings.fab4489695") } },
+        { value: 'bar', get label() { return t("SessionRowSettings.30f9c04830") } },
+      ]}/> })}</label>
+    <label>{rich("SessionRowSettings.7e0931c6f4", { value1: <Dropdown value={config.countStyle} onChange={value => change({ ...config, countStyle: value as CountStyle })} options={[
+        { value: 'numbers', get label() { return t("SessionRowSettings.b0640f0fc4") } },
+        { value: 'pips', get label() { return t("SessionRowSettings.9e74278ca4") } },
+      ]}/> })}</label>
+    <label>{rich("SessionRowSettings.5ed1b842bf", { value1: <Dropdown value={config.cwdStyle} onChange={value => change({ ...config, cwdStyle: value as CwdStyle })} options={CWD_STYLE_OPTIONS}/> })}</label>
+    <label class="check"><span>{t("SessionRowSettings.1d4d684c3f")}</span>
       <input type="checkbox" checked={config.gitGlyphs} onChange={event => change({ ...config, gitGlyphs: event.currentTarget.checked })} />
     </label>
 
-    <h4>Mobile</h4>
-    <label class="check"><span>Show the same fields on mobile</span>
+    <h4 data-heading-message="SessionRowSettings.cbaad3cf4a">{t("SessionRowSettings.cbaad3cf4a")}</h4>
+    <label class="check"><span>{t("SessionRowSettings.bf9427ed33")}</span>
       <input type="checkbox" checked={config.mobileFields} onChange={event => change({ ...config, mobileFields: event.currentTarget.checked })} />
     </label>
-    <p>Off, the phone renders identity only — indicator, provider mark, title — which is what it has always shown. On, mobile rows carry the configured fields, shedding the lowest-priority ones as the width runs out. The layout itself is shared: both screens want the same information in the same order, and only how much of it fits differs.</p>
+    <p>{t("SessionRowSettings.8521101f77")}</p>
 
-    <p>Fields the row can draw: {ROW_FIELDS.map(field => field.label).join(', ')}.</p>
+    <p>{rich("SessionRowSettings.b2afc660f1", { value1: ROW_FIELDS.map(field => field.label).join(', ') })}</p>
   </div>
 }

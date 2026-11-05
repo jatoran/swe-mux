@@ -1,3 +1,5 @@
+import { locale as uiLocale } from './localization/index.ts'
+import { rich, t } from './localization/index.ts'
 import { useEffect, useState } from 'preact/hooks'
 import { api } from './api'
 import { CompactGrantFlag } from './GrantGate'
@@ -54,7 +56,7 @@ import { clipPartIds, clipParts, groupPosition, partSpans, spansDuration } from 
 const CLIP_LIMIT = 60
 
 const formatClock = (seconds: number) =>
-  new Date(seconds * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  new Date(seconds * 1000).toLocaleTimeString(uiLocale.value, { hour: 'numeric', minute: '2-digit' })
 
 /** Elapsed/total, for the transport. Clamped: a clip with no duration reads `0:00`. */
 const formatSeconds = (value: number) => {
@@ -109,7 +111,7 @@ export function VoiceReadTab({
 
   const load = () => api<{ items: VoiceClip[] }>('GET', `/api/voice/clips?limit=${CLIP_LIMIT}`)
     .then(result => setClips(result.items))
-    .catch(cause => setError(cause instanceof Error ? cause.message : 'clips could not be loaded'))
+    .catch(cause => setError(cause instanceof Error ? cause.message : t("VoiceReadTab.a55d2dfafa")))
 
   // Drawn or not: the tab stays mounted so it keeps its list across tab switches, and a
   // clip that lands while the assistant is on screen must not need a refetch to appear.
@@ -151,7 +153,7 @@ export function VoiceReadTab({
       // a failed generation would otherwise leave this device waiting to play a clip
       // that will never arrive, and holding every later one behind it.
       cancelRequestedStream(streamId)
-      setError(cause instanceof Error ? cause.message : 'generation failed')
+      setError(cause instanceof Error ? cause.message : t("VoiceReadTab.ebd5a219af"))
     } finally { setSpeaking(false) }
   }
 
@@ -161,23 +163,23 @@ export function VoiceReadTab({
   const held = heldClipTotal()
 
   if (variant === 'peek') {
-    return <p class="voice-dock-line" title="Read aloud">
-      <b>tts</b>
-      <em class={enabled ? '' : 'unavailable'}>{enabled ? (autoplayEnabled() ? 'on · this device' : 'on · muted here') : 'off'}</em>
-      <span>{held ? `${held} clip${held === 1 ? '' : 's'} waiting` : playback.clipId ? 'speaking' : 'nothing waiting'}</span>
+    return <p class="voice-dock-line" title={t("heading.0791ec6847")}>
+      <b>{t("VoiceReadTab.317e938a48")}</b>
+      <em class={enabled ? '' : 'unavailable'}>{enabled ? (autoplayEnabled() ? t("VoiceReadTab.870121cb2a") : t("VoiceReadTab.ef019fd49d")) : t("VoiceReadTab.b4dc66dde8")}</em>
+      <span>{held ? t("VoiceReadTab.bad1f3dd52", { held: held, value2: (held === 1) ? 'yes' : 'no' }) : playback.clipId ? t("VoiceReadTab.875c34e615") : t("VoiceReadTab.53fc431ccd")}</span>
     </p>
   }
 
   if (!enabled) {
     return <div class="voice-read">
       <CompactGrantFlag id="voice.tts"
-        heading="Read aloud is off."
-        consequence="No audio is generated or played."
+        heading={t("VoiceReadTab.7eeb7d0093")}
+        consequence={t("VoiceReadTab.e3b22a3eb2")}
         onGranted={onStatusChanged}/>
     </div>
   }
 
-  const modeLabel = mode === 'on_demand' ? 'on demand' : mode === 'auto' ? 'auto on reply' : 'off'
+  const modeLabel = mode === 'on_demand' ? t("VoiceReadTab.cfa1f74b1c") : mode === 'auto' ? t("VoiceReadTab.d1b3a2a6d7") : 'off'
   // The clip the transport addresses: whatever this device loaded last, whether or not it
   // is still playing and whichever session it belongs to. A clip older than the list's
   // window has no row to describe it, so the bar simply does not draw rather than
@@ -201,57 +203,49 @@ export function VoiceReadTab({
           repeated on every pane answered the same question once per pane, and the pane
           it was on was whichever one happened to be drawn. */}
       <div class="voice-read-session">
-        <span>session</span>
-        <strong title={session ? sessionDisplayName(session) : 'No agent session focused'}>
-          {session ? sessionDisplayName(session) : 'no agent focused'}
+        <span>{t("VoiceReadTab.3f3af1eceb")}</span>
+        <strong title={session ? sessionDisplayName(session) : t("VoiceReadTab.811553d6c4")}>
+          {session ? sessionDisplayName(session) : t("VoiceReadTab.52271b2288")}
         </strong>
         <button
           class={`voice-read-mode ${mode}`}
           disabled={!session}
-          aria-label={`Read aloud for this session: ${modeLabel}. Click to change.`}
-          title={session
-            ? `This session generates ${modeLabel} · click to cycle off → on demand → auto`
-            : 'Focus an agent session to set how it participates'}
+          aria-label={t("VoiceReadTab.48ad205972", { modeLabel: modeLabel })}
+          title={session ? t("VoiceReadTab.ad8a9ae7ff", { modeLabel: modeLabel }) : t("VoiceReadTab.ce515c473d")}
           onClick={() => onMode(mode === 'off' ? 'on_demand' : mode === 'on_demand' ? 'auto' : 'off')}
-        >tts:{mode === 'on_demand' ? 'tap' : mode}</button>
+        >{rich("VoiceReadTab.f2ad1d1b5d", { value1: mode === 'on_demand' ? t("VoiceReadTab.729cd87c63") : mode })}</button>
         <button
           class={`voice-read-content ${content}`}
           disabled={!session}
-          aria-label={`Spoken content for this session: ${content}. Click to switch.`}
-          title={content === 'summary'
-            ? 'Speaking LLM summaries of each reply · click for verbatim (reads the reply itself, no LLM)'
-            : 'Speaking replies verbatim, no LLM involved · click for spoken summaries'}
+          aria-label={t("VoiceReadTab.cb8dab1a4e", { content: content })}
+          title={content === 'summary' ? t("VoiceReadTab.8898a10e6f") : t("VoiceReadTab.4f2992ca21")}
           onClick={() => onContent(content === 'summary' ? 'verbatim' : 'summary')}
         >{content}</button>
         {/* Deliberately not disabled by `mode`: see `speak`. */}
         <button
           class="voice-read-speak"
           disabled={!session || speaking}
-          aria-label="Speak the focused session’s last reply now"
-          title={session
-            ? `Generate ${content === 'summary' ? 'a spoken summary' : 'verbatim audio'} of this session’s last reply and play it`
-            : 'Focus an agent session to speak its last reply'}
+          aria-label={t("VoiceReadTab.0c062c2283")}
+          title={session ? t("VoiceReadTab.f8a5c8d72f", { value1: (content === 'summary') ? 'yes' : 'no' }) : t("VoiceReadTab.f7a9a673dc")}
           onClick={() => void speak()}
-        >{speaking ? 'speaking…' : '↻ speak'}</button>
+        >{speaking ? t("VoiceReadTab.85269fb6d0") : t("VoiceReadTab.260f2aa524")}</button>
       </div>
       {/* Layer 3, stored in this browser. */}
       <button
         class={`voice-read-autoplay ${autoplayEnabled() ? 'active' : ''}`}
         aria-pressed={autoplayEnabled()}
-        title={autoplayEnabled()
-          ? 'New clips play on this device, for the session you are focused on · click to stop autoplaying here'
-          : 'New clips will NOT play on this device · click to autoplay them here'}
+        title={autoplayEnabled() ? t("VoiceReadTab.7a71e44e84") : t("VoiceReadTab.2970c7f383")}
         onClick={() => setAutoplayEnabled(!autoplayEnabled())}
-      >{autoplayEnabled() ? '🔊 this device' : '🔇 this device'}</button>
+      >{autoplayEnabled() ? t("VoiceReadTab.99e2e6da0e") : t("VoiceReadTab.59f2d0a300")}</button>
       {held > 0 && <button
         class="voice-read-held"
-        title={`Play the ${held} clip${held === 1 ? '' : 's'} that finished while another session had focus`}
+        title={t("VoiceReadTab.5cce5bf057", { held: held, value2: (held === 1) ? 'yes' : 'no' })}
         onClick={() => { unlockPlayback(); playAllHeldClips() }}
-      >▶ {held} held</button>}
+      >{rich("VoiceReadTab.cb14483ae8", { held: held })}</button>}
       {/* Layer 1 lives in Settings and is only editable there: a gate may turn a switch
           on from anywhere, but exactly one editor may turn it off. */}
-      <SettingLink target="voice.tts" class="voice-read-master" title="Read aloud is on · its master switch lives in Settings → Voice">master: on</SettingLink>
-      <button class="dictation-settings" aria-label="Open Voice settings" title="Open Voice settings (engine, voice, budget, cache)" onClick={onOpenSettings}>⚙</button>
+      <SettingLink target="voice.tts" class="voice-read-master" title={t("VoiceReadTab.fa2b007108")}>{t("VoiceReadTab.90ac5322dd")}</SettingLink>
+      <button class="dictation-settings" aria-label={t("VoiceReadTab.255080abea")} title={t("VoiceReadTab.bfb2762d71")} onClick={onOpenSettings}>⚙</button>
     </div>
     {error && <p class="voice-read-error">{error}</p>}
     {/* The transport, for whatever this device last loaded.
@@ -260,11 +254,11 @@ export function VoiceReadTab({
         inert - and the row that is playing scrolls out of a sixty-clip list, taking its
         scrubber with it. It stays after a clip ends (playback keeps the clip id), which
         is what makes "play that back from the middle" possible at all. */}
-    {loaded && <div class="voice-read-now" role="group" aria-label="Playback">
+    {loaded && <div class="voice-read-now" role="group" aria-label={t("VoiceReadTab.2db1db0706")}>
       <button
         class="voice-read-now-play"
-        aria-label={playback.playing ? 'Pause' : 'Play'}
-        title={playback.playing ? 'Pause' : 'Play'}
+        aria-label={playback.playing ? t("VoiceReadTab.858e4ba7a2") : t("VoiceReadTab.436e61016e")}
+        title={playback.playing ? t("VoiceReadTab.858e4ba7a2") : t("VoiceReadTab.436e61016e")}
         onClick={() => {
           unlockPlayback()
           if (playback.playing) { pausePlayback(); return }
@@ -272,25 +266,23 @@ export function VoiceReadTab({
           // the top is not a pause - while a reply that has finished plays again
           // from its first segment.
           if (clipGroupDeviceState(loaded) === 'playing') {
-            void resumePlayback().catch(() => setError('Playback failed.'))
+            void resumePlayback().catch(() => setError(t("VoiceReadTab.8c3a64e956")))
             return
           }
-          void playClipGroup(loaded, loaded.session_id).catch(() => setError('Playback failed.'))
+          void playClipGroup(loaded, loaded.session_id).catch(() => setError(t("VoiceReadTab.8c3a64e956")))
         }}
       >{playback.playing ? '⏸' : '▶'}</button>
       <input
         class="voice-read-seek" type="range" min="0" max={loadedDuration || 1} step="0.1"
-        value={loadedPosition} aria-label="Seek within the clip"
+        value={loadedPosition} aria-label={t("VoiceReadTab.b764d3ad4c")}
         onInput={event => seekWithinGroup(loaded, Number(event.currentTarget.value), loaded.session_id)} />
       <span class="voice-read-now-time">
         {formatSeconds(loadedPosition)}/{formatSeconds(loadedDuration)}
       </span>
       <span class="voice-read-now-text" title={loaded.text || ''}>{loaded.text || '…'}</span>
     </div>}
-    <div class="voice-read-clips" role="list" aria-label="Voice clips">
-      {clips.length === 0
-        ? <p class="voice-read-empty">No clips yet. A session set to <code>auto</code> makes one at the end of every reply; <code>on demand</code> makes one when you ask.</p>
-        : clips.map(clip => {
+    <div class="voice-read-clips" role="list" aria-label={t("VoiceReadTab.6d5bf4219d")}>
+      {clips.length === 0 ? <p class="voice-read-empty">{rich("VoiceReadTab.d33c58267f", { value1: <code>{t("VoiceReadTab.929260ad9b")}</code>, value2: <code>{t("VoiceReadTab.cfa1f74b1c")}</code> })}</p> : clips.map(clip => {
           const device = clipGroupDeviceState(clip)
           const state = clipRowState(clip, device)
           // Any of the reply's segments being out of the speakers is this reply
@@ -305,22 +297,22 @@ export function VoiceReadTab({
             <button
               class="voice-read-play"
               disabled={!playable}
-              aria-label={playing ? 'Pause this clip' : 'Play this clip'}
-              title={clip.status === 'failed' ? (clip.error || 'generation failed') : playing ? 'Pause' : 'Play'}
+              aria-label={playing ? t("VoiceReadTab.f729cf5093") : t("VoiceReadTab.0df2309f5a")}
+              title={clip.status === 'failed' ? (clip.error || t("VoiceReadTab.ebd5a219af")) : playing ? t("VoiceReadTab.858e4ba7a2") : t("VoiceReadTab.436e61016e")}
               onClick={() => {
                 unlockPlayback()
                 if (playing) { pausePlayback(); return }
-                void playClipGroup(clip, clip.session_id).catch(() => setError('Playback failed.'))
+                void playClipGroup(clip, clip.session_id).catch(() => setError(t("VoiceReadTab.8c3a64e956")))
               }}
             >{playing ? '⏸' : '▶'}</button>
-            <span class="voice-read-kind" title={`Kind: ${clip.content_mode}`}>{clip.content_mode}</span>
-            <span class="voice-read-when" title={`The reply arrived at ${formatClock(clipArrival(clip))}`}>{formatClock(clipArrival(clip))}</span>
+            <span class="voice-read-kind" title={t("VoiceReadTab.62b4be45a9", { content_mode: clip.content_mode })}>{clip.content_mode}</span>
+            <span class="voice-read-when" title={t("VoiceReadTab.2efffbb8ac", { value1: formatClock(clipArrival(clip)) })}>{formatClock(clipArrival(clip))}</span>
             <span class="voice-read-text" title={clip.text || clip.error || ''}>{clip.text || clip.error || '…'}</span>
             <span class={`voice-read-state ${state}`}>{state}</span>
             {device === 'held' && <button
               class="voice-read-dismiss"
-              aria-label="Dismiss this session's held clips"
-              title="Dismiss the clips this session is holding for you"
+              aria-label={t("VoiceReadTab.b0489ab24a")}
+              title={t("VoiceReadTab.eba6906b34")}
               onClick={() => dismissHeldClips(clip.session_id)}
             >×</button>}
           </div>

@@ -62,6 +62,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
+from .ui_messages import ui_message
+
 __all__ = [
     "AXIS_NOUN",
     "BUDGET_MODES",
@@ -198,18 +200,20 @@ def validate(
     while it waits to be switched back on.
     """
     if budget.mode not in BUDGET_MODES:
-        errors[f"{field}.mode"] = f"must be one of {', '.join(BUDGET_MODES)}"
+        errors[f"{field}.mode"] = ui_message("budget.3fe7eabe5b", value1=", ".join(BUDGET_MODES))
         return
     needs_tokens = budget.mode in {"tokens", "either"}
     needs_usd = budget.mode in {"usd", "either"}
     if needs_tokens and budget.tokens is None:
-        errors[f"{field}.tokens"] = f"a token limit is required in {budget.mode} mode"
+        errors[f"{field}.tokens"] = ui_message("budget.d275ed43d3", value1=budget.mode)
     if needs_usd and budget.usd is None:
-        errors[f"{field}.usd"] = f"a dollar limit is required in {budget.mode} mode"
+        errors[f"{field}.usd"] = ui_message("budget.9fe70813da", value1=budget.mode)
     if budget.tokens is not None and not min_tokens <= budget.tokens <= max_tokens:
-        errors[f"{field}.tokens"] = f"must be between {min_tokens} and {max_tokens}"
+        errors[f"{field}.tokens"] = ui_message(
+            "budget.75627cc2fe", value1=min_tokens, value2=max_tokens
+        )
     if budget.usd is not None and not min_usd <= budget.usd <= max_usd:
-        errors[f"{field}.usd"] = f"must be between {min_usd} and {max_usd}"
+        errors[f"{field}.usd"] = ui_message("budget.75627cc2fe", value1=min_usd, value2=max_usd)
 
 
 @dataclass(frozen=True, slots=True)

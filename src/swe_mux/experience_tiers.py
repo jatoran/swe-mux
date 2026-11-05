@@ -53,6 +53,7 @@ from .automation_registry import (
     enabling_closure,
 )
 from .harness import HARNESSES
+from .ui_messages import ui_message
 
 TIERS = ("terminal", "deterministic", "automations")
 
@@ -96,7 +97,7 @@ def tier_changes(
     moment it was chosen, and the new harness's surfaces all carry gates).
     """
     if tier not in TIERS:
-        raise ValueError(f"unknown experience tier {tier!r}")
+        raise ValueError(ui_message("experience_tiers.5925fe1060", value1=repr(tier)))
     changes = dict(_DETERMINISTIC)
     if tier == "terminal":
         all_off = {name: False for name in HARNESSES}
@@ -183,7 +184,7 @@ def autonomy_changes(level: str) -> dict[str, Any]:
     emergency pause, head-of-line order - still applies.
     """
     if level not in AUTONOMY_LEVELS:
-        raise ValueError(f"unknown autonomy level {level!r}")
+        raise ValueError(ui_message("experience_tiers.7c37d87eed", value1=repr(level)))
     changes = dict(_SUPERVISED)
     if level == "assisted":
         changes["auto_delivery_enabled"] = True

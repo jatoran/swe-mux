@@ -11,6 +11,7 @@ from typing import Literal, TypeGuard
 
 from .composer_input import DEFAULT_NEWLINE_KEYS
 from .host_platform import IS_WINDOWS
+from .ui_messages import ui_message
 
 StateSource = Literal["hook", "transcript", "pty", "cli_state"]
 # Where tokens, cost, and model come from. `transcript` parses the harness's own
@@ -129,9 +130,9 @@ class ConversationDiscovery:
     def __post_init__(self) -> None:
         if self.store:
             if self.subdirectory is not None or self.pattern is not None:
-                raise ValueError("a store discovery declares no filesystem layout")
+                raise ValueError(ui_message("harness.ddff8aad96"))
         elif not self.subdirectory or not self.pattern:
-            raise ValueError("a filesystem discovery must declare a subdirectory and pattern")
+            raise ValueError(ui_message("harness.660f11d073"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,7 +214,7 @@ class ModelCatalog:
 
     def __post_init__(self) -> None:
         if not self.argv:
-            raise ValueError("a model catalog must declare the argv that lists models")
+            raise ValueError(ui_message("harness.808f6952ba"))
 
 
 # How a CLI spells the models it accepts. The three are not styles; they are
@@ -312,13 +313,13 @@ class ModelSelection:
 
     def __post_init__(self) -> None:
         if not self.argv:
-            raise ValueError("a model selection must declare the argv introducing it")
+            raise ValueError(ui_message("harness.36e428e58b"))
         if self.vocabulary == "namespaced" and not self.id_prefixes:
-            raise ValueError("a namespaced model selection must declare its id namespace")
+            raise ValueError(ui_message("harness.e69c73c341"))
         if self.vocabulary != "namespaced" and self.id_prefixes:
-            raise ValueError(f"a {self.vocabulary} model selection has no id namespace")
+            raise ValueError(ui_message("harness.4b2169a919", value1=self.vocabulary))
         if not self.unverifiable_aliases <= self.aliases:
-            raise ValueError("every unverifiable alias must also be an alias")
+            raise ValueError(ui_message("harness.5d6f98a06e"))
 
     def resolve(self, name: str) -> str | None:
         """The value the CLI is given for `name`, or ``None`` when unrecognized."""
@@ -352,8 +353,7 @@ class ModelSelection:
             return "a provider-qualified id such as anthropic/claude-sonnet-4-5"
         if self.vocabulary == "pattern":
             return (
-                "a model name or pattern it fuzzy-matches, such as opus, gpt-5.4, "
-                "or openai/gpt-5.4"
+                "a model name or pattern it fuzzy-matches, such as opus, gpt-5.4, or openai/gpt-5.4"
             )
         namespaces = ", ".join(self.id_prefixes)
         ids = f"a full model id beginning {namespaces}"
@@ -783,36 +783,29 @@ class HarnessDescriptor:
 
     def __post_init__(self) -> None:
         if not self.name or not self.display_name:
-            raise ValueError("harness identity fields must not be empty")
+            raise ValueError(ui_message("harness.5c63a8793a"))
         if len(set(self.state_sources)) != len(self.state_sources):
-            raise ValueError(f"duplicate state source for harness {self.name}")
+            raise ValueError(ui_message("harness.95234c4bd2", value1=self.name))
         if self.touch_scroll_rows_per_report < 1:
-            raise ValueError(f"touch scroll rows must be positive for harness {self.name}")
+            raise ValueError(ui_message("harness.e3b53f4297", value1=self.name))
         if not self.resume_argv:
-            raise ValueError(f"harness {self.name} must declare how its CLI resumes")
+            raise ValueError(ui_message("harness.a680dd9b8c", value1=self.name))
         if not self.skill_invocation_prefix:
-            raise ValueError(f"harness {self.name} must declare a skill invocation prefix")
+            raise ValueError(ui_message("harness.513a892d87", value1=self.name))
         if not self.composer_clear_keys:
-            raise ValueError(f"harness {self.name} must declare a composer clear sequence")
+            raise ValueError(ui_message("harness.23ac0bc76c", value1=self.name))
         if not self.composer_newline:
-            raise ValueError(f"harness {self.name} must declare a composer newline sequence")
+            raise ValueError(ui_message("harness.117276cc79", value1=self.name))
         if self.paste_submit_settle_seconds <= 0:
-            raise ValueError(
-                f"harness {self.name} must declare a positive paste-submit settle"
-            )
+            raise ValueError(ui_message("harness.44e3b9677a", value1=self.name))
         if self.paste_submit_settle_per_kib_seconds < 0:
-            raise ValueError(
-                f"harness {self.name} must not declare a negative paste-submit scaling term"
-            )
+            raise ValueError(ui_message("harness.8908cbea85", value1=self.name))
         if bool(self.spawn_id_argv) != self.assigns_conversation_id:
             # The two say the same thing from opposite ends. A harness that dictates
             # its conversation id has argv that carries it, and a harness with such
             # argv is dictating one; letting them disagree is how a placeholder id
             # gets treated as authoritative.
-            raise ValueError(
-                f"harness {self.name} must declare spawn id argv exactly when it "
-                f"assigns the conversation id"
-            )
+            raise ValueError(ui_message("harness.a1ba3c6719", value1=self.name))
 
     @property
     def level(self) -> HarnessLevel:
@@ -1219,8 +1212,11 @@ HARNESSES: dict[str, HarnessDescriptor] = {
             # never swallowed as a tool name, and `--permission-mode dontAsk` keeps
             # the run non-interactive.
             automations=(
-                "--print", "--permission-mode", "dontAsk",
-                "--allowedTools", "Read,Write,Bash",
+                "--print",
+                "--permission-mode",
+                "dontAsk",
+                "--allowedTools",
+                "Read,Write,Bash",
             ),
         ),
         submission="terminal_line",
@@ -1376,9 +1372,13 @@ HARNESSES: dict[str, HarnessDescriptor] = {
             # still deny the write itself, which does not affect fact capture — the
             # observer records the attempt with its target.
             automations=(
-                "exec", "--sandbox", "workspace-write",
-                "-c", "approval_policy=never",
-                "--skip-git-repo-check", "--json",
+                "exec",
+                "--sandbox",
+                "workspace-write",
+                "-c",
+                "approval_policy=never",
+                "--skip-git-repo-check",
+                "--json",
             ),
         ),
         submission="terminal_line",
@@ -1426,9 +1426,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         # `<data_home>/sessions/<cwd-bucket>/*.jsonl`. Not `cwd_scoped`: the bucket
         # name is a slug rather than a prefix-preserving encoding, so a project scan
         # cannot select directories by prefix and reads them all.
-        conversation_discovery=ConversationDiscovery(
-            subdirectory=("sessions",), pattern="*.jsonl"
-        ),
+        conversation_discovery=ConversationDiscovery(subdirectory=("sessions",), pattern="*.jsonl"),
         reports_transcript_path=True,
         provider_account_management=False,
         hook_ordering_guarantee=True,
@@ -1541,9 +1539,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         conversation_store_file=None,
         # Same layout as oh-my-pi, which is unsurprising for a fork: sessions live
         # under `<data_home>/sessions/<cwd-bucket>/*.jsonl`.
-        conversation_discovery=ConversationDiscovery(
-            subdirectory=("sessions",), pattern="*.jsonl"
-        ),
+        conversation_discovery=ConversationDiscovery(subdirectory=("sessions",), pattern="*.jsonl"),
         # The mux extension reports `ctx.sessionManager.getSessionFile()` on
         # `session_start`. That is pi's only strong pane-to-conversation link:
         # unlike oh-my-pi it writes no `terminal-sessions/<terminal-id>`
@@ -1864,7 +1860,7 @@ def is_backend(name: object) -> TypeGuard[Backend]:
 def require_backend(name: str) -> Backend:
     if is_backend(name):
         return name
-    raise ValueError(f"unknown backend: {name}")
+    raise ValueError(ui_message("harness.0f887fe49e", value1=name))
 
 
 def has_observable_transcript(name: object) -> bool:
@@ -2048,10 +2044,7 @@ def model_refusal(name: object, model: str) -> str | None:
         )
     if selection.resolve(model) is None:
         spoken = normalize_model_name(model) or str(model)
-        return (
-            f"{label} does not recognize the model {spoken!r}; it takes "
-            f"{selection.describe()}"
-        )
+        return f"{label} does not recognize the model {spoken!r}; it takes {selection.describe()}"
     return None
 
 
@@ -2304,9 +2297,7 @@ def live_control_harnesses() -> tuple[str, ...]:
     capability rather than by a skip, exactly as the frontend gates its per-harness
     MCP toggle on the same fact (``public_harness_registry`` capability ``mcp``).
     """
-    return tuple(
-        name for name, harness in HARNESSES.items() if harness.adapter_family != "pi"
-    )
+    return tuple(name for name, harness in HARNESSES.items() if harness.adapter_family != "pi")
 
 
 def live_subagent_harnesses() -> tuple[str, ...]:
@@ -2597,9 +2588,7 @@ def enabled_backends(
     return tuple(result)
 
 
-def resolve_default_harness(
-    *, preferences: Sequence[str], available: Sequence[str]
-) -> str | None:
+def resolve_default_harness(*, preferences: Sequence[str], available: Sequence[str]) -> str | None:
     """The agent harness to use when something needs one and nobody named it.
 
     ``preferences`` is the operator's stated intent in narrowing order - a
@@ -2628,9 +2617,7 @@ def resolve_default_harness(
 
 
 def provider_account_harnesses() -> tuple[str, ...]:
-    return tuple(
-        name for name, harness in HARNESSES.items() if harness.provider_account_management
-    )
+    return tuple(name for name, harness in HARNESSES.items() if harness.provider_account_management)
 
 
 FRONTEND_REGISTRY_SEED_PATH = ("frontend", "src", "harnessRegistrySeed.ts")

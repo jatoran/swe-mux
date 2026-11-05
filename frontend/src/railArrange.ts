@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // In-place Action rail arrangement: the pure rules a drop obeys.
 //
 // This is not the Actions editor's drag (`railDrag.ts`), and the difference is the whole
@@ -186,13 +187,13 @@ export function applyRailArrange(
  * holding a chip can reach.
  */
 export function railArrangeScopeLabel(kind: RailScopeKind): string {
-  return kind === 'fork' ? 'Editing this Project’s rail' : 'Editing the global rail'
+  return kind === 'fork' ? t("railArrange.57f4f9983e") : t("railArrange.920943395d")
 }
 
 export function railArrangeScopeDetail(kind: RailScopeKind): string {
   switch (kind) {
-    case 'fork': return 'This Project has a detached layout. Nothing here reaches any other Project.'
-    case 'delta': return 'Shared rows change everywhere. This Project’s own rows and actions stay here.'
-    default: return 'Every Project that has not detached its layout sees these changes.'
+    case 'fork': return t("railArrange.5b04afa40f")
+    case 'delta': return t("railArrange.7d3f1a908f")
+    default: return t("railArrange.427c4fcac2")
   }
 }

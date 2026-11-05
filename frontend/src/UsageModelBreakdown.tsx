@@ -1,3 +1,4 @@
+import { rich, t } from './localization/index.ts'
 import { useState } from 'preact/hooks'
 import { ModelName } from './ModelName'
 import { UsageBreakdown, UsageTrend } from './AnalyticsPrimitives'
@@ -13,8 +14,8 @@ export function UsageModelBreakdown({sources,visibleDates,resolution,metric}:{so
   const active=models.find(model=>model.id===selected)||models[0]
   const history:UsageRow[]=active?.items.map(row=>({...row,date:row.period}))||[]
   return <div class="usage-model-breakdown">
-    <UsageBreakdown title="By model" rows={models.map(model=>({id:model.id,label:<>{labels.get(model.source)||model.source} · <ModelName model={model.model}/></>,row:model.row}))}/>
-    {!!active&&<section><label class="analytics-chart-picker">Model history<select value={active.id} onChange={event=>setSelected(event.currentTarget.value)}>{models.map(model=><option key={model.id} value={model.id}>{labels.get(model.source)||model.source} · {model.model}</option>)}</select></label><UsageTrend rows={history} metric={metric}/></section>}
-    {!models.length&&<p>No model-level history was reported for this period.</p>}
+    <UsageBreakdown title={t("UsageModelBreakdown.2fbd410f09")} rows={models.map(model=>({id:model.id,label:<>{labels.get(model.source) || model.source} · <ModelName model={model.model}/></>,row:model.row}))}/>
+    {!!active && <section><label class="analytics-chart-picker">{rich("UsageModelBreakdown.31dfb21d34", { value1: <select value={active.id} onChange={event=>setSelected(event.currentTarget.value)}>{models.map(model=><option key={model.id} value={model.id}>{labels.get(model.source) || model.source} · {model.model}</option>)}</select> })}</label><UsageTrend rows={history} metric={metric}/></section>}
+    {!models.length && <p>{t("UsageModelBreakdown.2f0b073599")}</p>}
   </div>
 }

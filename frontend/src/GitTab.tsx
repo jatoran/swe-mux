@@ -1,3 +1,5 @@
+import { dateTimeFormatter, locale as uiLocale } from './localization/index.ts'
+import { rich, t } from './localization/index.ts'
 import type { JSX } from 'preact'
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 import { readGitTabMemory, writeGitTabMemory } from './gitTabCache.ts'
@@ -123,20 +125,20 @@ function describeGitError(cause: unknown, action: string, mayHaveMutated=false):
   const error = cause as ApiError
   const message = cause instanceof Error ? cause.message : String(cause)
   if (error?.detail?.code !== 'git_timeout' && !error?.timeout) return message
-  if(mayHaveMutated)return `Git did not answer in time. ${action} may still have completed - refresh to see.`
-  return `Git did not answer in time while ${action.charAt(0).toLowerCase()}${action.slice(1)}. Refresh to retry.`
+  if(mayHaveMutated)return t("GitTab.4bfff20efc", { action: action })
+  return t("GitTab.7f9e48bd9b", { value1: action.charAt(0).toLowerCase(), value2: action.slice(1) })
 }
 
 function committedLabel(timestamp: number): string {
   if (!timestamp) return ''
-  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' })
+  return dateTimeFormatter({ month: 'short', day: 'numeric' })
     .format(new Date(timestamp * 1000))
 }
 
 /** A landing's moment, to the minute: "when did this branch land" is a same-day question. */
 function landedLabel(timestamp: number): string {
   if (!timestamp) return ''
-  return new Intl.DateTimeFormat(undefined, {
+  return dateTimeFormatter({
     month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
   }).format(new Date(timestamp * 1000))
 }
@@ -145,7 +147,7 @@ function GraphGlyph({ value, commit=false }: { value: string; commit?: boolean }
   return <span class="git-graph-glyph" aria-hidden="true">
     {[...value].map((character, index) => {
       const node=commit&&character==='*'
-      return <i class={`lane-${Math.floor(index / 2) % 5}${node?' node':character.trim()?' edge':''}`} key={`${index}:${character}`}>{node?'●':character}</i>
+      return <i class={`lane-${Math.floor(index / 2) % 5}${node?' node':character.trim()?' edge':''}`} key={`${index}:${character}`}>{node ? '●' : character}</i>
     })}
   </span>
 }
@@ -175,7 +177,7 @@ type ReviewState={files:ReviewFileChange[];locator:ReviewLocator;initialPath:str
 // no better reason than that the tab is not `keepMounted`.
 
 function SummaryHeader({title,summary}:{title:string;summary:ReviewChangeSummary}) {
-  return <h4><span>{title}</span><small>{summary.total} file{summary.total===1?'':'s'} · +{summary.additions} -{summary.deletions}{summary.binaryFiles?` · ${summary.binaryFiles} binary`:''}</small></h4>
+  return <h4><span>{title}</span><small>{rich("GitTab.b04db7323f", { total: summary.total, value2: (summary.total===1) ? 'yes' : 'no', additions: summary.additions, deletions: summary.deletions, value5: summary.binaryFiles ? t("GitTab.b0ebee7bde", { binaryFiles: summary.binaryFiles }) : '' })}</small></h4>
 }
 
 function ReviewGroup(props:{
@@ -185,7 +187,7 @@ function ReviewGroup(props:{
   return <section class="git-change-group git-review-group">
     <SummaryHeader title={props.title} summary={props.summary}/>
     {props.summary.files.map(file=><GitFileRow key={`${props.id}:${file.status}:${file.oldPath}:${file.path}`} projectId={props.projectId} file={file} locator={props.locator} expanded={props.preview===file.path} onToggle={()=>props.onPreview(props.preview===file.path?'':file.path)} onReview={()=>props.onReview(file)} onOpenCurrent={()=>props.onOpen(file)} openRoot={props.openRoot}/>)}
-    {props.summary.truncated&&<p class="git-change-empty">Showing the first {props.summary.files.length} files of {props.summary.total}.</p>}
+    {props.summary.truncated && <p class="git-change-empty">{rich("GitTab.8d9192d690", { length: props.summary.files.length, total: props.summary.total })}</p>}
   </section>
 }
 
@@ -310,7 +312,7 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
       const raw=await api<unknown>('GET',`/api/git/worktrees?${query}`,undefined,{timeoutMs:20000})
       if(mine!==generation.current)return
       const parsed=parseGitOverview(raw)
-      if(!parsed)throw new Error('The daemon returned an invalid Git overview.')
+      if(!parsed)throw new Error(t("GitTab.71b53f6ad5"))
       setOverview(parsed);writeGitTabMemory(project.id,{overview:parsed});setError('');setNotRepository(false)
       // Every expanded row's file lists now describe a tree that has moved, so they are
       // re-read - but they stay on screen until the new ones arrive. An open file
@@ -329,7 +331,7 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
     }catch(cause){if(mine===generation.current){
       const missing=(cause as ApiError)?.detail?.code==='not_git_repository'
       setOverview(null);setNotRepository(missing)
-      setError(missing?'':describeGitError(cause,'Reading the repository'))
+      setError(missing?'':describeGitError(cause,t("GitTab.97ed18fdd2")))
     }}
     finally{if(mine===generation.current)setBusy(false)}
   },[project?.id])
@@ -355,7 +357,7 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
       // different question, and painting it as the graph on the next visit would be
       // wrong rather than merely stale.
       if(!search.query.trim()&&limit===GRAPH_STEP)writeGitTabMemory(project.id,{graph:parsed})
-    }catch(cause){if(mine===graphGeneration.current)setError(describeGitError(cause,'Reading the commit graph'))}
+    }catch(cause){if(mine===graphGeneration.current)setError(describeGitError(cause,t("GitTab.4a15398de3")))}
     finally{if(mine===graphGeneration.current)setGraphBusy(false)}
   },[project?.id])
 
@@ -387,13 +389,13 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
     if(!project)return
     setDetailBusy(path);setDetailError('')
     try{
-      const query=new URLSearchParams({project_id:project.id,detail:'full',worktree:path})
+      const query=new URLSearchParams({project_id:project.id,get detail() { return t("GitTab.a18b869b2e") },worktree:path})
       const raw=await api<unknown>('GET',`/api/git/worktrees?${query}`,undefined,{timeoutMs:20000})
       const parsed=parseGitOverview(raw)
       const row=parsed?.worktrees.find(item=>normalizePath(item.path)===normalizePath(path))
-      if(!row)throw new Error('The daemon returned no reading for this worktree.')
+      if(!row)throw new Error(t("GitTab.a581488cfa"))
       setTreeDetail(current=>({...current,[path]:row}))
-    }catch(cause){setDetailError(describeGitError(cause,'Reading the worktree'))}
+    }catch(cause){setDetailError(describeGitError(cause,t("GitTab.16d0e61e31")))}
     finally{setDetailBusy(current=>current===path?'':current)}
   },[project?.id])
 
@@ -447,10 +449,10 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
       .then(raw=>{
         if(stale)return
         const parsed=parseGitSweMuxSetup(raw)
-        if(!parsed)throw new Error('The daemon returned invalid swe-mux Git setup state.')
+        if(!parsed)throw new Error(t("GitTab.6b4154b112"))
         setSweMuxSetup(parsed);setSweMuxSetupError('')
       })
-      .catch(cause=>{if(!stale)setSweMuxSetupError(describeGitError(cause,'Reading swe-mux Git setup'))})
+      .catch(cause=>{if(!stale)setSweMuxSetupError(describeGitError(cause,t("GitTab.db1029638e")))})
     void read()
     window.addEventListener(INSTALL_CONFIG_CHANGED,read)
     return()=>{stale=true;window.removeEventListener(INSTALL_CONFIG_CHANGED,read)}
@@ -507,7 +509,7 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
   const provenanceByCommit=new Map<string,GitProvenance[]>()
   for(const item of provenance){const entries=provenanceByCommit.get(item.commitOid)||[];entries.push(item);provenanceByCommit.set(item.commitOid,entries)}
 
-  if(!project)return <><p class="drawer-status">no Project selected</p><p class="drawer-empty">Select a Project to inspect its repository.</p></>
+  if(!project)return <><p class="drawer-status">{t("GitTab.b4b1fa111c")}</p><p class="drawer-empty">{t("GitTab.8111ae470f")}</p></>
 
   const provenanceOff=provenancePermitted===false
   // Most recently committed branch first. This is now the *only* list of checkouts in
@@ -595,7 +597,7 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
     return <button
       class="git-session-open"
       disabled={destination==='none'}
-      title={destination==='session'?`Open ${link.label}`:destination==='history'?`Read ${link.label} in History`:'This session left no conversation behind'}
+      title={destination==='session' ? t("GitTab.d1bcb33590", { label: link.label }) : destination==='history' ? t("GitTab.0215c0fea3", { label: link.label }) : t("GitTab.69a8a57f75")}
       onClick={()=>followLink(link)}
     >{link.label}</button>
   }
@@ -607,7 +609,7 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
     try{
       const query=new URLSearchParams({project_id:project.id});if(parent)query.set('parent',parent)
       const raw=await api<unknown>('GET',`/api/git/commits/${oid}/changes?${query}`,undefined,{timeoutMs:20000})
-      const parsed=parseCommitChanges(raw);if(!parsed)throw new Error('The daemon returned invalid commit changes.')
+      const parsed=parseCommitChanges(raw);if(!parsed)throw new Error(t("GitTab.6551c7c89b"))
       setCommitCache(current=>new Map(current).set(`${oid}:${parsed.parent||''}`,parsed))
       setParentByCommit(current=>({...current,[oid]:parsed.parent||''}))
     }catch(cause){setCommitError(cause instanceof Error?cause.message:String(cause))}
@@ -619,10 +621,10 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
   }
   const changeParent=(oid:string,parent:string)=>{setParentByCommit(current=>({...current,[oid]:parent}));void loadCommit(oid,parent)}
   const create=async()=>{
-    if(!isAbsolutePath(addForm.path)){setError('Worktree path must be absolute.');return}
+    if(!isAbsolutePath(addForm.path)){setError(t("GitTab.c26e104eb3"));return}
     setBusy(true)
     try{await api('POST','/api/git/worktrees',{cwd:project.root,path:addForm.path,branch:addForm.branch||undefined,start_point:addForm.start||undefined});setAdding(false);setAddForm({path:'',branch:'',start:''});await refresh()}
-    catch(cause){setError(describeGitError(cause,'Creating the worktree',true))}finally{setBusy(false)}
+    catch(cause){setError(describeGitError(cause,t("GitTab.37f7805f02"),true))}finally{setBusy(false)}
   }
   const initialize=async()=>{
     setBusy(true);setError('');setInitNote('')
@@ -631,15 +633,15 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
         project_id:project.id,ignore_swe_mux:ignoreSweMuxOnInit,
       },{timeoutMs:60000})
       const ignoreNote=ignoreSweMuxOnInit
-        ? result.swe_mux_ignore==='added'?' All .swe-mux files are ignored.':' .swe-mux was already ignored.'
+        ? result.swe_mux_ignore==='added'?t("GitTab.e88668bd0b"):t("GitTab.38729f19ca")
         :''
       setInitNote(result.gitignore==='created'
-        ?`Repository created on ${result.branch}, with a starter .gitignore.${ignoreNote} Nothing is staged yet.`
-        :`Repository created on ${result.branch}.${ignoreNote} The existing .gitignore was otherwise preserved.`)
+        ?t("GitTab.8f269602b2", { value1: result.branch, value2: ignoreNote })
+        :t("GitTab.6555e4e520", { value1: result.branch, value2: ignoreNote }))
       // Everything else in the tab reads through the same refresh path, and other clients
       // learn about it from the daemon's `git_changed` event rather than from this one.
       await refresh()
-    }catch(cause){setError(describeGitError(cause,'Creating the repository',true))}
+    }catch(cause){setError(describeGitError(cause,t("GitTab.4a7fead9be"),true))}
     finally{setBusy(false)}
   }
   const decideSweMuxSetup=async(decision:'keep_visible'|'ignore_all'|'never_ask')=>{
@@ -648,7 +650,7 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
       await api('POST','/api/git/swe-mux-setup',{project_id:project.id,decision})
       setSweMuxSetup(current=>current?{...current,show:false,decision:decision==='never_ask'?'unseen':decision}:current)
       if(decision==='ignore_all')await refresh()
-    }catch(cause){setSweMuxSetupError(describeGitError(cause,'Updating swe-mux Git setup',true))}
+    }catch(cause){setSweMuxSetupError(describeGitError(cause,t("GitTab.cb05cae330"),true))}
     finally{setSweMuxSetupBusy(false)}
   }
   /**
@@ -668,7 +670,7 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
     for(const target of targets){
       try{await api('DELETE','/api/git/worktrees',{cwd:project.root,path:target.path,force:target.force})}
       catch(cause){
-        failures.push(`${pathTail(target.path)}: ${describeGitError(cause,'Removing the worktree',true)}`)
+        failures.push(`${pathTail(target.path)}: ${describeGitError(cause,t("GitTab.50e30b037d"),true)}`)
         setPendingRemovals(current=>forgetRemoval(current,target.path))
       }
     }
@@ -739,7 +741,7 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
     const queued=landPlan.landable.length-failures.length
     setBulkNote(failures.length
       ?`${queued} queued · ${failures.join(' · ')}`
-      :`${queued} branch${queued===1?'':'es'} queued to merge.`)
+      :t("GitTab.9abdc36349", { value1: queued, value2: (queued===1) ? 'yes' : 'no' }))
     await refreshLand()
   }
   const runBulkRemove=async()=>{
@@ -752,13 +754,13 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
   // the worktree form are all absent rather than present-and-empty: the only decision
   // available is whether to create one.
   if(notRepository)return <div class="git-tab git-init">
-    <p class="git-state">This Project's folder is not a Git repository.</p>
+    <p class="git-state">{t("GitTab.0c09359f64")}</p>
     <p class="drawer-empty"><code>{project.root}</code></p>
-    <p class="drawer-empty">Initializing creates a repository here and writes a starter <code>.gitignore</code> matched to what the folder already contains. Nothing is staged and no commit is made, so history starts empty and the files are exactly as they are now.</p>
-    <label class="git-init-ignore"><input type="checkbox" checked={ignoreSweMuxOnInit} onChange={event=>setIgnoreSweMuxOnInit(event.currentTarget.checked)}/><span><strong>Ignore all <code>.swe-mux/</code> Project files</strong><small>This also hides portable settings, Project Actions, prompt templates, and Project context. Leave this off to keep those files available to commit.</small></span></label>
-    <div class="git-map-actions"><button disabled={busy} onClick={()=>void initialize()}>{busy?'Initializing…':'Initialize repository'}</button></div>
-    {initNote&&<p class="git-state" role="status">{initNote}</p>}
-    {error&&<p class="git-state error" role="alert">{error}</p>}
+    <p class="drawer-empty">{rich("GitTab.da972d9095", { value1: <code>{t("GitTab.bc37d034ba")}</code> })}</p>
+    <label class="git-init-ignore"><input type="checkbox" checked={ignoreSweMuxOnInit} onChange={event=>setIgnoreSweMuxOnInit(event.currentTarget.checked)}/><span><strong>{rich("GitTab.dfea0cad54", { value1: <code>{t("GitTab.d26d49f68e")}</code> })}</strong><small>{t("GitTab.f3cc33b4f7")}</small></span></label>
+    <div class="git-map-actions"><button disabled={busy} onClick={()=>void initialize()}>{busy ? t("GitTab.5015fd1590") : t("GitTab.5a00802202")}</button></div>
+    {initNote && <p class="git-state" role="status">{initNote}</p>}
+    {error && <p class="git-state error" role="alert">{error}</p>}
   </div>
 
   return <div class="git-tab git-review-tab">
@@ -770,26 +772,23 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
           Provenance asks SQLite, over an indexed column, which is instant and covers
           exactly the commits this daemon observed - a strictly smaller set than Git's,
           and complementary rather than a substitute for it. */}
-      {view==='map'&&<label class="git-search">
-        <span class="sr-only">Filter worktrees</span>
-        <input type="search" value={treeFilter} placeholder="filter branch or path"
+      {view==='map' && <label class="git-search">
+        <span class="sr-only">{t("GitTab.7ac224364a")}</span>
+        <input type="search" value={treeFilter} placeholder={t("GitTab.d96396917d")}
           onInput={event=>setTreeFilter(event.currentTarget.value)}/>
       </label>}
-      {view==='log'&&<label class="git-search">
-        <span class="sr-only">Search commits</span>
-        <input type="search" value={logQuery} placeholder={logField==='author'?'search author':'search commit messages'}
+      {view==='log' && <label class="git-search">
+        <span class="sr-only">{t("GitTab.0b0e32cab9")}</span>
+        <input type="search" value={logQuery} placeholder={logField==='author' ? t("GitTab.49ffa0b0e9") : t("GitTab.1b1283c06d")}
           onInput={event=>setLogQuery(event.currentTarget.value)}/>
       </label>}
-      {view==='log'&&<Dropdown ariaLabel="Search field" value={logField}
+      {view==='log' && <Dropdown ariaLabel={t("GitTab.d6e80812ac")} value={logField}
         onChange={value=>setLogField(value==='author'?'author':'message')}
-        options={[{value:'message',label:'message'},{value:'author',label:'author'}]}/>}
-      {view==='log'&&<label class="git-search-regex" title="Treat the search as a regular expression rather than literal text">
-        <input type="checkbox" checked={logRegex} onChange={event=>setLogRegex(event.currentTarget.checked)}/>
-        {' '}regex
-      </label>}
-      {view==='provenance'&&<label class="git-search">
-        <span class="sr-only">Search recorded commit subjects</span>
-        <input type="search" value={provenanceQuery} placeholder="search recorded subjects"
+        options={[{value:'message',get label() { return t("GitTab.ab530a13e4") }},{value:'author',get label() { return t("GitTab.6364858689") }}]}/>}
+      {view==='log' && <label class="git-search-regex" title={t("GitTab.5f4d87b6a9")}>{rich("GitTab.8dcddd86d5", { value1: <input type="checkbox" checked={logRegex} onChange={event=>setLogRegex(event.currentTarget.checked)}/> })}</label>}
+      {view==='provenance' && <label class="git-search">
+        <span class="sr-only">{t("GitTab.69ffbd2247")}</span>
+        <input type="search" value={provenanceQuery} placeholder={t("GitTab.25297a8f3b")}
           onInput={event=>setProvenanceQuery(event.currentTarget.value)}/>
       </label>}
       {/* Right-aligned as a group, under the host's segmented control rather than beside
@@ -802,27 +801,27 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
             this the tab looked settled while it was still working and the only visible
             evidence was the content changing under the reader. The glyph spins rather
             than the button, or the border would rotate with it. */}
-        <button class={`git-refresh${viewBusy?' spinning':''}`} disabled={viewBusy} aria-busy={viewBusy?'true':undefined} aria-label="Refresh" title={viewBusy?'Refreshing…':'Refresh'} onClick={()=>{window.dispatchEvent(new Event('mux:git-review-refresh'));if(view==='map'){void refresh(true);if(expandedTree)void loadTreeDetail(expandedTree)}else if(view==='log')void refreshGraph(graphLimit,{query:logQuery,field:logField,regex:logRegex});else void refreshProvenance(provenanceQuery)}}><span class="git-refresh-glyph">↻</span></button>
+        <button class={`git-refresh${viewBusy?' spinning':''}`} disabled={viewBusy} aria-busy={viewBusy?'true':undefined} aria-label={t("GitTab.0e91610117")} title={viewBusy ? t("GitTab.1c0def7be0") : t("GitTab.0e91610117")} onClick={()=>{window.dispatchEvent(new Event('mux:git-review-refresh'));if(view==='map'){void refresh(true);if(expandedTree)void loadTreeDetail(expandedTree)}else if(view==='log')void refreshGraph(graphLimit,{query:logQuery,field:logField,regex:logRegex});else void refreshProvenance(provenanceQuery)}}><span class="git-refresh-glyph">↻</span></button>
         {/* Bulk is a mode, not a permanent column. Fifty accumulated worktrees is what
             makes it necessary; a checkbox under every branch name on a surface people
             open to read a diff is what makes it a mode. */}
-        {view==='map'&&<button aria-pressed={selecting} onClick={()=>{setSelecting(value=>!value);clearSelection()}}>Select</button>}
-        {view==='map'&&<button onClick={()=>setAdding(value=>!value)}>+ worktree</button>}
+        {view==='map' && <button aria-pressed={selecting} onClick={()=>{setSelecting(value=>!value);clearSelection()}}>{t("GitTab.2a78025de6")}</button>}
+        {view==='map' && <button onClick={()=>setAdding(value=>!value)}>{t("GitTab.05919debf4")}</button>}
       </div>
     </div>
-    {view==='map'&&sweMuxSetup?.show&&<section class="git-swe-mux-setup" aria-label="swe-mux Git setup">
-      <div><strong>Choose how Git treats swe-mux files</strong><p>Local notes, attachments, seed prompts, screenshots, and runtime state are ignored separately. Portable Project settings, Actions, prompt templates, and context remain visible so they can be committed.</p>{sweMuxSetup.tracked&&<p class="warning"><code>.swe-mux</code> already contains tracked files. Adding an ignore rule would not untrack them, so that action is unavailable.</p>}</div>
-      <div class="git-map-actions"><button disabled={sweMuxSetupBusy} onClick={()=>void decideSweMuxSetup('keep_visible')}>Keep portable files visible</button>{sweMuxSetup.canIgnore&&<button disabled={sweMuxSetupBusy} onClick={()=>void decideSweMuxSetup('ignore_all')}>Ignore all .swe-mux files</button>}<button disabled={sweMuxSetupBusy} onClick={()=>void decideSweMuxSetup('never_ask')}>Never ask again</button></div>
-      {sweMuxSetupError&&<p class="git-state error" role="alert">{sweMuxSetupError}</p>}
+    {view==='map'&&sweMuxSetup?.show && <section class="git-swe-mux-setup" aria-label={t("GitTab.2e03b1e5e5")}>
+      <div><strong>{t("GitTab.dbb997e677")}</strong><p>{t("GitTab.a2de5b3666")}</p>{sweMuxSetup.tracked && <p class="warning">{rich("GitTab.3d2187d46c", { value1: <code>{t("GitTab.64f9020bac")}</code> })}</p>}</div>
+      <div class="git-map-actions"><button disabled={sweMuxSetupBusy} onClick={()=>void decideSweMuxSetup('keep_visible')}>{t("GitTab.ba4837fede")}</button>{sweMuxSetup.canIgnore && <button disabled={sweMuxSetupBusy} onClick={()=>void decideSweMuxSetup('ignore_all')}>{t("GitTab.dbee75919a")}</button>}<button disabled={sweMuxSetupBusy} onClick={()=>void decideSweMuxSetup('never_ask')}>{t("GitTab.a9191f1159")}</button></div>
+      {sweMuxSetupError && <p class="git-state error" role="alert">{sweMuxSetupError}</p>}
     </section>}
-    {overview&&<div class="git-compare"><label>COMPARE <Dropdown disabled={busy} value={compareOverride} onChange={value=>void saveComparison(value)} options={[
-      {value:'',label:`Auto${overview.comparison.available?` (${overview.comparison.display})`:''}`},
-      ...(compareOverride&&!overview.comparison.candidates.includes(compareOverride)?[{value:compareOverride,label:`${compareOverride} (unavailable)`}]:[]),
+    {overview && <div class="git-compare"><label>{rich("GitTab.c46773b834", { value1: <Dropdown disabled={busy} value={compareOverride} onChange={value=>void saveComparison(value)} options={[
+      {value:'',get label() { return t("GitTab.f135a3e0b4", { value1: overview.comparison.available?` (${overview.comparison.display})`:'' }) }},
+      ...(compareOverride&&!overview.comparison.candidates.includes(compareOverride)?[{value:compareOverride,get label() { return t("GitTab.9c265d2366", { compareOverride: compareOverride }) }}]:[]),
       ...overview.comparison.candidates.map(ref=>({value:ref,label:ref})),
-    ]}/></label><small>{comparisonSourceLabel(overview.comparison)}</small></div>}
-    {error&&<p class="git-state error" role="alert">{error}</p>}
-    {adding&&<div class="git-add-form"><label>Absolute path<input value={addForm.path} onInput={event=>setAddForm(value=>({...value,path:event.currentTarget.value}))}/></label><label>New branch<input value={addForm.branch} onInput={event=>setAddForm(value=>({...value,branch:event.currentTarget.value}))}/></label><label>Start point<input value={addForm.start} onInput={event=>setAddForm(value=>({...value,start:event.currentTarget.value}))}/></label><div><button disabled={busy} onClick={()=>void create()}>Create</button><button onClick={()=>setAdding(false)}>Cancel</button></div></div>}
-    {view==='map'&&<>
+    ]}/> })}</label><small>{comparisonSourceLabel(overview.comparison)}</small></div>}
+    {error && <p class="git-state error" role="alert">{error}</p>}
+    {adding && <div class="git-add-form"><label>{rich("GitTab.d29a6c1b66", { value1: <input value={addForm.path} onInput={event=>setAddForm(value=>({...value,path:event.currentTarget.value}))}/> })}</label><label>{rich("GitTab.32e5bfbc84", { value1: <input value={addForm.branch} onInput={event=>setAddForm(value=>({...value,branch:event.currentTarget.value}))}/> })}</label><label>{rich("GitTab.3e6164a378", { value1: <input value={addForm.start} onInput={event=>setAddForm(value=>({...value,start:event.currentTarget.value}))}/> })}</label><div><button disabled={busy} onClick={()=>void create()}>{t("GitTab.4759498ac2")}</button><button onClick={()=>setAdding(false)}>{t("GitTab.19766ed6cc")}</button></div></div>}
+    {view==='map' && <>
       {/* Landing, once, at the head of the map: the verification command and its
           approval, who besides you may start a land, and the queue. Everything here is
           Project-wide, which is exactly why it is not on a row - drawn per row it was
@@ -834,43 +833,34 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
           "Remove 30" is not a sentence anyone can check by reading it, so the counts
           that make it checkable - what is in use, what holds uncommitted or unlanded
           work - are the sentence instead. */}
-      {selecting&&overview&&<div class="git-map-bulk" aria-label="Selected worktrees">
+      {selecting&&overview && <div class="git-map-bulk" aria-label={t("GitTab.a89441f5ef")}>
         <div class="git-map-bulk-head">
-          <strong>{selectedTrees.length} selected</strong>
-          <button disabled={bulkBusy||busy} onClick={selectAllRemovable}>All removable</button>
-          <button disabled={bulkBusy||busy||!selectedTrees.length} onClick={clearSelection}>None</button>
+          <strong>{rich("GitTab.685d34d29f", { length: selectedTrees.length })}</strong>
+          <button disabled={bulkBusy||busy} onClick={selectAllRemovable}>{t("GitTab.ff095f3ba6")}</button>
+          <button disabled={bulkBusy||busy||!selectedTrees.length} onClick={clearSelection}>{t("GitTab.dc937b5989")}</button>
         </div>
-        {selectedTrees.length>0&&<div class="git-map-bulk-badges">
-          {removalPlan.blocked.length>0&&<em class="warn">{skippedLabel(removalPlan.blocked.reduce<Record<string,number>>((counts,item)=>{for(const block of item.blocks)counts[block]=(counts[block]||0)+1;return counts},{}))}</em>}
-          {removalPlan.warned.length>0&&<em class="warn">{removalPlan.warned.length} with {[...new Set(removalPlan.warned.flatMap(item=>item.warnings))].map(removalWarningLabel).join(' / ')} work</em>}
-          {landPlan.blocked.length>0&&<em>{landPlan.blocked.length} cannot be merged ({[...new Set(landPlan.blocked.map(item=>landBlockLabel(item.reason)))].join(', ')})</em>}
+        {selectedTrees.length>0 && <div class="git-map-bulk-badges">
+          {removalPlan.blocked.length>0 && <em class="warn">{skippedLabel(removalPlan.blocked.reduce<Record<string,number>>((counts,item)=>{for(const block of item.blocks)counts[block]=(counts[block]||0)+1;return counts},{}))}</em>}
+          {removalPlan.warned.length>0 && <em class="warn">{rich("GitTab.bdc2a19d61", { length: removalPlan.warned.length, value2: [...new Set(removalPlan.warned.flatMap(item=>item.warnings))].map(removalWarningLabel).join(' / ') })}</em>}
+          {landPlan.blocked.length>0 && <em>{rich("GitTab.4b64603e95", { length: landPlan.blocked.length, value2: [...new Set(landPlan.blocked.map(item=>landBlockLabel(item.reason)))].join(', ') })}</em>}
         </div>}
-        {!bulkRemoving&&<div class="git-map-actions">
+        {!bulkRemoving && <div class="git-map-actions">
           <button disabled={bulkBusy||busy||!landPlan.landable.length} onClick={()=>void runBulkLand()}>
-            {bulkBusy?'Queueing…':`Auto-merge ${landPlan.landable.length}`}
+            {bulkBusy ? t("GitTab.2381a25df5") : t("GitTab.5588af6fa7", { length: landPlan.landable.length })}
           </button>
-          <button disabled={bulkBusy||busy||!removalPlan.removable.length} onClick={()=>setBulkRemoving(true)}>
-            Remove {removalPlan.removable.length}…
-          </button>
-          <small>one request per branch · the queue runs them one at a time</small>
+          <button disabled={bulkBusy||busy||!removalPlan.removable.length} onClick={()=>setBulkRemoving(true)}>{rich("GitTab.bd7e7a25de", { length: removalPlan.removable.length })}</button>
+          <small>{t("GitTab.1b848ff410")}</small>
         </div>}
-        {bulkRemoving&&<div class="git-map-actions">
-          <button class="danger" disabled={bulkBusy||busy||!removalTargets.length} onClick={()=>void runBulkRemove()}>
-            Remove {removalTargets.length} ✓
-          </button>
-          {removalPlan.warned.length>0&&<label>
-            <input type="checkbox" checked={bulkForce} onChange={event=>setBulkForce(event.currentTarget.checked)}/>
-            {' '}also remove {removalPlan.warned.length} with uncommitted or unlanded work
-          </label>}
-          <button onClick={()=>{setBulkRemoving(false);setBulkForce(false)}}>Cancel</button>
+        {bulkRemoving && <div class="git-map-actions">
+          <button class="danger" disabled={bulkBusy||busy||!removalTargets.length} onClick={()=>void runBulkRemove()}>{rich("GitTab.cd24cd689d", { length: removalTargets.length })}</button>
+          {removalPlan.warned.length>0 && <label>{rich("GitTab.e7e6f75081", { value1: <input type="checkbox" checked={bulkForce} onChange={event=>setBulkForce(event.currentTarget.checked)}/>, length: removalPlan.warned.length })}</label>}
+          <button onClick={()=>{setBulkRemoving(false);setBulkForce(false)}}>{t("GitTab.19766ed6cc")}</button>
         </div>}
-        {bulkNote&&<p class="git-state" role="status">{bulkNote}</p>}
+        {bulkNote && <p class="git-state" role="status">{bulkNote}</p>}
       </div>}
-      {!overview&&!error&&<p class="git-state">Reading repository…</p>}
-      {overview&&filterText&&<p class="git-state" role="status">
-        {shownWorktrees.length} of {orderedWorktrees.length} worktrees match “{treeFilter.trim()}”.
-      </p>}
-      {overview&&shownWorktrees.map(row=>{
+      {!overview&&!error && <p class="git-state">{t("GitTab.156aba8664")}</p>}
+      {overview&&filterText && <p class="git-state" role="status">{rich("GitTab.11160d3511", { length: shownWorktrees.length, value2: orderedWorktrees.length, value3: treeFilter.trim() })}</p>}
+      {overview && shownWorktrees.map(row=>{
         // The row as the Map read it, or - once expanded - the full reading fetched for
         // this one checkout. The two carry the same fields; only the file lists differ.
         const tree=treeDetail[row.path]||row
@@ -879,7 +869,7 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
         const branchRef=overview.comparison.available?overview.comparison.display||overview.comparison.ref:null
         const attached=sessionsFor(tree.path),upstream=attached.find(session=>session.git?.ahead||session.git?.behind)?.git
         const removalBlocked=tree.locked!==null||attached.length>0
-        const worktreeName=pathTail(tree.path),identityQualifier=tree.main?'main tree':worktreeName!==tree.branch?worktreeName:''
+        const worktreeName=pathTail(tree.path),identityQualifier=tree.main?t("GitTab.542e7d3815"):worktreeName!==tree.branch?worktreeName:''
         // Live landing state belongs on the collapsed row: requiring an expansion to
         // learn which checkout is queued or running turns the map into a search task.
         // Match on the same two coordinates as `GitLandRow`, because the daemon's root
@@ -892,7 +882,7 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
         const activeLandProgress=activeLand?verifyProgressLabel(activeLand.verifyProgress):''
         const activeLandGate=activeLand?landGateNote(activeLand):''
         const activeLandDetail=activeLand
-          ? activeLand.state==='queued' ? `#${activeLandIndex+1} in queue`
+          ? activeLand.state==='queued' ? t("GitTab.bd8b569fcc", { value1: activeLandIndex+1 })
             : activeLandProgress||activeLandGate||activeLand.reason
           : ''
         const activeLandKind=activeLand?landKindNote(activeLand):''
@@ -906,7 +896,7 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
               its own affordance now, and interactive content nested in a button is neither
               valid nor reliably clickable. */}
           <div class={`git-map-head${selecting?' selecting':''}`}>
-            {selecting&&<label class="git-map-select" title={blocks.length?`Cannot be removed: ${blocks.map(removalBlockLabel).join(', ')}`:`Select ${tree.branch||worktreeName} · Shift-click to select through here`}>
+            {selecting && <label class="git-map-select" title={blocks.length ? t("GitTab.6e1ea35776", { value1: blocks.map(removalBlockLabel).join(', ') }) : t("GitTab.cdd27e1514", { value1: tree.branch||worktreeName })}>
               {/* `onClick`, not `onChange`: a `change` event is not a mouse event and
                   carries no `shiftKey`, so the range press would be indistinguishable
                   from an ordinary one. Click fires for a press on the label and for
@@ -915,30 +905,30 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
                 type="checkbox"
                 checked={!!selected[normalizePath(tree.path)]}
                 disabled={removing||blocks.length>0}
-                aria-label={`Select ${tree.branch||worktreeName}`}
+                aria-label={t("GitTab.187be5793a", { value1: tree.branch||worktreeName })}
                 onClick={event=>clickSelected(tree.path,event.shiftKey)}
               />
             </label>}
             <button class={`git-map-summary${activeLand?' has-land-status':''}`} aria-expanded={expanded} onClick={()=>setExpandedTree(expanded?'':tree.path)}>
-              <span class={`git-map-rail ${tree.main?'main':''}`} aria-hidden="true">{tree.main?'●':'○'}</span>
-              <span class="git-map-identity"><strong class={tree.detached?'detached':''}>{tree.branch||`detached @ ${shortSha(tree.head)}`}</strong>{identityQualifier&&<small>{identityQualifier}</small>}</span>
-              <span class="git-map-metrics">{localMeasured&&total===0&&<em class="clean">clean</em>}{localMeasured&&total>0&&<em class="local">{total} local</em>}{!localMeasured&&<em class="warn">unavailable</em>}{tree.comparisonCounts?.ahead?<em class="ahead">{tree.comparisonCounts.ahead} ahead</em>:null}{tree.comparisonCounts?.behind?<em>{tree.comparisonCounts.behind} behind</em>:null}{upstream&&<em class="diverged">upstream {upstream.ahead?`↑${upstream.ahead}`:''}{upstream.behind?` ↓${upstream.behind}`:''}</em>}{tree.locked!==null&&<em class="warn">locked</em>}{tree.prunable!==null&&<em class="warn">prunable</em>}{landed!==undefined&&<em class="landed" title={`This queue landed ${tree.branch} at ${new Date(landed*1000).toLocaleString()}`}>landed {landedLabel(landed)}</em>}{removing&&<em class="removing"><i class="git-map-spinner" aria-hidden="true"/>removing…</em>}</span>
-              {activeLand&&<span class={`git-map-land-status state-${activeLand.state}`}>
+              <span class={`git-map-rail ${tree.main?'main':''}`} aria-hidden="true">{tree.main ? '●' : '○'}</span>
+              <span class="git-map-identity"><strong class={tree.detached?'detached':''}>{tree.branch || t("GitTab.df543b0946", { value1: shortSha(tree.head) })}</strong>{identityQualifier && <small>{identityQualifier}</small>}</span>
+              <span class="git-map-metrics">{localMeasured&&total===0 && <em class="clean">{t("GitTab.3b066804f6")}</em>}{localMeasured&&total>0 && <em class="local">{rich("GitTab.5b2c18cd75", { total: total })}</em>}{!localMeasured && <em class="warn">{t("GitTab.ba691ba042")}</em>}{tree.comparisonCounts?.ahead ? <em class="ahead">{rich("GitTab.11234146c5", { ahead: tree.comparisonCounts.ahead })}</em> : null}{tree.comparisonCounts?.behind ? <em>{rich("GitTab.9b2df972d8", { behind: tree.comparisonCounts.behind })}</em> : null}{upstream && <em class="diverged">{rich("GitTab.bde0f775e4", { value1: upstream.ahead ? t("GitTab.80c4a93fab", { ahead: upstream.ahead }) : '', value2: upstream.behind ? t("GitTab.93267c0e0d", { behind: upstream.behind }) : '' })}</em>}{tree.locked!==null && <em class="warn">{t("GitTab.14493f5f54")}</em>}{tree.prunable!==null && <em class="warn">{t("GitTab.7f04750c73")}</em>}{landed!==undefined && <em class="landed" title={t("GitTab.f669449545", { branch: tree.branch, value2: new Date(landed*1000).toLocaleString(uiLocale.value) })}>{rich("GitTab.be8e0a8a1c", { value1: landedLabel(landed) })}</em>}{removing && <em class="removing">{rich("GitTab.2f8881db5a", { value1: <i class="git-map-spinner" aria-hidden="true"/> })}</em>}</span>
+              {activeLand && <span class={`git-map-land-status state-${activeLand.state}`}>
                 <i aria-hidden="true"/>
-                <strong>{activeLandKind&&`${activeLandKind} · `}{landStateLabel(activeLand.state)}</strong>
-                {activeLandDetail&&<small>{activeLandDetail}</small>}
+                <strong>{activeLandKind && t("GitTab.cbc85e761e", { activeLandKind: activeLandKind })}{landStateLabel(activeLand.state)}</strong>
+                {activeLandDetail && <small>{activeLandDetail}</small>}
               </span>}
-              <span class="git-map-chevron" aria-hidden="true">{expanded?'−':'+'}</span>
+              <span class="git-map-chevron" aria-hidden="true">{expanded ? '−' : '+'}</span>
             </button>
-            {attached.length>0&&<button
+            {attached.length>0 && <button
               class="git-map-live"
               aria-haspopup="menu"
-              title={`${attached.length} live session${attached.length===1?'':'s'} in this worktree`}
-              onClick={event=>openLinks(event,`${pathTail(tree.path)} · live sessions`,worktreeLinks(attached))}
-            >{attached.length} live</button>}
+              title={t("GitTab.3b2f646ca2", { length: attached.length, value2: (attached.length===1) ? 'yes' : 'no' })}
+              onClick={event=>openLinks(event,t("GitTab.6a32d0b21b", { value1: pathTail(tree.path) }),worktreeLinks(attached))}
+            >{rich("GitTab.b9583e5bf9", { length: attached.length })}</button>}
           </div>
-          {expanded&&<div class="git-map-detail"><p class="git-map-path">{tree.path}</p>
-            {tree.prunable!==null&&<p class="git-change-empty">Git cannot use this checkout: {tree.prunable||'the worktree registration is prunable'}.</p>}
+          {expanded && <div class="git-map-detail"><p class="git-map-path">{tree.path}</p>
+            {tree.prunable!==null && <p class="git-change-empty">{rich("GitTab.a203d200f8", { value1: tree.prunable || t("GitTab.6a9c6cb690") })}</p>}
             {/* Both acts, above everything that loads. Landing is an act on the checkout
                 in front of you, so the act is drawn on the row; only the act, because
                 everything Project-wide is in the strip above and a row that needs one
@@ -955,11 +945,11 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
                 and the row's two acts were separated by the thing they both act on. They
                 sit together now, and the confirm-then-force step is what keeps the
                 destructive one deliberate. */}
-            {!tree.main&&!tree.bare&&!removing&&<GitLandRow project={project} worktreeRoot={tree.path} branch={tree.branch} detached={tree.detached} queue={landQueue} onChanged={refreshLand} onShowLanding={()=>setLandingOpen(true)}/>}
+            {!tree.main&&!tree.bare&&!removing && <GitLandRow project={project} worktreeRoot={tree.path} branch={tree.branch} detached={tree.detached} queue={landQueue} onChanged={refreshLand} onShowLanding={()=>setLandingOpen(true)}/>}
             {/* A checkout being deleted is not something to land or to remove again, and
                 its own row is not where that is decided any more - the list said it. */}
-            {!tree.main&&!tree.bare&&removing&&<p class="git-change-empty">This worktree is being removed.</p>}
-            {!tree.main&&!tree.bare&&!removing&&<div class="git-map-actions">{removalBlocked?<p class="git-change-empty">{tree.locked!==null?'Git reports this worktree as locked.':`${attached.length} live session${attached.length===1?' uses':'s use'} this worktree.`}</p>:remove?.path===tree.path?<><button class="danger" disabled={busy} onClick={()=>void removeWorktree()}>{remove.force?'Force remove ✓':'Confirm remove ✓'}</button><label><input type="checkbox" checked={remove.force} onChange={event=>setRemove({path:tree.path,force:event.currentTarget.checked})}/> discard uncommitted files</label><button onClick={()=>setRemove(null)}>Cancel</button></>:<button onClick={()=>setRemove({path:tree.path,force:false})}>Remove worktree…</button>}</div>}
+            {!tree.main&&!tree.bare&&removing && <p class="git-change-empty">{t("GitTab.b66aa641f5")}</p>}
+            {!tree.main&&!tree.bare&&!removing && <div class="git-map-actions">{removalBlocked ? <p class="git-change-empty">{tree.locked!==null ? t("GitTab.efdf7bcedf") : t("GitTab.d2468633f4", { length: attached.length, value2: (attached.length===1) ? 'yes' : 'no' })}</p> : remove?.path===tree.path ? <><button class="danger" disabled={busy} onClick={()=>void removeWorktree()}>{remove.force ? t("GitTab.b188cace5d") : t("GitTab.d5bd3b8509")}</button><label>{rich("GitTab.63444d2950", { value1: <input type="checkbox" checked={remove.force} onChange={event=>setRemove({path:tree.path,force:event.currentTarget.checked})}/> })}</label><button onClick={()=>setRemove(null)}>{t("GitTab.19766ed6cc")}</button></> : <button onClick={()=>setRemove({path:tree.path,force:false})}>{t("GitTab.bffa58e22b")}</button>}</div>}
             {/* The Map's own reading has counts and no files, so a row that says "12
                 local" over nothing is waiting for its own read rather than reporting an
                 empty change set. Stated, because the two look identical.
@@ -967,89 +957,79 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
                 replace it in place. Above the acts it pushed them down the moment it
                 appeared and let them spring back when it went, which moved the Land
                 button out from under a pointer already on its way to it. */}
-            {detailBusy===tree.path&&!treeDetail[tree.path]&&<p class="git-state">Reading this worktree…</p>}
-            {detailError&&expandedTree===tree.path&&!treeDetail[tree.path]&&<p class="git-state error" role="alert">{detailError}</p>}
-            {tree.conflicted&&tree.conflicted.total>0&&<ReviewGroup id={`${tree.path}:conflicted`} title="CONFLICTS" summary={tree.conflicted} projectId={project.id} locator={{scope:'conflicted',worktree:tree.path,commit:null,parent:null,comparisonRef:null}} openRoot={tree.path} preview={preview[`${tree.path}:conflicted`]||''} onPreview={value=>setPreview(current=>({...current,[`${tree.path}:conflicted`]:value}))} onReview={file=>startReview(tree.conflicted!,{scope:'conflicted',worktree:tree.path,commit:null,parent:null,comparisonRef:null},file)} onOpen={file=>openFor(tree.path,file.path)}/>}
-            {tree.unstaged&&tree.unstaged.total>0&&<ReviewGroup id={`${tree.path}:unstaged`} title="UNSTAGED" summary={tree.unstaged} projectId={project.id} locator={{scope:'unstaged',worktree:tree.path,commit:null,parent:null,comparisonRef:null}} openRoot={tree.path} preview={preview[`${tree.path}:unstaged`]||''} onPreview={value=>setPreview(current=>({...current,[`${tree.path}:unstaged`]:value}))} onReview={file=>startReview(tree.unstaged!,{scope:'unstaged',worktree:tree.path,commit:null,parent:null,comparisonRef:null},file)} onOpen={file=>openFor(tree.path,file.path)}/>}
-            {tree.staged&&tree.staged.total>0&&<ReviewGroup id={`${tree.path}:staged`} title="STAGED" summary={tree.staged} projectId={project.id} locator={{scope:'staged',worktree:tree.path,commit:null,parent:null,comparisonRef:null}} openRoot={tree.path} preview={preview[`${tree.path}:staged`]||''} onPreview={value=>setPreview(current=>({...current,[`${tree.path}:staged`]:value}))} onReview={file=>startReview(tree.staged!,{scope:'staged',worktree:tree.path,commit:null,parent:null,comparisonRef:null},file)} onOpen={file=>openFor(tree.path,file.path)}/>}
-            {branchRef&&tree.branchDelta&&tree.branchDelta.total>0&&<ReviewGroup id={`${tree.path}:branch`} title={`BRANCH - VS ${branchRef.toUpperCase()}`} summary={tree.branchDelta} projectId={project.id} locator={{scope:'branch',worktree:tree.path,commit:null,parent:null,comparisonRef:overview.comparison.ref}} openRoot={tree.path} preview={preview[`${tree.path}:branch`]||''} onPreview={value=>setPreview(current=>({...current,[`${tree.path}:branch`]:value}))} onReview={file=>startReview(tree.branchDelta!,{scope:'branch',worktree:tree.path,commit:null,parent:null,comparisonRef:overview.comparison.ref},file)} onOpen={file=>openFor(tree.path,file.path)}/>}
+            {detailBusy===tree.path&&!treeDetail[tree.path] && <p class="git-state">{t("GitTab.972edcc272")}</p>}
+            {detailError&&expandedTree===tree.path&&!treeDetail[tree.path] && <p class="git-state error" role="alert">{detailError}</p>}
+            {tree.conflicted&&tree.conflicted.total>0 && <ReviewGroup id={`${tree.path}:conflicted`} title={t("GitTab.389f00770d")} summary={tree.conflicted} projectId={project.id} locator={{scope:'conflicted',worktree:tree.path,commit:null,parent:null,comparisonRef:null}} openRoot={tree.path} preview={preview[`${tree.path}:conflicted`]||''} onPreview={value=>setPreview(current=>({...current,[`${tree.path}:conflicted`]:value}))} onReview={file=>startReview(tree.conflicted!,{scope:'conflicted',worktree:tree.path,commit:null,parent:null,comparisonRef:null},file)} onOpen={file=>openFor(tree.path,file.path)}/>}
+            {tree.unstaged&&tree.unstaged.total>0 && <ReviewGroup id={`${tree.path}:unstaged`} title={t("GitTab.8907d41609")} summary={tree.unstaged} projectId={project.id} locator={{scope:'unstaged',worktree:tree.path,commit:null,parent:null,comparisonRef:null}} openRoot={tree.path} preview={preview[`${tree.path}:unstaged`]||''} onPreview={value=>setPreview(current=>({...current,[`${tree.path}:unstaged`]:value}))} onReview={file=>startReview(tree.unstaged!,{scope:'unstaged',worktree:tree.path,commit:null,parent:null,comparisonRef:null},file)} onOpen={file=>openFor(tree.path,file.path)}/>}
+            {tree.staged&&tree.staged.total>0 && <ReviewGroup id={`${tree.path}:staged`} title={t("GitTab.e0e7d6b6ac")} summary={tree.staged} projectId={project.id} locator={{scope:'staged',worktree:tree.path,commit:null,parent:null,comparisonRef:null}} openRoot={tree.path} preview={preview[`${tree.path}:staged`]||''} onPreview={value=>setPreview(current=>({...current,[`${tree.path}:staged`]:value}))} onReview={file=>startReview(tree.staged!,{scope:'staged',worktree:tree.path,commit:null,parent:null,comparisonRef:null},file)} onOpen={file=>openFor(tree.path,file.path)}/>}
+            {branchRef&&tree.branchDelta&&tree.branchDelta.total>0 && <ReviewGroup id={`${tree.path}:branch`} title={t("GitTab.c365e3ffc8", { value1: branchRef.toUpperCase() })} summary={tree.branchDelta} projectId={project.id} locator={{scope:'branch',worktree:tree.path,commit:null,parent:null,comparisonRef:overview.comparison.ref}} openRoot={tree.path} preview={preview[`${tree.path}:branch`]||''} onPreview={value=>setPreview(current=>({...current,[`${tree.path}:branch`]:value}))} onReview={file=>startReview(tree.branchDelta!,{scope:'branch',worktree:tree.path,commit:null,parent:null,comparisonRef:overview.comparison.ref},file)} onOpen={file=>openFor(tree.path,file.path)}/>}
           </div>}
         </article>
       })}
     </>}
-    {view==='log'&&<>{!graph&&!error&&<p class="git-state">Reading commit graph…</p>}{graph&&<><div class="git-graph-context" aria-label="Commit graph context">
-      <span><b>MAIN TREE</b><strong>{mainTree?.branch||mainTree&&`detached @ ${shortSha(mainTree.head)}`||'unavailable'}</strong>{mainTree?.head&&<code>@ {shortSha(mainTree.head)}</code>}</span>
-      <span><b>COMPARE</b><strong>{comparisonLabel||'unavailable'}</strong></span>
-      <span><b>WORKTREES</b><strong>{linkedWorktrees.length} linked</strong></span>
-      <span><b>SCOPE</b><strong>{graph.filtered?`matching ${logField==='author'?'author':'message'}`:'all refs'}</strong></span>
-    </div>{graph.filtered&&<p class="git-state">
-      Searching all refs, so the lane drawing is off: Git draws lanes for a continuous
-      walk, and over a filtered set they would connect commits that are not connected.
-    </p>}{graph.filtered&&graph.lines.length===0&&<p class="git-change-empty">
-      No commit {logField==='author'?'author':'message'} matches “{logQuery.trim()}”.
-    </p>}<section class="git-graph" aria-label="Commit graph">{graph.lines.map((line,index)=>line.kind==='connector'?<div class="git-graph-connector" key={`c:${index}`}><GraphGlyph value={line.graph}/></div>:(()=>{
+    {view==='log' && <>{!graph&&!error && <p class="git-state">{t("GitTab.db457e3150")}</p>}{graph && <><div class="git-graph-context" aria-label={t("GitTab.06b6af77cd")}>
+      <span><b>{t("GitTab.694b4a0a9f")}</b><strong>{mainTree?.branch||mainTree&&t("GitTab.df543b0946", { value1: shortSha(mainTree.head) }) || t("GitTab.ba691ba042")}</strong>{mainTree?.head && <code>@ {shortSha(mainTree.head)}</code>}</span>
+      <span><b>{t("GitTab.0eca21d7a6")}</b><strong>{comparisonLabel || t("GitTab.ba691ba042")}</strong></span>
+      <span><b>{t("GitTab.5909013a07")}</b><strong>{rich("GitTab.c80bc5ed77", { length: linkedWorktrees.length })}</strong></span>
+      <span><b>{t("GitTab.f035065747")}</b><strong>{graph.filtered ? t("GitTab.7c3794e056", { value1: (logField==='author') ? 'yes' : 'no' }) : t("GitTab.ac7401b39f")}</strong></span>
+    </div>{graph.filtered && <p class="git-state">{t("GitTab.032321dd82")}</p>}{graph.filtered&&graph.lines.length===0 && <p class="git-change-empty">{rich("GitTab.bccf6d0afb", { value1: (logField==='author') ? 'yes' : 'no', value2: logQuery.trim() })}</p>}<section class="git-graph" aria-label={t("GitTab.7e3b61a327")}>{graph.lines.map((line,index)=>line.kind==='connector'?<div class="git-graph-connector" key={`c:${index}`}><GraphGlyph value={line.graph}/></div>:(()=>{
          const parent=parentByCommit[line.oid]??line.parents[0]??'',key=`${line.oid}:${parent}`,changes=commitCache.get(key),expanded=expandedCommit===line.oid
          const commitProvenance=provenanceByCommit.get(line.oid)||[]
          const lane=graphNodeLane(line.graph),decorations=graphDecorations(line,overview)
-         return <article class="git-graph-row git-review-commit" key={line.oid}><div class="git-commit-head"><button class="git-commit-summary" aria-expanded={expanded} onClick={()=>toggleCommit(line.oid)}><GraphGlyph value={line.graph} commit/><span class="git-commit"><span class="git-commit-title"><strong>{shortSha(line.oid)}</strong><span>{line.subject}</span></span>{decorations.length>0&&<span class="git-commit-refs">{decorations.map((item,refIndex)=><em class={`${item.kind} lane-${lane}`} title={item.title} key={`${item.kind}:${item.label}:${refIndex}`}>{item.label}</em>)}</span>}<small>{line.author}{line.committedAt?` · ${committedLabel(line.committedAt)}`:''}</small></span><span>{expanded?'−':'+'}</span></button>
+         return <article class="git-graph-row git-review-commit" key={line.oid}><div class="git-commit-head"><button class="git-commit-summary" aria-expanded={expanded} onClick={()=>toggleCommit(line.oid)}><GraphGlyph value={line.graph} commit/><span class="git-commit"><span class="git-commit-title"><strong>{shortSha(line.oid)}</strong><span>{line.subject}</span></span>{decorations.length>0 && <span class="git-commit-refs">{decorations.map((item,refIndex)=><em class={`${item.kind} lane-${lane}`} title={item.title} key={`${item.kind}:${item.label}:${refIndex}`}>{item.label}</em>)}</span>}<small>{line.author}{line.committedAt ? t("GitTab.f6b53f9c8a", { value1: committedLabel(line.committedAt) }) : ''}</small></span><span>{expanded ? '−' : '+'}</span></button>
           {/* Outside the expand button on purpose: a commit's sessions are reachable
               without first expanding it, and a button cannot contain another. */}
-          {commitProvenance.length>0&&<button
+          {commitProvenance.length>0 && <button
             class="git-commit-links"
             aria-haspopup="menu"
-            title={`${commitProvenance.length} session${commitProvenance.length===1?'':'s'} linked to ${shortSha(line.oid)}`}
-            onClick={event=>openLinks(event,`${shortSha(line.oid)} · session links`,provenanceLinks(commitProvenance))}
-          >{commitProvenance.length} session link{commitProvenance.length===1?'':'s'}</button>}
+            title={t("GitTab.9d359b0e1e", { length: commitProvenance.length, value2: (commitProvenance.length===1) ? 'yes' : 'no', value3: shortSha(line.oid) })}
+            onClick={event=>openLinks(event,t("GitTab.37609b16a5", { value1: shortSha(line.oid) }),provenanceLinks(commitProvenance))}
+          >{rich("GitTab.30401391ea", { length: commitProvenance.length, value2: (commitProvenance.length===1) ? 'yes' : 'no' })}</button>}
           </div>
           {/* The summary row can only ever show one elided line of the subject, so the whole
               message - subject, blank line, body - is reproduced here. `pre-wrap` because a
               commit message is pre-formatted prose: its own hard wraps and paragraph breaks
               are part of what was written, and only the over-long line needs the browser. */}
-          {expanded&&<div class="git-commit-detail">{commitProvenance.length>0&&<div class="git-provenance-links">{commitProvenance.map(item=><p key={item.id}>{provenanceSessionButton(item)}<span class={`git-provenance-role ${item.role}`}>{provenanceRoleLabel(item)}</span><span class={`git-provenance-confidence ${item.confidence}`}>{item.confidence}</span>{item.contributedPaths.length>0&&<small title={item.contributedPaths.join('\n')}>{item.contributedPaths.slice(0,3).join(', ')}{item.contributedPaths.length>3?` +${item.contributedPaths.length-3}`:''}</small>}</p>)}</div>}{commitBusy&&!changes&&<p>Loading commit changes…</p>}{commitError&&!changes&&<p class="error">{commitError}</p>}{changes&&<>{changes.message&&<pre class="git-commit-message">{changes.message}</pre>}<div class="git-commit-parent"><span>{changes.parentLabel}</span>{changes.parents.length>1&&<Dropdown ariaLabel="Comparison parent" value={changes.parent||''} onChange={value=>changeParent(line.oid,value)} options={changes.parents.map((oid,index)=>({value:oid,label:index===0?`first parent ${shortSha(oid)}`:shortSha(oid)}))}/>}</div><ReviewGroup id={`commit:${key}`} title="COMMIT CHANGES" summary={changes.summary} projectId={project.id} locator={{scope:'commit',worktree:null,commit:changes.commit,parent:changes.parent,comparisonRef:null}} openRoot={project.root} preview={preview[`commit:${key}`]||''} onPreview={value=>setPreview(current=>({...current,[`commit:${key}`]:value}))} onReview={file=>startReview(changes.summary,{scope:'commit',worktree:null,commit:changes.commit,parent:changes.parent,comparisonRef:null},file,commitProvenance)} onOpen={file=>onOpenFile(file.path)}/></>}</div>}
+          {expanded && <div class="git-commit-detail">{commitProvenance.length>0 && <div class="git-provenance-links">{commitProvenance.map(item=><p key={item.id}>{provenanceSessionButton(item)}<span class={`git-provenance-role ${item.role}`}>{provenanceRoleLabel(item)}</span><span class={`git-provenance-confidence ${item.confidence}`}>{item.confidence}</span>{item.contributedPaths.length>0 && <small title={item.contributedPaths.join('\n')}>{item.contributedPaths.slice(0,3).join(', ')}{item.contributedPaths.length>3 ? t("GitTab.2eec572daa", { value1: item.contributedPaths.length-3 }) : ''}</small>}</p>)}</div>}{commitBusy&&!changes && <p>{t("GitTab.95ec97331f")}</p>}{commitError&&!changes && <p class="error">{commitError}</p>}{changes && <>{changes.message && <pre class="git-commit-message">{changes.message}</pre>}<div class="git-commit-parent"><span>{changes.parentLabel}</span>{changes.parents.length>1 && <Dropdown ariaLabel={t("GitTab.3a3feba616")} value={changes.parent||''} onChange={value=>changeParent(line.oid,value)} options={changes.parents.map((oid,index)=>({value:oid,label:index===0?t("GitTab.29adeb8296", { value1: shortSha(oid) }):shortSha(oid)}))}/>}</div><ReviewGroup id={`commit:${key}`} title={t("GitTab.8ae30b4b01")} summary={changes.summary} projectId={project.id} locator={{scope:'commit',worktree:null,commit:changes.commit,parent:changes.parent,comparisonRef:null}} openRoot={project.root} preview={preview[`commit:${key}`]||''} onPreview={value=>setPreview(current=>({...current,[`commit:${key}`]:value}))} onReview={file=>startReview(changes.summary,{scope:'commit',worktree:null,commit:changes.commit,parent:changes.parent,comparisonRef:null},file,commitProvenance)} onOpen={file=>onOpenFile(file.path)}/></>}</div>}
         </article>
-    })())}{graph.hasMore&&graphLimit<GRAPH_MAX&&<button class="git-load-more" onClick={()=>{const next=Math.min(GRAPH_MAX,graphLimit+GRAPH_STEP);setGraphLimit(next);void refreshGraph(next,{query:logQuery,field:logField,regex:logRegex})}}>Load more commits</button>}</section></>}</>}
-    {view==='provenance'&&<section class="git-provenance" aria-label="Session Git provenance">
-      {provenanceError&&<p class="git-state error" role="alert">{provenanceError}</p>}
+    })())}{graph.hasMore&&graphLimit<GRAPH_MAX && <button class="git-load-more" onClick={()=>{const next=Math.min(GRAPH_MAX,graphLimit+GRAPH_STEP);setGraphLimit(next);void refreshGraph(next,{query:logQuery,field:logField,regex:logRegex})}}>{t("GitTab.166d09744c")}</button>}</section></>}</>}
+    {view==='provenance' && <section class="git-provenance" aria-label={t("GitTab.3c36bff2d2")}>
+      {provenanceError && <p class="git-state error" role="alert">{provenanceError}</p>}
       {/* This read is written by the `provenance_graph` consumer, which is a per-Project
           opt-in that is off until someone turns it on. Without this the segment drew
           "No session-to-commit associations recorded yet" on a Project that will never
           record one — an inert surface rendering as merely empty, which is the single
           thing the setting-link rule forbids. */}
-      {provenanceOff&&<GrantGate ids={['project.provenanceGraph']} projectId={project.id}
-        heading="This Project has not permitted the provenance graph."
+      {provenanceOff && <GrantGate ids={['project.provenanceGraph']} projectId={project.id}
+        heading={t("GitTab.5b4a6ee61f")}
         onGranted={()=>{forgetProjectAutomations(project.id);void refreshProvenance(provenanceQuery)}}>
-        <p>It records which session and which run produced each commit, from evidence
-        swe-mux already captures. Commits made before it is on are not attributed
-        retroactively.</p>
+        <p>{t("GitTab.dbe8de2aa7")}</p>
       </GrantGate>}
-      {!provenanceError&&!provenanceOff&&provenance.length===0&&(provenanceQuery.trim()
-        ? <p class="git-change-empty">No recorded commit subject matches “{provenanceQuery.trim()}”.
-          This ledger holds only commits swe-mux observed, so Log's own search reaches further.</p>
-        : <p class="git-state">No session-to-commit associations recorded yet.</p>)}
+      {!provenanceError&&!provenanceOff&&provenance.length===0 && (provenanceQuery.trim() ? <p class="git-change-empty">{rich("GitTab.d78b428d69", { value1: provenanceQuery.trim() })}</p> : <p class="git-state">{t("GitTab.8dbe262029")}</p>)}
       {/* One card per commit, not one per row. The ledger stores a row per
           session because that is what each piece of evidence is about; read back
           flatly, ten occupancy rows bury the one naming who made the commit. */}
       {provenanceGroups.map(group=>{
-        const claim=(item:GitProvenance)=><p key={item.id}>{provenanceSessionButton(item)}{item.agentRunId&&<code title={`Agent run ${item.agentRunId}`}>{item.agentRunId.slice(0,8)}</code>}<span class={`git-provenance-role ${item.role}`}>{provenanceRoleLabel(item)}</span><span class={`git-provenance-confidence ${item.confidence}`}>{item.confidence}</span>{item.contributedPaths.length>0&&<small class="git-provenance-paths" title={item.contributedPaths.join('\n')}>{item.contributedPaths.slice(0,4).join(', ')}{item.contributedPaths.length>4?` +${item.contributedPaths.length-4} more`:''}</small>}{item.ambiguous&&<em>{provenanceAmbiguityNote(item)}</em>}</p>
+        const claim=(item:GitProvenance)=><p key={item.id}>{provenanceSessionButton(item)}{item.agentRunId && <code title={t("GitTab.abd939cd8d", { agentRunId: item.agentRunId })}>{item.agentRunId.slice(0,8)}</code>}<span class={`git-provenance-role ${item.role}`}>{provenanceRoleLabel(item)}</span><span class={`git-provenance-confidence ${item.confidence}`}>{item.confidence}</span>{item.contributedPaths.length>0 && <small class="git-provenance-paths" title={item.contributedPaths.join('\n')}>{item.contributedPaths.slice(0,4).join(', ')}{item.contributedPaths.length>4 ? t("GitTab.f2cc5e9132", { value1: item.contributedPaths.length-4 }) : ''}</small>}{item.ambiguous && <em>{provenanceAmbiguityNote(item)}</em>}</p>
         return <article key={group.commitOid}>
-          <div><strong>{shortSha(group.commitOid)}</strong><span>{group.subject||'Commit observed without readable metadata'}</span></div>
-          {group.committer&&claim(group.committer)}
+          <div><strong>{shortSha(group.commitOid)}</strong><span>{group.subject || t("GitTab.505cd03f7f")}</span></div>
+          {group.committer && claim(group.committer)}
           {/* A landing merge names two sessions in two roles: the one that ran
               the merge, and the one whose branch it carries. Both are true, and
               drawing only the first is what made a land read as authorship. */}
-          {group.integrator&&claim(group.integrator)}
+          {group.integrator && claim(group.integrator)}
           {group.branchAuthors.map(claim)}
           {group.contributors.filter(item=>item.id!==group.integrator?.id).map(claim)}
-          {group.observers.length>0&&<p class="git-provenance-occupancy"><span class="git-provenance-role observer">{occupancyLabel(group)}</span>{group.observers.slice(0,6).map(item=>provenanceSessionButton(item))}{group.observers.length>6&&<small>{`+${group.observers.length-6} more`}</small>}</p>}
-          <small>{group.worktreeRoot} · observed {new Date(group.observedAt*1000).toLocaleString()}</small>
+          {group.observers.length>0 && <p class="git-provenance-occupancy"><span class="git-provenance-role observer">{occupancyLabel(group)}</span>{group.observers.slice(0,6).map(item=>provenanceSessionButton(item))}{group.observers.length>6 && <small>{t("GitTab.a5ce39f001", { value1: group.observers.length-6 })}</small>}</p>}
+          <small>{rich("GitTab.c37c4120ae", { worktreeRoot: group.worktreeRoot, value2: new Date(group.observedAt*1000).toLocaleString(uiLocale.value) })}</small>
         </article>
       })}
       {/* Checkout facts, kept apart from session claims on purpose. A branch
           landing moves every attached session's HEAD and says nothing about any
           of them, so it belongs here rather than on each of their ledgers. */}
-      {refMoves.length>0&&<div class="git-ref-moves"><h4>Reference movements</h4>{refMoves.map(move=><article key={move.id}><div><strong>{shortSha(move.commitOid)}</strong><span>{move.subject||'Moved to a commit without readable metadata'}</span></div><p><span class={`git-ref-move-kind ${move.kind}`}>{refMoveLabel(move)}</span></p><small>{move.worktreeRoot} · from {shortSha(move.previousHead)} · observed {new Date(move.observedAt*1000).toLocaleString()}</small></article>)}</div>}
+      {refMoves.length>0 && <div class="git-ref-moves"><h4 data-heading-message="GitTab.943355281a">{t("GitTab.943355281a")}</h4>{refMoves.map(move=><article key={move.id}><div><strong>{shortSha(move.commitOid)}</strong><span>{move.subject || t("GitTab.c9d19d5e80")}</span></div><p><span class={`git-ref-move-kind ${move.kind}`}>{refMoveLabel(move)}</span></p><small>{rich("GitTab.0a968fea0f", { worktreeRoot: move.worktreeRoot, value2: shortSha(move.previousHead), value3: new Date(move.observedAt*1000).toLocaleString(uiLocale.value) })}</small></article>)}</div>}
     </section>}
-    {review&&<GitReviewModal project={project} repositoryRoot={overview?.repository.root||project.root} files={review.files} locator={review.locator} initialPath={review.initialPath} truncated={review.truncated} provenance={review.provenance} onClose={()=>setReview(null)} onOpenFile={openFor} onSendToAgent={onSendToAgent}/>}
-    {links&&<GitSessionLinks menu={links} onClose={()=>setLinks(null)} onFollow={followLink}/>}
+    {review && <GitReviewModal project={project} repositoryRoot={overview?.repository.root||project.root} files={review.files} locator={review.locator} initialPath={review.initialPath} truncated={review.truncated} provenance={review.provenance} onClose={()=>setReview(null)} onOpenFile={openFor} onSendToAgent={onSendToAgent}/>}
+    {links && <GitSessionLinks menu={links} onClose={()=>setLinks(null)} onFollow={followLink}/>}
   </div>
 }

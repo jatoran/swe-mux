@@ -51,6 +51,7 @@ from typing import Literal
 from watchfiles import watch as watch_changes
 
 from .parked_threads import parked
+from .ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -693,7 +694,7 @@ class CheckoutWatches:
             # nothing in silence (measured, watchfiles 1.2), and a watch that looks
             # live while reporting nothing would take its checkout off polling.
             if not os.path.isdir(watch.path):
-                raise FileNotFoundError(f"watch root is not a directory: {watch.path}")
+                raise FileNotFoundError(ui_message("git_watch.dced9271dd", value1=watch.path))
             batches = iter(
                 watch_changes(
                     watch.path,

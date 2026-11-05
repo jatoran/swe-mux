@@ -1,3 +1,4 @@
+import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { createPortal } from 'preact/compat'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
@@ -52,31 +53,31 @@ const LOGIN_POLL_MS=3_000
 // The cadence for an install with no provider configured, where the only thing
 // that can change this payload is a login run somewhere else entirely.
 const IDLE_POLL_MS=300_000
-const quotaTitle=(account?:ProviderAccount)=>account?.quota?.error||`5h ${quotaWindowSummary(account?.quota?.session)} · weekly ${quotaWindowSummary(account?.quota?.weekly)}${account?.quota?.fable?` · fable weekly ${percent(account.quota.fable)}`:''}`
-const identityLabel=(current?:CurrentProviderAccount)=>current?.email||current?.organization||current?.provider_account_id||'unknown identity'
-const currentLabel=(current?:CurrentProviderAccount,account?:ProviderAccount)=>account?.label||(current?.state==='external'?identityLabel(current):current?.state==='unreadable'?'login unreadable':'signed out')
-const currentSummary=(current?:CurrentProviderAccount,account?:ProviderAccount)=>account?quotaSummary(account):current?.state==='external'?'external · not saved':current?.state==='unreadable'?'check credentials':'no active login'
-const currentDescription=(current?:CurrentProviderAccount,account?:ProviderAccount)=>account?`System login: ${account.label}`:current?.state==='external'?`System login: ${identityLabel(current)} (external / unsaved)`:current?.state==='unreadable'?'System credentials exist but cannot be read.':'No system login detected.'
+const quotaTitle=(account?:ProviderAccount)=>account?.quota?.error||t("ProviderAccounts.24d1860ff0", { value1: quotaWindowSummary(account?.quota?.session), value2: quotaWindowSummary(account?.quota?.weekly), value3: account?.quota?.fable?t("ProviderAccounts.bf150c9cda", { value1: percent(account.quota.fable) }):'' })
+const identityLabel=(current?:CurrentProviderAccount)=>current?.email||current?.organization||current?.provider_account_id||t("ProviderAccounts.23bd79386a")
+const currentLabel=(current?:CurrentProviderAccount,account?:ProviderAccount)=>account?.label||(current?.state==='external'?identityLabel(current):current?.state==='unreadable'?t("ProviderAccounts.2c09857a88"):t("ProviderAccounts.67e877ee28"))
+const currentSummary=(current?:CurrentProviderAccount,account?:ProviderAccount)=>account?quotaSummary(account):current?.state==='external'?t("ProviderAccounts.9c35a2d6ef"):current?.state==='unreadable'?t("ProviderAccounts.006b426548"):t("ProviderAccounts.a4cd589b30")
+const currentDescription=(current?:CurrentProviderAccount,account?:ProviderAccount)=>account?t("ProviderAccounts.93f6448c76", { value1: account.label }):current?.state==='external'?t("ProviderAccounts.74a7503319", { value1: identityLabel(current) }):current?.state==='unreadable'?t("ProviderAccounts.3a1a72e09f"):t("ProviderAccounts.d0440fbec6")
 // A name read from the provider CLI's cached profile is not proof of who the
 // token belongs to, so an unverified match is offered as a relink, never applied.
-const hintDescription=(current?:CurrentProviderAccount)=>current?.match_hint?`Looks like “${current.match_hint.label}” by ${current.match_hint.reason}, but that is unverified; relink only if this really is that account.`:''
-const conflictDescription=(account:ProviderAccount)=>account.conflict?account.conflict.is_primary?`Another saved slot holds these same credentials; its usage is a duplicate of this one.`:`Holds the same provider account as another saved slot, so its usage mirrors that one. Quota polling is suspended; re-authenticate or remove it.`:''
+const hintDescription=(current?:CurrentProviderAccount)=>current?.match_hint?t("ProviderAccounts.66909d0a14", { value1: current.match_hint.label, value2: current.match_hint.reason }):''
+const conflictDescription=(account:ProviderAccount)=>account.conflict?account.conflict.is_primary?t("ProviderAccounts.23eb06cfef"):t("ProviderAccounts.a9ded39c99"):''
 // Two states, so two words. This used to return three different strings for those two
 // states, which read as three distinct conditions on a row that already carries a
 // label, an identity and three quota figures. The sentence moved into the tooltip.
 const identityNote=(account:ProviderAccount)=>account.identity_source==='token'?'verified':'unverified'
-const identityTitle=(account:ProviderAccount)=>account.identity_source==='token'?'Identity confirmed by asking the provider with these credentials.':'Identity has not been confirmed against the provider yet.'
+const identityTitle=(account:ProviderAccount)=>account.identity_source==='token'?t("ProviderAccounts.146dbd0b5d"):t("ProviderAccounts.0c9d48752d")
 // Daemon clock: the refresh was stamped there, so ageing it locally would report
 // a just-polled account as minutes stale on a client whose clock is behind.
 const formatRefreshAge=(seconds?:number,nowSeconds=serverNow())=>{
   if(!seconds)return ''
   const delta=Math.max(0,Math.floor(nowSeconds-seconds))
-  if(delta<60)return 'now'
+  if(delta<60)return t("ProviderAccounts.ed5eb9a37e")
   const minutes=Math.floor(delta/60)
-  if(minutes<60)return `${minutes}m`
+  if(minutes<60)return t("ProviderAccounts.10767db0b0", { value1: minutes })
   const hours=Math.floor(minutes/60)
-  if(hours<24)return `${hours}h`
-  return `${Math.floor(hours/24)}d`
+  if(hours<24)return t("ProviderAccounts.9f42db020f", { value1: hours })
+  return t("ProviderAccounts.eb20d8f12a", { value1: Math.floor(hours/24) })
 }
 
 // Every saved account's display name, by id, for surfaces that name an account without
@@ -182,9 +183,9 @@ function LoginProgress({login,busy,onDismiss}:{login:LoginState|null;busy:boolea
   // A `div`, not a `p`: the popover styles every direct `p` child of a section as muted
   // 8px marginalia, which is the opposite of what the one thing you are waiting on wants.
   return <div class={`account-login ${login.state}`} role={login.state==='failed'?'alert':'status'}>
-    <strong>{running?`Signing in to ${login.provider}…`:login.state==='succeeded'?`Signed in${login.label?` as ${login.label}`:''}`:`${login.provider} sign-in did not finish`}</strong>
-    <small>{running?`Finish the login in the browser on the daemon host. This keeps running if you close this panel, and shows up wherever you look next.`:login.state==='failed'?login.error||'no reason reported':'The account is saved and selected.'}</small>
-    <button disabled={busy} onClick={onDismiss}>{running?'cancel':'dismiss'}</button>
+    <strong>{running ? t("ProviderAccounts.c21e4b6981", { provider: login.provider }) : login.state==='succeeded' ? t("ProviderAccounts.1dd1b033cc", { value1: login.label?` as ${login.label}`:'' }) : t("ProviderAccounts.4763ed8d0a", { provider: login.provider })}</strong>
+    <small>{running ? t("ProviderAccounts.9b5c580009") : login.state==='failed' ? login.error || t("ProviderAccounts.7cb13fcefb") : t("ProviderAccounts.f76ebd19ef")}</small>
+    <button disabled={busy} onClick={onDismiss}>{running ? t("ProviderAccounts.2374d91794") : t("ProviderAccounts.5880072b27")}</button>
   </div>
 }
 
@@ -206,12 +207,12 @@ function StrandedNotice({row,cli,onDismiss}:{row:StrandedSessions;cli:string;onD
   const [expanded,setExpanded]=useState(false)
   const [neverAgain,setNeverAgain]=useState(false)
   return <div class="account-session-notice">
-    <button type="button" class="account-session-notice-summary" aria-expanded={expanded} onClick={()=>setExpanded(value=>!value)}><i class="account-session-notice-chevron" aria-hidden="true">{expanded?'▾':'▸'}</i><span>{strandedSessionSummary(row)}</span></button>
-    {expanded&&<div class="account-session-notice-body">
+    <button type="button" class="account-session-notice-summary" aria-expanded={expanded} onClick={()=>setExpanded(value=>!value)}><i class="account-session-notice-chevron" aria-hidden="true">{expanded ? '▾' : '▸'}</i><span>{strandedSessionSummary(row)}</span></button>
+    {expanded && <div class="account-session-notice-body">
       <p>{strandedSessionNotice(row,cli)}</p>
       <div class="account-session-notice-actions">
-        <label><input type="checkbox" checked={neverAgain} onChange={event=>setNeverAgain(event.currentTarget.checked)}/>never show this again</label>
-        <button type="button" onClick={()=>onDismiss(neverAgain)}>dismiss</button>
+        <label>{rich("ProviderAccounts.fa25202774", { value1: <input type="checkbox" checked={neverAgain} onChange={event=>setNeverAgain(event.currentTarget.checked)}/> })}</label>
+        <button type="button" onClick={()=>onDismiss(neverAgain)}>{t("ProviderAccounts.5880072b27")}</button>
       </div>
     </div>}
   </div>
@@ -247,12 +248,12 @@ export function AccountSwitcher({variant='full',placement,onManage,onViewUsage,p
   // popover offers a sign-in for; `visible` is the subset a credential exists for,
   // and is what the status block, the rail and the phone's toolbar draw.
   const providers=status?.providers||[]
-  const visible=useMemo(()=>visibleProviders(status),[status])
+  const visible=useMemo(()=>visibleProviders(status), [status, uiLocale.value, catalogRevision.value])
   const selected=(provider:ProviderName)=>status?.accounts.find(account=>account.id===status.selected[provider])
   // Unread is now purely the server's unreviewed set. It used to be a localStorage
   // marker, which is why dismissing at the desk left the same alert waiting on the phone.
   const resetItems=status?.reset_alert?.items||[]
-  const resetProviders=useMemo(()=>[...new Set(resetItems.map(item=>item.provider))],[resetItems])
+  const resetProviders=useMemo(()=>[...new Set(resetItems.map(item=>item.provider))], [resetItems, uiLocale.value, catalogRevision.value])
   const resetUnread=resetItems.length>0
   // Which stranded-session notices to draw: not the ones hidden for good (server-side,
   // every device), and not the ones dismissed for now (this page, every switcher on it).
@@ -323,8 +324,8 @@ export function AccountSwitcher({variant='full',placement,onManage,onViewUsage,p
   // would put Codex's 5h and weekly columns at different offsets from Claude's. An attribute
   // rather than a class, so the root's `class` stays the literal the UI-scale contract reads.
   const popoverFable=hasFableWindow(status?.accounts||[])
-  const popup=open&&<div ref={popover} class="account-popover ui-portal" data-fable={popoverFable?'':undefined} style={popoverStyle} role="dialog" aria-label="Provider account switcher">
-      <header><div><strong>ACCOUNTS</strong><span>quota per account</span></div><button aria-label="Close account switcher" onClick={()=>setOpen(false)}>×</button></header>
+  const popup=open&&<div ref={popover} class="account-popover ui-portal" data-fable={popoverFable?'':undefined} style={popoverStyle} role="dialog" aria-label={t("ProviderAccounts.db7c1980b7")}>
+      <header><div><strong>{t("ProviderAccounts.6816496965")}</strong><span>{t("ProviderAccounts.8ba9e3a952")}</span></div><button aria-label={t("ProviderAccounts.8028d6b795")} onClick={()=>setOpen(false)}>×</button></header>
       {providers.map(provider=>{const current=status?.current[provider];const active=selected(provider);const login=loginOf(status?.login,provider);const saved=status?.accounts.filter(account=>account.provider===provider)||[];
         // Decided once per provider, then handed to every row, so the columns are the
         // section's rather than each account's. See `hasFableWindow`.
@@ -334,8 +335,8 @@ export function AccountSwitcher({variant='full',placement,onManage,onViewUsage,p
             used to print "No saved accounts" and offer a `manage…` button, which is
             the one screen a new install always lands on and the one with no way
             forward on it. */}
-        <div class="account-section-head"><h4>{provider}</h4><button class="account-signin" disabled={!!busy||login?.state==='running'} title={signInTitle(status?.login_commands,provider)} onClick={()=>startLogin(provider)}>+ sign in</button></div>
-        {current?.state!=='saved'&&<p class={`account-current-notice ${current?.state||'signed_out'}`}>{currentDescription(current,active)}{current?.match_hint?` ${hintDescription(current)}`:''}</p>}
+        <div class="account-section-head"><h4>{provider}</h4><button class="account-signin" disabled={!!busy||login?.state==='running'} title={signInTitle(status?.login_commands,provider)} onClick={()=>startLogin(provider)}>{t("ProviderAccounts.78e84a7b05")}</button></div>
+        {current?.state!=='saved' && <p class={`account-current-notice ${current?.state||'signed_out'}`}>{currentDescription(current,active)}{current?.match_hint ? t("ProviderAccounts.50843318c9", { value1: hintDescription(current) }) : ''}</p>}
         <LoginProgress login={login} busy={!!busy} onDismiss={()=>dismissLogin(provider)}/>
         {saved.map(account=>{
           // Sessions this account was selected for when they started. Deliberately not
@@ -351,15 +352,13 @@ export function AccountSwitcher({variant='full',placement,onManage,onViewUsage,p
           // anything selecting on that (the site demo's walkthrough switches accounts and
           // switches back) would be naming a moving target.
           const spawned=spawnedSessionCount(status?.sessions,account.id)
-          const spawnedTitle=`${spawned} live session${spawned===1?'':'s'} spawned under this account. That is what mux had selected when each started, not proof of what it authenticates as now.`
-          const state=account.conflict&&!account.conflict.is_primary?'duplicate account, polling suspended':quotaTitle(account)
-          return <button class={`${status?.selected[provider]===account.id?'active':''} ${account.conflict&&!account.conflict.is_primary?'conflicted':''}`} disabled={!!busy} data-provider-account={account.id} onClick={()=>void choose(account)} aria-label={`${account.label}: ${state}${spawned?`; ${spawnedTitle}`:''}`} title={account.conflict?conflictDescription(account):quotaTitle(account)}><span>{status?.selected[provider]===account.id?'◆':'◇'}</span><strong>{account.label}</strong>{spawned>0&&<i class="account-session-count" aria-hidden="true" title={spawnedTitle}>{spawned}×</i>}{account.quota?.refreshed_at?<i class="account-refresh-age" title={`Quotas refreshed ${new Date(account.quota.refreshed_at*1000).toLocaleString()}`}>{formatRefreshAge(account.quota.refreshed_at)}</i>:null}<small>{account.conflict&&!account.conflict.is_primary?'duplicate account · polling suspended':<span class={`quota-row${sectionFable?' has-fable':''}`}>
-          {account.quota?.status==='error'
-            ?<em class="quota-row-note">unavailable</em>
-            :quotaRowCells(account,sectionFable).map((cell,index)=><span class={`quota-cell quota-cell-${cell.key}`} key={cell.key}>{index>0&&<i class="quota-separator" aria-hidden="true"></i>}<b>{cell.percent}</b>{' '}{cell.reset&&<i class="quota-reset">{cell.reset}</i>}<i class="quota-window-label">{cell.qualifier}</i></span>)}
+          const spawnedTitle=t("ProviderAccounts.db17cf0732", { value1: spawned, value2: (spawned===1) ? 'yes' : 'no' })
+          const state=account.conflict&&!account.conflict.is_primary?t("ProviderAccounts.0d2d061b91"):quotaTitle(account)
+          return <button class={`${status?.selected[provider]===account.id?'active':''} ${account.conflict&&!account.conflict.is_primary?'conflicted':''}`} disabled={!!busy} data-provider-account={account.id} onClick={()=>void choose(account)} aria-label={t("ProviderAccounts.74a206b8c2", { label: account.label, state: state, value3: spawned?`; ${spawnedTitle}`:'' })} title={account.conflict ? conflictDescription(account) : quotaTitle(account)}><span>{status?.selected[provider]===account.id ? '◆' : '◇'}</span><strong>{account.label}</strong>{spawned>0 && <i class="account-session-count" aria-hidden="true" title={spawnedTitle}>{spawned}×</i>}{account.quota?.refreshed_at ? <i class="account-refresh-age" title={t("ProviderAccounts.989e9f6579", { value1: new Date(account.quota.refreshed_at*1000).toLocaleString(uiLocale.value) })}>{formatRefreshAge(account.quota.refreshed_at)}</i> : null}<small>{account.conflict&&!account.conflict.is_primary ? t("ProviderAccounts.522c07870a") : <span class={`quota-row${sectionFable?' has-fable':''}`}>
+          {account.quota?.status==='error' ? <em class="quota-row-note">{t("ProviderAccounts.ba691ba042")}</em> : quotaRowCells(account,sectionFable).map((cell,index)=><span class={`quota-cell quota-cell-${cell.key}`} key={cell.key}>{index>0 && <i class="quota-separator" aria-hidden="true"></i>}<b>{cell.percent}</b>{' '}{cell.reset && <i class="quota-reset">{cell.reset}</i>}<i class="quota-window-label">{cell.qualifier}</i></span>)}
         </span>}</small></button>
         })}
-        {!saved.length&&!login&&<button class="account-empty-cta" disabled={!!busy} onClick={()=>startLogin(provider)}>No saved accounts — <strong>sign in to {provider}</strong></button>}
+        {!saved.length&&!login && <button class="account-empty-cta" disabled={!!busy} onClick={()=>startLogin(provider)}>{rich("ProviderAccounts.ee7d58b623", { value1: <strong>{rich("ProviderAccounts.d0673dd167", { provider: provider })}</strong> })}</button>}
         {/* The point of the counts. A switch reaches the next process, not the ones
             already running, so this names the logins still being spent. One collapsed
             line each, expanding to the whole sentence on a click rather than in a
@@ -371,33 +370,33 @@ export function AccountSwitcher({variant='full',placement,onManage,onViewUsage,p
             is drawn - the count on the row is the whole story there. */}
         {strandedNotices(provider).map((row,index)=><StrandedNotice key={`${strandedNoticeKey(provider,row)}-${index}`} row={row} cli={harnessDisplayName(provider)} onDismiss={neverAgain=>dismissStranded(provider,row,neverAgain)}/>)}
       </section>})}
-      {error&&<p class="account-error" role="alert">{error}</p>}
-      {resetUnread&&<section class="account-reset-alert"><h4>quota reset evidence</h4><p>{resetItems.length===1?'One confirmed unexpected reset:':`${status?.reset_alert?.count??resetItems.length} confirmed unexpected resets · one provider rollover reaches every account on that plan:`}</p><ul>{resetItems.map(item=><li key={item.id}><strong>{item.provider} {item.window}</strong> · {status?.accounts.find(account=>account.id===item.account_id)?.label||item.account_id} · {item.before_value}% → {item.after_value}%</li>)}</ul><div>{resetProviders.length===1&&resetProviders[0]==='codex'&&<button disabled={!!busy} onClick={()=>void reviewResets('manual_usage')}>{busy==='reset-manual_usage'?'marking…':resetItems.length>1?'all manual Codex usage':'manual Codex usage'}</button>}<button class="danger" disabled={!!busy} onClick={()=>void reviewResets('discarded')}>{busy==='reset-discarded'?'discarding…':resetItems.length>1?'discard all as errors':'discard as error'}</button><button disabled={!!busy} onClick={()=>void reviewResets('seen')}>{busy==='reset-seen'?'marking…':'mark seen'}</button><button disabled={!!busy} onClick={toggleResetSound}>{resetSound?'mute reset sound':'enable reset sound'}</button></div></section>}
+      {error && <p class="account-error" role="alert">{error}</p>}
+      {resetUnread && <section class="account-reset-alert"><h4 data-heading-message="ProviderAccounts.102b4f57eb">{t("ProviderAccounts.102b4f57eb")}</h4><p>{resetItems.length===1 ? t("ProviderAccounts.2b1924c73c") : t("ProviderAccounts.c969fe0eec", { value1: status?.reset_alert?.count??resetItems.length })}</p><ul>{resetItems.map(item=><li key={item.id}><strong>{item.provider} {item.window}</strong> · {status?.accounts.find(account=>account.id===item.account_id)?.label || item.account_id} · {item.before_value}% → {item.after_value}%</li>)}</ul><div>{resetProviders.length===1&&resetProviders[0]==='codex' && <button disabled={!!busy} onClick={()=>void reviewResets('manual_usage')}>{busy==='reset-manual_usage' ? t("ProviderAccounts.3511b39559") : resetItems.length>1 ? t("ProviderAccounts.e4be9e5389") : t("ProviderAccounts.7f3867214e")}</button>}<button class="danger" disabled={!!busy} onClick={()=>void reviewResets('discarded')}>{busy==='reset-discarded' ? t("ProviderAccounts.0cd6a8d83d") : resetItems.length>1 ? t("ProviderAccounts.3a2f44c210") : t("ProviderAccounts.fe89a74ade")}</button><button disabled={!!busy} onClick={()=>void reviewResets('seen')}>{busy==='reset-seen' ? t("ProviderAccounts.3511b39559") : t("ProviderAccounts.ef09cf5e20")}</button><button disabled={!!busy} onClick={toggleResetSound}>{resetSound ? t("ProviderAccounts.f16bbe2061") : t("ProviderAccounts.fc5a690e4e")}</button></div></section>}
       {/* Refresh is an icon because it is the only footer control that acts on this popover
           rather than leaving it, and the two that leave read better as words. Its label is on
           `aria-label`/`title`, so the spinning state stays a state rather than a relabelling. */}
-      <footer><button class={`account-refresh${busy==='refresh'?' spinning':''}`} disabled={!!busy} aria-busy={busy==='refresh'?'true':undefined} aria-label="Refresh quotas" title={busy==='refresh'?'refreshing quotas…':'refresh quotas'} onClick={()=>void refresh()}><RefreshIcon/></button><button onClick={()=>{setOpen(false);onViewUsage()}}>view usage</button><button onClick={()=>{setOpen(false);onManage()}}>manage…</button></footer>
+      <footer><button class={`account-refresh${busy==='refresh'?' spinning':''}`} disabled={!!busy} aria-busy={busy==='refresh'?'true':undefined} aria-label={t("ProviderAccounts.e58a0c28fd")} title={busy==='refresh' ? t("ProviderAccounts.4c0fd75c4b") : t("ProviderAccounts.902bfeca5c")} onClick={()=>void refresh()}><RefreshIcon/></button><button onClick={()=>{setOpen(false);onViewUsage()}}>{t("ProviderAccounts.2b82a05c64")}</button><button onClick={()=>{setOpen(false);onManage()}}>{t("ProviderAccounts.6e1eade910")}</button></footer>
     </div>
   const quotas=providerQuotaWindows(status?.accounts||[],status?.selected||{})
   const weeklyTitle=(provider:ProviderName)=>{
     const window=quotas[provider]?.weekly
-    if(!window)return `${provider} · weekly quota unavailable · open accounts`
+    if(!window)return t("ProviderAccounts.648d5f10be", { provider: provider })
     const remaining=formatResetRemaining(window.resets_at)
-    return `${provider} weekly ${Math.round(window.used_percent)}% used${remaining?` · resets in ${remaining}`:''} · open accounts`
+    return t("ProviderAccounts.9126c76bbf", { provider: provider, value2: Math.round(window.used_percent), value3: remaining?t("ProviderAccounts.a5da22527d", { value1: remaining }):'' })
   }
   // The tooltip is also the chip's accessible name, so it expands the compact visual grid
   // into named windows and reset relationships for screen readers.
   const toolbarTitle=(provider:ProviderName)=>{
     const windows=quotas[provider]
-    if(!windows)return `${provider} · quota unavailable · open accounts`
+    if(!windows)return t("ProviderAccounts.7181d835f0", { provider: provider })
     const part=(label:string,window:QuotaWindowDisplay|null)=>{
-      if(!window)return `${label} not reported`
+      if(!window)return t("ProviderAccounts.a29ee3edad", { value1: label })
       const remaining=formatResetRemaining(window.resets_at)
-      return `${label} ${Math.round(window.used_percent)}% used${remaining?` (resets in ${remaining})`:''}`
+      return `${label} ${Math.round(window.used_percent)}% used${remaining?t("ProviderAccounts.9208262a7e", { value1: remaining }):''}`
     }
     const parts=[part('5h',windows.session),part('weekly',windows.weekly)]
     if(windows.fable)parts.push(part('fable',windows.fable))
-    return `${provider} · ${parts.join(' · ')} · open accounts`
+    return t("ProviderAccounts.8748aef225", { provider: provider, value2: parts.join(' · ') })
   }
   const quotaGrid=(provider:ProviderName)=>{
     const account=selected(provider)
@@ -422,7 +421,7 @@ export function AccountSwitcher({variant='full',placement,onManage,onViewUsage,p
   const quotaChip=(provider:ProviderName,title:string)=>{
     const weekly=quotas[provider]?.weekly||null
     return <button key={provider} class={`rail-quota usage-${shownUsageBand(weekly?.used_percent)} ${resetProviders.includes(provider)?'quota-reset-unread':''}`} aria-label={title} aria-expanded={open} title={title} onClick={toggle}>
-      <span class={`provider-glyph ${provider}`} aria-hidden="true">{harnessMark(provider)}</span><strong>{weekly?`${Math.round(weekly.used_percent)}%`:'—'}</strong>
+      <span class={`provider-glyph ${provider}`} aria-hidden="true">{harnessMark(provider)}</span><strong>{weekly ? t("ProviderAccounts.6a53a571fa", { value1: Math.round(weekly.used_percent) }) : '—'}</strong>
     </button>
   }
   // The expanded sidebar carries the invitation for all three surfaces: the 40px rail
@@ -436,30 +435,17 @@ export function AccountSwitcher({variant='full',placement,onManage,onViewUsage,p
   // the switch that removes the last saved account.
   if(!visible.length&&!invite&&!open)return null
   return <div ref={root} class={`account-switcher ${compact?'compact':''} ${variant==='rail'?'rail':''}`}>
-    {variant==='rail'?visible.map(provider=>quotaChip(provider,weeklyTitle(provider)))
-    // The mobile toolbar carries one chip per provider, in the same provider order as every
-    // other surface — collapsing both into whichever weekly window was furthest along hid which
-    // provider was burning. It wears the same square as the collapsed rail rather than the
-    // expanded sidebar's usage breakdown: that breakdown is three columns of numbers competing
-    // with the Project name and two run controls for one 44px row, and the number a phone is
-    // glanced at for is how much of the week is gone. The breakdown is one tap away, in the
-    // popover this chip opens, which is also where the tooltip's window-by-window text lands
-    // for a device that cannot hover.
-    :variant==='compact'?visible.map(provider=>quotaChip(provider,toolbarTitle(provider)))
-    // The invitation replaces the rows rather than sitting above them: the moment a
-    // credential exists there is something real here, and this is gone.
-    :invite?<div class="account-prompt">
-      <div><strong>Provider accounts</strong><small>Quota and one-click account switching for Claude and Codex, once one of them is signed in on this machine.</small></div>
+    {variant==='rail' ? visible.map(provider=>quotaChip(provider,weeklyTitle(provider))) : variant==='compact' ? visible.map(provider=>quotaChip(provider,toolbarTitle(provider))) : invite ? <div class="account-prompt">
+      <div><strong>{t("ProviderAccounts.a701acdcc0")}</strong><small>{t("ProviderAccounts.b0450ee867")}</small></div>
       <div class="account-prompt-actions">
-        <button type="button" class="primary" aria-expanded={open} onClick={show}>add provider</button>
-        <button type="button" title="Puts away this invitation, not the feature. Sign in later and the quota rows come back by themselves." onClick={()=>onDismissPrompt?.()}>hide</button>
+        <button type="button" class="primary" aria-expanded={open} onClick={show}>{t("ProviderAccounts.4b097a1bb0")}</button>
+        <button type="button" title={t("ProviderAccounts.f3edcda12b")} onClick={()=>onDismissPrompt?.()}>{t("ProviderAccounts.1f5bb9791a")}</button>
       </div>
-    </div>
-    :<div class="account-summary">
-      {visible.map(provider=>{const account=selected(provider);const current=status?.current[provider];const state=account?account.quota?.status||'pending':current?.state||'loading';return <button class={account?'tracked':current?.state==='external'?'external':'untracked'} aria-label={`${provider} account: ${currentLabel(current,account)}; ${currentSummary(current,account)}; ${state}`} aria-expanded={open} onClick={toggle} title={`${provider} · ${account?quotaTitle(account):currentDescription(current,account)}`}>{quotaGrid(provider)}{state!=='ready'&&<em>{state}</em>}</button>})}
-      {resetUnread&&<button class="quota-reset-indicator" title="Confirmed unexpected reset; open for evidence" onClick={show}><span>RESET</span><strong>{resetItems.length>1?`${resetItems.length} unexpected quota resets`:'unexpected quota reset'}</strong><small>{resetProviders.join(' · ')}</small></button>}
+    </div> : <div class="account-summary">
+      {visible.map(provider=>{const account=selected(provider);const current=status?.current[provider];const state=account?account.quota?.status||'pending':current?.state||'loading';return <button class={account?'tracked':current?.state==='external'?'external':'untracked'} aria-label={t("ProviderAccounts.d021094ae4", { provider: provider, value2: currentLabel(current,account), value3: currentSummary(current,account), state: state })} aria-expanded={open} onClick={toggle} title={t("ProviderAccounts.f107670b0c", { provider: provider, value2: account?quotaTitle(account):currentDescription(current,account) })}>{quotaGrid(provider)}{state!=='ready' && <em>{state}</em>}</button>})}
+      {resetUnread && <button class="quota-reset-indicator" title={t("ProviderAccounts.a43831952e")} onClick={show}><span>{t("ProviderAccounts.7ef2fad58d")}</span><strong>{resetItems.length>1 ? t("ProviderAccounts.611017bdbe", { length: resetItems.length }) : t("ProviderAccounts.ca5b19ebc6")}</strong><small>{resetProviders.join(' · ')}</small></button>}
     </div>}
-    {popup&&createPortal(popup,document.body)}
+    {popup && createPortal(popup,document.body)}
   </div>
 }
 
@@ -485,11 +471,11 @@ function AccountAliasField({account,disabled,onCommit}:{account:ProviderAccount;
   const dirty=draft!==saved
   const identity=account.email||account.organization||`${account.provider} account`
   return <label class="account-alias">
-    <span>name</span>
+    <span>{t("ProviderAccounts.82a3537ff0")}</span>
     <input value={draft} placeholder={identity} maxLength={64} disabled={disabled} spellcheck={false} autocomplete="off"
       data-owns-escape={dirty?'':undefined}
-      aria-label={`Name for ${account.provider} account ${identity}`}
-      title="Shown instead of the email everywhere in swe-mux. Leave empty to use the email."
+      aria-label={t("ProviderAccounts.3a133954f5", { provider: account.provider, identity: identity })}
+      title={t("ProviderAccounts.10180038d7")}
       onInput={event=>setDraft(event.currentTarget.value)}
       onKeyDown={event=>{
         if(event.key==='Enter'){event.preventDefault();event.currentTarget.blur()}
@@ -507,7 +493,7 @@ export function AccountSettings() {
   const [message,setMessage]=useState('')
   const [confirmRemove,setConfirmRemove]=useState('')
   const providers=status?.providers||[]
-  const grouped=useMemo(()=>Object.fromEntries(providers.map(provider=>[provider,status?.accounts.filter(account=>account.provider===provider)||[]])),[status,providers.join('\0')])
+  const grouped=useMemo(()=>Object.fromEntries(providers.map(provider=>[provider,status?.accounts.filter(account=>account.provider===provider)||[]])), [status, providers.join('\0'), uiLocale.value, catalogRevision.value])
   // The tour's account step waits for an account to actually exist. It used to fire on
   // the sign-in request returning, which was the same moment only while that request
   // blocked for the whole login; now the request returns as soon as the CLI is running,
@@ -517,13 +503,13 @@ export function AccountSettings() {
   const strandedHidden=useNoticePreferences().hidden.includes('stranded-sessions')
   const mutate=async(key:string,method:string,path:string,body?:unknown,tutorialAction=false)=>{
     setBusy(key);setError('');setMessage('')
-    try{const next=await api<ProviderAccountsStatus>(method,path,body);setStatus(next);notifyChanged();setMessage('Account state updated.');if(tutorialAction)emitTutorialAction({action:'account-saved'})}
+    try{const next=await api<ProviderAccountsStatus>(method,path,body);setStatus(next);notifyChanged();setMessage(t("ProviderAccounts.ac2e667ad2"));if(tutorialAction)emitTutorialAction({action:'account-saved'})}
     catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
     finally{setBusy('')}
   }
   const selectAccount=async(account:ProviderAccount)=>{
     setBusy(account.id);setError('');setMessage('')
-    try{const next=await api<ProviderAccountsStatus>('POST',`/api/provider-accounts/${account.provider}/${account.id}/select`,{});setStatus(next);notifyChanged();setMessage('Account state updated.')}
+    try{const next=await api<ProviderAccountsStatus>('POST',`/api/provider-accounts/${account.provider}/${account.id}/select`,{});setStatus(next);notifyChanged();setMessage(t("ProviderAccounts.ac2e667ad2"))}
     catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
     finally{setBusy('')}
   }
@@ -538,31 +524,31 @@ export function AccountSettings() {
     void mutate(account.id,'PATCH',`/api/provider-accounts/${account.provider}/${account.id}`,{alias:next||null})
   }
   const remove=(account:ProviderAccount)=>{if(confirmRemove!==account.id){setConfirmRemove(account.id);return}setConfirmRemove('');void mutate(account.id,'DELETE',`/api/provider-accounts/${account.provider}/${account.id}`)}
-  return <section data-tutorial="provider-accounts" class="account-settings"><div class="account-settings-head"><h3>Provider accounts</h3><div class="account-actions">
+  return <section data-tutorial="provider-accounts" class="account-settings"><div class="account-settings-head"><h3 data-heading-message="ProviderAccounts.a701acdcc0">{t("ProviderAccounts.a701acdcc0")}</h3><div class="account-actions">
       {/* One global control, once. `/verify` is a whole-install operation, so a copy of
           it under each provider heading was three buttons for one endpoint - and they
           shared a busy key, so pressing either read "verifying…" on both. */}
-      <button disabled={!!busy} onClick={()=>void mutate('verify','POST','/api/provider-accounts/verify',{})}>{busy==='verify'?'verifying…':'verify identities'}</button>
-      <button disabled={!!busy} onClick={()=>void mutate('refresh','POST','/api/provider-accounts/refresh',{})}>{busy==='refresh'?'refreshing…':'refresh quotas'}</button>
+      <button disabled={!!busy} onClick={()=>void mutate('verify','POST','/api/provider-accounts/verify',{})}>{busy==='verify' ? t("ProviderAccounts.8073bb0cbb") : t("ProviderAccounts.07c50b743d")}</button>
+      <button disabled={!!busy} onClick={()=>void mutate('refresh','POST','/api/provider-accounts/refresh',{})}>{busy==='refresh' ? t("ProviderAccounts.eb50add3d3") : t("ProviderAccounts.902bfeca5c")}</button>
     </div></div>
     {/* Policy that never changes is reference, not instruction, and it was the first
         thing on the panel every time. Folded away, it is still one click from the
         control it describes. */}
-    <details class="account-explainer"><summary>How switching works</summary><p>Switching replaces only the provider's system authentication file. Global config, skills, projects, and histories remain shared. It is never blocked and never confirmed. Whether it reaches sessions already running is up to the CLI: Claude Code re-reads its credential file when the file changes, so a running pane spends the new account from its next request, while Codex reads its login once at startup and keeps spending the outgoing account until it is restarted. The account switcher counts live sessions against the account each one was spawned under, and flags the Codex ones still on an outgoing login.</p><p>The switch also restores the account's cached CLI profile, so <code>/status</code> in new sessions names the right account immediately; panes already running keep the old display until restarted, even where their requests already go to the new account.</p><p>swe-mux follows the daemon host credentials; startup never restores an older saved account. Credentials move into a saved account only on a provider-verified identity or an explicit relink.</p></details>
+    <details class="account-explainer"><summary>{t("ProviderAccounts.758af4104e")}</summary><p>{t("ProviderAccounts.7b4e5e26e2")}</p><p>{rich("ProviderAccounts.1d5cc11250", { value1: <code>{t("ProviderAccounts.ae4267a01f")}</code> })}</p><p>{t("ProviderAccounts.1fce8bb8d1")}</p></details>
     {/* The undo for the switcher's "never show this again". A checkbox ticked in a
         popover that then vanishes needs a way back, and the setting is worth a line
         here in its own right: the count on each row is the fact, and this is only
         whether the popover also spells out what it means. */}
-    <label class="check account-notice-pref"><span>Flag live Codex sessions still on an outgoing login in the account switcher</span><input type="checkbox" checked={!strandedHidden} onChange={event=>void setNoticeHidden('stranded-sessions',!event.currentTarget.checked)}/></label>
-    {providers.map(provider=>{const current=status?.current[provider];const accounts=grouped[provider]||[];const active=accounts.find(account=>account.id===current?.account_id);const login=loginOf(status?.login,provider);return <div class="account-provider-settings"><header><div><strong>{provider.toUpperCase()}</strong><small>{accounts.length} saved · quotas refresh every {status?.poll_minutes||15} minutes</small></div></header>
+    <label class="check account-notice-pref"><span>{t("ProviderAccounts.bb30db325d")}</span><input type="checkbox" checked={!strandedHidden} onChange={event=>void setNoticeHidden('stranded-sessions',!event.currentTarget.checked)}/></label>
+    {providers.map(provider=>{const current=status?.current[provider];const accounts=grouped[provider]||[];const active=accounts.find(account=>account.id===current?.account_id);const login=loginOf(status?.login,provider);return <div class="account-provider-settings"><header><div><strong>{provider.toUpperCase()}</strong><small>{rich("ProviderAccounts.5edbcadec8", { length: accounts.length, value2: status?.poll_minutes || 15 })}</small></div></header>
       {/* Only the states that need explaining, and that carry an action. While the live
           login is a saved account, this block restated the row already marked ◆ active
           two elements below it, in a second vocabulary. */}
-      {current?.state!=='saved'&&<div class={`account-current ${current?.state||'signed_out'}`}><span>LIVE SYSTEM AUTH</span><strong>{currentDescription(current,active)}</strong>{current?.match_hint&&<p class="account-relink"><span>{hintDescription(current)}</span><button disabled={!!busy} onClick={()=>void mutate(`adopt-${provider}`,'POST',`/api/provider-accounts/${provider}/${current.match_hint!.account_id}/adopt`)}>{busy===`adopt-${provider}`?'relinking…':`relink to ${current.match_hint.label}`}</button></p>}</div>}
-      <div data-tutorial="provider-account-actions" class="account-add"><button class="primary" disabled={!!busy||login?.state==='running'} title={signInTitle(status?.login_commands,provider)} onClick={()=>startLogin(provider)}>sign in + save</button><button class="account-add-secondary" disabled={!!busy} title="Captures an account you signed in to separately, without starting a login." onClick={()=>capture(provider)}>{busy===`${provider}-capture`?'saving…':'already signed in? save current login'}</button></div>
+      {current?.state!=='saved' && <div class={`account-current ${current?.state||'signed_out'}`}><span>{t("ProviderAccounts.fc3158d0a3")}</span><strong>{currentDescription(current,active)}</strong>{current?.match_hint && <p class="account-relink"><span>{hintDescription(current)}</span><button disabled={!!busy} onClick={()=>void mutate(`adopt-${provider}`,'POST',`/api/provider-accounts/${provider}/${current.match_hint!.account_id}/adopt`)}>{busy===`adopt-${provider}` ? t("ProviderAccounts.6e20cdcf68") : t("ProviderAccounts.6273706e4e", { label: current.match_hint.label })}</button></p>}</div>}
+      <div data-tutorial="provider-account-actions" class="account-add"><button class="primary" disabled={!!busy||login?.state==='running'} title={signInTitle(status?.login_commands,provider)} onClick={()=>startLogin(provider)}>{t("ProviderAccounts.e5e76c0505")}</button><button class="account-add-secondary" disabled={!!busy} title={t("ProviderAccounts.3b1f2a60c4")} onClick={()=>capture(provider)}>{busy===`${provider}-capture` ? t("ProviderAccounts.945d2c0350") : t("ProviderAccounts.8708b44f82")}</button></div>
       <LoginProgress login={login} busy={!!busy} onDismiss={()=>dismissLogin(provider)}/>
-      <div class="account-list">{accounts.map(account=><article class={`${status?.selected[provider]===account.id?'active':''} ${account.conflict?'conflicted':''}`}><span class="account-state">{status?.selected[provider]===account.id?'◆ active':'◇ saved'}</span><AccountAliasField account={account} disabled={!!busy} onCommit={alias=>rename(account,alias)}/><small>{account.email||account.organization||account.provider_account_id||'identity unavailable'}<i class={`account-identity ${account.identity_source==='token'?'verified':'unverified'}`} title={identityTitle(account)}>{identityNote(account)}</i></small><div class="account-quota" title={quotaTitle(account)}><span>session <b>{percent(account.quota?.session)}</b></span><span>weekly <b>{percent(account.quota?.weekly)}</b></span>{account.quota?.fable&&<span>fable <b>{percent(account.quota.fable)}</b></span>}<em>{account.quota?.status||'pending'}{account.quota?.error?` · ${account.quota.error}`:''}</em></div><div class="account-actions"><button disabled={!!busy||status?.selected[provider]===account.id} onClick={()=>void selectAccount(account)}>use</button><button disabled={!!busy||login?.state==='running'} onClick={()=>reauthenticate(account)}>sign in again</button><button class={confirmRemove===account.id?'danger confirming':'danger'} disabled={!!busy} onClick={()=>remove(account)}>{confirmRemove===account.id?'confirm remove':'remove'}</button></div>{account.conflict&&<p class="account-conflict" role="alert">{conflictDescription(account)}</p>}</article>)}{!accounts.length&&<div class="account-empty">No {provider} accounts saved yet.</div>}</div>
+      <div class="account-list">{accounts.map(account=><article class={`${status?.selected[provider]===account.id?'active':''} ${account.conflict?'conflicted':''}`}><span class="account-state">{status?.selected[provider]===account.id ? t("ProviderAccounts.e2f78edc84") : t("ProviderAccounts.d738d5c011")}</span><AccountAliasField account={account} disabled={!!busy} onCommit={alias=>rename(account,alias)}/><small>{account.email||account.organization||account.provider_account_id || t("ProviderAccounts.d9fcd6a430")}<i class={`account-identity ${account.identity_source==='token'?'verified':'unverified'}`} title={identityTitle(account)}>{identityNote(account)}</i></small><div class="account-quota" title={quotaTitle(account)}><span>{rich("ProviderAccounts.005ed1b62b", { value1: <b>{percent(account.quota?.session)}</b> })}</span><span>{rich("ProviderAccounts.0b05fde91c", { value1: <b>{percent(account.quota?.weekly)}</b> })}</span>{account.quota?.fable && <span>{rich("ProviderAccounts.b2d041623e", { value1: <b>{percent(account.quota.fable)}</b> })}</span>}<em>{account.quota?.status || t("ProviderAccounts.62a2fed3d6")}{account.quota?.error ? t("ProviderAccounts.f3b99994b4", { error: account.quota.error }) : ''}</em></div><div class="account-actions"><button disabled={!!busy||status?.selected[provider]===account.id} onClick={()=>void selectAccount(account)}>{t("ProviderAccounts.a3b142af6e")}</button><button disabled={!!busy||login?.state==='running'} onClick={()=>reauthenticate(account)}>{t("ProviderAccounts.1bed446726")}</button><button class={confirmRemove===account.id?'danger confirming':'danger'} disabled={!!busy} onClick={()=>remove(account)}>{confirmRemove===account.id ? t("ProviderAccounts.c3c6cc93d2") : t("ProviderAccounts.7e5608ab61")}</button></div>{account.conflict && <p class="account-conflict" role="alert">{conflictDescription(account)}</p>}</article>)}{!accounts.length && <div class="account-empty">{rich("ProviderAccounts.6e29f485b0", { provider: provider })}</div>}</div>
     </div>})}
-    {(error||message)&&<p class={error?'settings-inline-error':''} role={error?'alert':'status'}>{error||message}</p>}
+    {(error||message) && <p class={error?'settings-inline-error':''} role={error?'alert':'status'}>{error || message}</p>}
   </section>
 }

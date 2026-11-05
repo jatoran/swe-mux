@@ -15,6 +15,7 @@ from . import codex_history
 from .harness import conversation_store_path, transcript_dialect
 from .opencode_store import TAIL_MESSAGE_LIMIT, conversation_record_page, conversation_records
 from .opencode_store import conversation_watermark as store_watermark
+from .ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -817,13 +818,13 @@ def transcript_message_page(
     the page is broken.
     """
     if direction not in {"head", "tail"}:
-        raise ValueError("transcript direction must be head or tail")
+        raise ValueError(ui_message("transcript_view.353e5e35d0"))
     store = conversation_store_path(backend)
     if store is not None:
         store_anchor = None
         if anchor is not None:
             if anchor.get("kind") != "store":
-                raise ValueError("transcript cursor does not match this conversation store")
+                raise ValueError(ui_message("transcript_view.c6ae6632e9"))
             store_anchor = (int(anchor["time"]), str(anchor["id"]))
         events, has_more = conversation_record_page(
             store,
@@ -844,7 +845,7 @@ def transcript_message_page(
         file_anchor = None
         if anchor is not None:
             if anchor.get("kind") != "file":
-                raise ValueError("transcript cursor does not match this conversation file")
+                raise ValueError(ui_message("transcript_view.f5e0583d84"))
             file_anchor = int(anchor["offset"])
         events, has_more, offset = _page_events(
             path,

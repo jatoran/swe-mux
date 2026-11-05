@@ -43,6 +43,7 @@ from ..transcript_view import (
     conversation_is_readable,
     conversation_watermark,
 )
+from ..ui_messages import error_text, ui_message
 from .agent_ingress import HOOK_WINDOW_SWEEP_AT
 from .support import _project_root_for
 
@@ -66,7 +67,7 @@ async def session_last_reply(request: web.Request) -> web.Response:
     """
     session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     if not has_observable_transcript(session.record.backend):
-        return json_response({"error": "last reply is available only for agent sessions"}, 409)
+        return json_response({"error": ui_message("scan_timeline.272983940e")}, 409)
     path = session.transcript_path
     native_id = session.record.native_session_id
     backend = session.record.backend
@@ -79,13 +80,13 @@ async def session_last_reply(request: web.Request) -> web.Response:
     ):
         return json_response(
             {
-                "error": "The active conversation is not verified yet.",
+                "error": ui_message("scan_timeline.2f0593c85d"),
                 "code": "conversation_unverified",
             },
             409,
         )
     if not await asyncio.to_thread(conversation_is_readable, path, backend, native_id):
-        return json_response({"error": "the agent transcript is not available yet"}, 409)
+        return json_response({"error": ui_message("scan_timeline.72820a1e9e")}, 409)
     try:
         # Bring the conversation's index current on its own executor first, joining
         # any reader already doing so: a first read of a long conversation then never
@@ -96,7 +97,7 @@ async def session_last_reply(request: web.Request) -> web.Response:
     except conversation_index.IndexBuilding:
         return json_response(
             {
-                "error": "The conversation is still being read. Try Copy again in a moment.",
+                "error": ui_message("scan_timeline.2b2a3bbfe6"),
                 "code": "conversation_indexing",
             },
             409,
@@ -140,7 +141,7 @@ async def session_last_reply(request: web.Request) -> web.Response:
         )
         return json_response(
             {
-                "error": "The conversation changed while reading its reply. Try Copy again.",
+                "error": ui_message("scan_timeline.3ed0fb2494"),
                 "code": "conversation_changed",
             },
             409,
@@ -176,12 +177,12 @@ async def session_reply_copy(request: web.Request) -> web.Response:
         "superseded",
         "failed",
     }:
-        raise ValueError("invalid reply copy outcome")
+        raise ValueError(ui_message("scan_timeline.341b6a19b3"))
     evidence: dict[str, Any] = {"outcome": body["outcome"]}
     for field in ("agent_run_id", "native_session_id", "message_id", "turn_id", "revision"):
         value = body.get(field)
         if value is not None and (not isinstance(value, str) or len(value) > 256):
-            raise ValueError(f"invalid {field}")
+            raise ValueError(ui_message("scan_timeline.6223be6a8b", value1=field))
         evidence[field] = value
     await request.app[keys.EVENTS].emit(
         "reply_copy", session_id=session.record.id, source="browser", **evidence
@@ -198,7 +199,7 @@ async def session_scan_timeline(request: web.Request) -> web.Response:
 async def put_session_scan_timeline(request: web.Request) -> web.Response:
     body = await request.json()
     if not isinstance(body.get("enabled"), bool):
-        raise ValueError("enabled must be a boolean")
+        raise ValueError(ui_message("scan_timeline.3aacdbcaf1"))
     service: ScanTimelineService = request.app[keys.SCAN_TIMELINE]
     if body["enabled"]:
         session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
@@ -801,7 +802,7 @@ async def scan_timeline_search(request: web.Request) -> web.Response:
     elif project_id:
         page = await store.scan_search_page(project_id=project_id)
     else:
-        raise ValueError("scan-timeline search requires a run_id or project_id scope")
+        raise ValueError(ui_message("scan_timeline.cc6830b51d"))
     records = page.records
     scope_project = project_id or (str(records[0].get("project_id") or "") if records else "")
     root = _project_root_for(request.app, scope_project, "") if scope_project else ""
@@ -1045,7 +1046,7 @@ async def session_skills(request: web.Request) -> web.Response:
         boundary = session.record.runtime_boundary
         return json_response(
             {
-                "error": "skill inventory is unavailable across a non-local terminal boundary",
+                "error": ui_message("scan_timeline.b5535c8f0d"),
                 "code": "agent_bridge_unavailable",
                 "capability": "agent-bridge-unavailable",
                 "reason": (
@@ -1060,7 +1061,7 @@ async def session_skills(request: web.Request) -> web.Response:
         )
     backend = session.record.backend
     if not is_agent_harness(backend):
-        return json_response({"error": "skills are available only for agent sessions"}, 409)
+        return json_response({"error": ui_message("scan_timeline.af5d10ed21")}, 409)
     record = session.record
     cwd = Path(
         (record.runtime_cwd if record.runtime_cwd_live else None)
@@ -1129,7 +1130,7 @@ async def session_agent_environment(request: web.Request) -> web.Response:
         boundary = record.runtime_boundary
         return json_response(
             {
-                "error": "agent environment is unavailable across a non-local terminal boundary",
+                "error": ui_message("scan_timeline.e0d29392cf"),
                 "code": "agent_bridge_unavailable",
                 "capability": "agent-bridge-unavailable",
                 "reason": (
@@ -1143,9 +1144,7 @@ async def session_agent_environment(request: web.Request) -> web.Response:
             409,
         )
     if not is_agent_harness(record.backend):
-        return json_response(
-            {"error": "agent environment is available only for agent sessions"}, 409
-        )
+        return json_response({"error": ui_message("scan_timeline.363bcd9f83")}, 409)
     cwd = _agent_environment_cwd(record)
     refresh = request.query.get("refresh") in {"1", "true"}
     payload = await asyncio.to_thread(
@@ -1194,7 +1193,7 @@ async def session_mcp_tools(request: web.Request) -> web.Response:
         boundary = record.runtime_boundary
         return json_response(
             {
-                "error": "agent environment is unavailable across a non-local terminal boundary",
+                "error": ui_message("scan_timeline.e0d29392cf"),
                 "code": "agent_bridge_unavailable",
                 "capability": "agent-bridge-unavailable",
                 "reason": (
@@ -1208,15 +1207,13 @@ async def session_mcp_tools(request: web.Request) -> web.Response:
             409,
         )
     if not is_agent_harness(record.backend):
-        return json_response(
-            {"error": "agent environment is available only for agent sessions"}, 409
-        )
+        return json_response({"error": ui_message("scan_timeline.363bcd9f83")}, 409)
     body = await request.json() if request.can_read_body else {}
     if not isinstance(body, dict):
-        raise ValueError("request body must be a JSON object")
+        raise ValueError(ui_message("scan_timeline.818b5e2b53"))
     server = str(body.get("server") or "").strip()
     if not server:
-        return json_response({"error": "a server name is required"}, 400)
+        return json_response({"error": ui_message("scan_timeline.93072fdd42")}, 400)
     refresh = bool(body.get("refresh"))
 
     now = time.monotonic()
@@ -1244,12 +1241,10 @@ async def session_mcp_tools(request: web.Request) -> web.Response:
             args=args,
         )
     except ValueError as exc:
-        return json_response({"error": str(exc)}, 409)
+        return json_response({"error": error_text(exc)}, 409)
     entry = configs.get(server.casefold())
     if entry is None:
-        return json_response(
-            {"error": "no MCP server with that name is configured for this session"}, 404
-        )
+        return json_response({"error": ui_message("scan_timeline.0ba957c786")}, 404)
     payload = await mcp_tools.fetch_server_tools(
         backend=record.backend,
         server=entry.name,

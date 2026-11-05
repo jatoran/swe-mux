@@ -1,3 +1,4 @@
+import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { Fragment } from 'preact'
 import { useEffect, useMemo, useState } from 'preact/hooks'
 import { api } from './api'
@@ -129,13 +130,13 @@ function EnvironmentHeader({ session, inventory, loading, onRescan }: {
   return <header class="agent-environment-header">
     <div>
       <strong>{sessionDisplayName(session) || session.id}</strong>
-      <span>{inventory ? `${harnessDisplayName(inventory.backend)}${inventory.runtime.version ? ` · ${inventory.runtime.version}` : ''}` : harnessDisplayName(session.backend)}</span>
+      <span>{inventory ? t("AgentEnvironmentTab.9989fa2d2c", { value1: harnessDisplayName(inventory.backend), value2: inventory.runtime.version ? ` · ${inventory.runtime.version}` : '' }) : harnessDisplayName(session.backend)}</span>
     </div>
     <button
       disabled={loading}
-      title="Rescan passive configuration sources. This never connects MCP servers or executes plugin and hook code."
+      title={t("AgentEnvironmentTab.94173a0427")}
       onClick={onRescan}
-    >{loading ? 'Scanning…' : 'Rescan'}</button>
+    >{loading ? t("AgentEnvironmentTab.38d96da6e8") : t("AgentEnvironmentTab.ec4b3ecb7a")}</button>
   </header>
 }
 
@@ -149,14 +150,14 @@ function EnvironmentHeader({ session, inventory, loading, onRescan }: {
 function environmentGate(session: Session | null, isAgent: boolean) {
   if (!session) {
     return <>
-      <p class="drawer-status">no terminal focused</p>
-      <p class="drawer-empty">Focus an agent session to inspect its environment.</p>
+      <p class="drawer-status">{t("AgentEnvironmentTab.d4d415b716")}</p>
+      <p class="drawer-empty">{t("AgentEnvironmentTab.e86c05b5bd")}</p>
     </>
   }
   if (!isAgent) {
     return <>
-      <p class="drawer-status">{sessionDisplayName(session) || session.id} · shell</p>
-      <p class="drawer-empty">The focused terminal is a shell, not an agent harness.</p>
+      <p class="drawer-status">{rich("AgentEnvironmentTab.c236975559", { value1: sessionDisplayName(session) || session.id })}</p>
+      <p class="drawer-empty">{t("AgentEnvironmentTab.4e17e0b696")}</p>
     </>
   }
   return null
@@ -180,15 +181,15 @@ export function AgentConfigTab({ session }: { session: Session | null }) {
 
   return <div class="agent-environment">
     <EnvironmentHeader session={session} inventory={inventory} loading={loading} onRescan={rescan} />
-    {!inventory && !error && <p class="drawer-empty">Reading the agent environment…</p>}
-    {error && <p class="drawer-empty">Agent environment could not be read: {error}</p>}
+    {!inventory && !error && <p class="drawer-empty">{t("AgentEnvironmentTab.5ca781a7fa")}</p>}
+    {error && <p class="drawer-empty">{rich("AgentEnvironmentTab.f88a6d01a3", { error: error })}</p>}
     {inventory && <>
-      <section class="agent-runtime" aria-label="Agent runtime">
-        <div><span>Executable</span><b>{inventory.runtime.executable}</b></div>
-        <div><span>Model</span><b><ModelName model={inventory.runtime.model} fallback="CLI default"/></b></div>
-        <div><span>Working directory</span><b title={inventory.cwd}>{inventory.cwd}</b></div>
+      <section class="agent-runtime" aria-label={t("AgentEnvironmentTab.19af7c6c79")}>
+        <div><span>{t("AgentEnvironmentTab.72cd8a64e5")}</span><b>{inventory.runtime.executable}</b></div>
+        <div><span>{t("AgentEnvironmentTab.5e2c614c23")}</span><b><ModelName model={inventory.runtime.model} fallback={t("AgentEnvironmentTab.c0eba39ea3")}/></b></div>
+        <div><span>{t("AgentEnvironmentTab.865e85c6fb")}</span><b title={inventory.cwd}>{inventory.cwd}</b></div>
         {inventory.runtime.options.map(option => <div key={`${option.label}:${option.value}`}><span>{option.label}</span><b>{option.value}</b></div>)}
-        {!!inventory.runtime.modes.length && <div><span>Modes</span><b>{inventory.runtime.modes.join(', ')}</b></div>}
+        {!!inventory.runtime.modes.length && <div><span>{t("AgentEnvironmentTab.e9c29ff50c")}</span><b>{inventory.runtime.modes.join(', ')}</b></div>}
       </section>
 
       {/* Drift is a content comparison against the snapshot taken when the CLI
@@ -196,28 +197,26 @@ export function AgentConfigTab({ session }: { session: Session | null }) {
           a silent zero: a session adopted from before the daemon took baselines
           would otherwise read as "nothing has changed" on no evidence. */}
       <div class="agent-environment-summary">
-        <span>{inventory.sources.length} sources</span>
-        {inventory.config_baseline !== 'captured'
-          ? <span title="No snapshot was taken when this CLI generation started, so nothing can be compared against it. Restarting the agent begins tracking.">drift not tracked</span>
-          : !!changedSources.length && <span class="warn">{changedSources.length} changed since load</span>}
+        <span>{rich("AgentEnvironmentTab.3edbc32ca8", { length: inventory.sources.length })}</span>
+        {inventory.config_baseline !== 'captured' ? <span title={t("AgentEnvironmentTab.235225ef13")}>{t("AgentEnvironmentTab.004a58d161")}</span> : !!changedSources.length && <span class="warn">{rich("AgentEnvironmentTab.a30018ebcd", { length: changedSources.length })}</span>}
       </div>
 
       <div class="agent-environment-sections">
         {configSections.map(section => <EnvironmentSection key={section.id} section={section} query="" open />)}
 
         <details class="agent-environment-sources" open={changedSources.length > 0}>
-          <summary><span>Configuration sources</span><small>{inventory.sources.length}</small></summary>
+          <summary><span>{t("AgentEnvironmentTab.9885ba682d")}</span><small>{inventory.sources.length}</small></summary>
           <div>
             {inventory.sources.map(source => <p key={source.id}>
               <strong>{source.label}</strong>
               <span>{agentScopeLabel(source.scope)} · {agentStateLabel(source.status)}</span>
-              {source.changed_after_start && <b>changed since load</b>}
+              {source.changed_after_start && <b>{t("AgentEnvironmentTab.5dd884f833")}</b>}
             </p>)}
           </div>
         </details>
 
         {!!inventory.diagnostics.length && <details class="agent-environment-diagnostics" open>
-          <summary><span>Diagnostics</span><small>{inventory.diagnostics.length}</small></summary>
+          <summary><span>{t("AgentEnvironmentTab.268f14bbfe")}</span><small>{inventory.diagnostics.length}</small></summary>
           <ul>{inventory.diagnostics.map((diagnostic, index) => <li key={`${diagnostic.source_id}:${index}`}>{diagnostic.message}</li>)}</ul>
         </details>}
       </div>
@@ -235,9 +234,7 @@ export function AgentToolsTab({ session }: { session: Session | null }) {
     () => filterAgentEnvironmentSections(
       (inventory?.sections || []).filter(section => !CONFIG_SECTION_IDS.has(section.id)),
       query,
-    ),
-    [inventory, query],
-  )
+    ), [inventory, query, uiLocale.value, catalogRevision.value])
   if (gate || !session) return gate
   const itemCount = (inventory?.sections || [])
     .filter(section => !CONFIG_SECTION_IDS.has(section.id))
@@ -245,22 +242,22 @@ export function AgentToolsTab({ session }: { session: Session | null }) {
 
   return <div class="agent-environment">
     <EnvironmentHeader session={session} inventory={inventory} loading={loading} onRescan={rescan} />
-    {!inventory && !error && <p class="drawer-empty">Reading the agent environment…</p>}
-    {error && <p class="drawer-empty">Agent environment could not be read: {error}</p>}
+    {!inventory && !error && <p class="drawer-empty">{t("AgentEnvironmentTab.5ca781a7fa")}</p>}
+    {error && <p class="drawer-empty">{rich("AgentEnvironmentTab.f88a6d01a3", { error: error })}</p>}
     {inventory && <>
-      <div class="agent-environment-summary"><span>{itemCount} items</span></div>
+      <div class="agent-environment-summary"><span>{rich("AgentEnvironmentTab.281d0048cd", { itemCount: itemCount })}</span></div>
 
       {itemCount > 12 && <input
         class="agent-environment-filter"
         type="search"
-        placeholder="Filter tools, MCP, plugins…"
-        aria-label="Filter agent tools"
+        placeholder={t("AgentEnvironmentTab.eee5a6ca14")}
+        aria-label={t("AgentEnvironmentTab.2c41312e11")}
         value={query}
         onInput={event => setQuery((event.target as HTMLInputElement).value)}
       />}
 
       <div class="agent-environment-sections">
-        {query && !capabilitySections.length && <p class="drawer-empty">No capability matches “{query}”.</p>}
+        {query && !capabilitySections.length && <p class="drawer-empty">{rich("AgentEnvironmentTab.0209e77666", { query: query })}</p>}
         {capabilitySections.map(section => <EnvironmentSection key={section.id} section={section} query={query} open={!!query} sessionId={session.id} />)}
       </div>
     </>}
@@ -312,23 +309,23 @@ function McpServerTools({ sessionId, server }: { sessionId: string; server: stri
     <div class="agent-mcp-tools-actions">
       <button
         disabled={loading}
-        title="Ask this server what tools it publishes. This may briefly start a probe process and open a network connection."
+        title={t("AgentEnvironmentTab.f9f23c674d")}
         onClick={() => void fetchTools(!!catalog)}
-      >{loading ? 'Fetching…' : catalog ? 'Refetch tools' : 'Fetch tools'}</button>
+      >{loading ? t("AgentEnvironmentTab.8d0738c84d") : catalog ? t("AgentEnvironmentTab.6d2f42fbe6") : t("AgentEnvironmentTab.4788d40dd0")}</button>
       {catalog && <span class={`agent-evidence evidence-${catalog.evidence}`}>{mcpEvidenceLabel(catalog.evidence)}</span>}
       {catalog && catalog.status !== 'ok' && <span class="agent-state">{mcpStatusLabel(catalog.status)}</span>}
-      {catalog?.cached && <span class="agent-mcp-cached">cached</span>}
+      {catalog?.cached && <span class="agent-mcp-cached">{t("AgentEnvironmentTab.3673014e72")}</span>}
     </div>
-    {error && <p class="drawer-empty">Tools could not be fetched: {error}</p>}
+    {error && <p class="drawer-empty">{rich("AgentEnvironmentTab.16af2f7f5b", { error: error })}</p>}
     {catalog && <>
       {!!catalog.tools.length && <ul class="agent-mcp-tool-list">
         {catalog.tools.map(tool => <li key={tool.name}>
           <strong>{tool.name}</strong>
-          {tool.read_only === false && <span class="agent-state state-configured">write</span>}
+          {tool.read_only === false && <span class="agent-state state-configured">{t("AgentEnvironmentTab.10fd874b68")}</span>}
           {tool.description && <span>{tool.description}</span>}
         </li>)}
       </ul>}
-      {catalog.truncated && <p class="agent-environment-note">Showing {catalog.tools.length} of {catalog.total} tools.</p>}
+      {catalog.truncated && <p class="agent-environment-note">{rich("AgentEnvironmentTab.1923286e54", { length: catalog.tools.length, total: catalog.total })}</p>}
       {catalog.diagnostic && <p class="agent-environment-note">{catalog.diagnostic}</p>}
       <p class="agent-environment-note">{catalog.note}</p>
     </>}
@@ -344,11 +341,11 @@ function EnvironmentSection({ section, query, open, sessionId }: {
   return <details open={open}>
     <summary>
       <span>{section.label}</span>
-      <small>{section.items.length}{query ? ` / ${section.total}` : ''}</small>
+      <small>{section.items.length}{query ? t("AgentEnvironmentTab.22ea783e4b", { total: section.total }) : ''}</small>
       <em title={section.note}>{agentCompletenessLabel(section.completeness)}</em>
     </summary>
     <div class="agent-environment-items">
-      {!section.items.length && <p class="drawer-empty">Nothing configured or discoverable.</p>}
+      {!section.items.length && <p class="drawer-empty">{t("AgentEnvironmentTab.4894b7c077")}</p>}
       {/* Grouped runs, not a flat list: a Hooks section named by event repeated
           the event on every row and answered nothing about what each one runs. */}
       {groupAgentEnvironmentItems(section.items).map(run => <Fragment key={run.key || section.id}>
@@ -363,18 +360,17 @@ function EnvironmentSection({ section, query, open, sessionId }: {
           <div class="agent-item-facts">
             <span>{agentScopeLabel(item.scope)}</span>
             <span>{item.origin}</span>
-            {item.changed_after_start && <span class="warn">changed since load</span>}
+            {item.changed_after_start && <span class="warn">{t("AgentEnvironmentTab.5dd884f833")}</span>}
           </div>
           {!!item.meta.length && <dl>{item.meta.map(meta => <div key={`${meta.label}:${meta.value}`}><dt>{meta.label}</dt><dd title={meta.value}>{meta.value}</dd></div>)}</dl>}
           {/* Only the row the CLI would actually use. A `shadowed` row lost to a
               later layer and a `disabled` one is not loaded at all, and both
               would fetch the winning layer's tools and present them as their
               own — two rows with one name, each claiming the other's answer. */}
-          {section.id === 'mcp' && sessionId && item.state === 'configured'
-            && <McpServerTools sessionId={sessionId} server={item.name} />}
+          {section.id === 'mcp' && sessionId && item.state === 'configured' && <McpServerTools sessionId={sessionId} server={item.name} />}
         </article>)}
       </Fragment>)}
-      {section.truncated && <p class="agent-environment-note">Showing {section.items.length} of {section.total} entries.</p>}
+      {section.truncated && <p class="agent-environment-note">{rich("AgentEnvironmentTab.a018011bf7", { length: section.items.length, total: section.total })}</p>}
       <p class="agent-environment-note">{section.note}</p>
     </div>
   </details>

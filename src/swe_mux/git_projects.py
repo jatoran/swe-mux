@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .bounded_subprocess import run_bounded
+from .ui_messages import ui_message
 
 #: Each query prints one path or one remote URL; 1 MiB leaves room for any of them.
 _GIT_OUTPUT_LIMIT = 1024 * 1024
@@ -57,7 +58,7 @@ async def _git(cwd: Path, *args: str) -> str | None:
     try:
         outcome = await run_bounded(
             ["git", "-C", str(cwd), *args],
-            label="git-project-identity",
+            label=ui_message("git_projects.8adc0e9bc9"),
             timeout_seconds=3,
             output_limit=_GIT_OUTPUT_LIMIT,
             stderr_limit=1024,
@@ -74,7 +75,7 @@ async def resolve_project(cwd: str | Path) -> ProjectIdentity:
     cache_key = os.path.normcase(str(resolved))
     cached = _resolve_cache.get(cache_key)
     now = time.monotonic()
-    if cached and now-cached[0] < _RESOLVE_CACHE_SECONDS:
+    if cached and now - cached[0] < _RESOLVE_CACHE_SECONDS:
         _resolve_cache.move_to_end(cache_key)
         return cached[1]
     # These probes are independent. Running them concurrently bounds a pathological

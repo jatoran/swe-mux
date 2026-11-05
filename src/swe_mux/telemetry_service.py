@@ -53,6 +53,7 @@ from .framed_ipc import RemoteError
 from .models import MuxEvent
 from .telemetry_ledger import CanonicalTelemetryLedger, LedgerShared
 from .telemetry_queries import Filters
+from .ui_messages import ui_message
 
 CANONICAL_TELEMETRY_LOOP = "canonical-telemetry"
 CANONICAL_TELEMETRY_BACKFILL_LOOP = "canonical-telemetry-backfill"
@@ -233,7 +234,7 @@ def decode_batch(payload: bytes) -> tuple[Batch, list[PendingSignatures]]:
     ]
     dimensions = data.get("dims") or []
     if len(dimensions) != len(events):
-        raise ValueError("a telemetry batch carries one dimension set per event")
+        raise ValueError(ui_message("telemetry_service.38c6238467"))
     signatures: list[PendingSignatures] = [
         (
             str(backend),
@@ -432,7 +433,9 @@ class WorkerLedgers:
                 # A worker that restarted between the open and this call.
                 self._opened_generation = None
                 raise TelemetryUnavailable("the worker restarted; reopening its ledgers") from exc
-            raise RuntimeError(f"canonical telemetry in the worker failed: {exc.error}") from exc
+            raise RuntimeError(
+                ui_message("telemetry_service.fee972ea06", value1=exc.error)
+            ) from exc
         counters = reply.get("counters")
         if isinstance(counters, dict):
             self._counters = counters
@@ -592,9 +595,7 @@ class CanonicalTelemetryService:
         self._provider_batches = 0
         self._pending_signatures: list[PendingSignatures] = []
         # Batches waiting for a worker, oldest first, and the observations they hold.
-        self._buffer: collections.deque[tuple[Batch, list[PendingSignatures]]] = (
-            collections.deque()
-        )
+        self._buffer: collections.deque[tuple[Batch, list[PendingSignatures]]] = collections.deque()
         self._buffered_events = 0
         self._buffer_dropped = 0
         self._worker_unavailable = 0
@@ -627,7 +628,7 @@ class CanonicalTelemetryService:
     def _require_backend(self) -> _Backend:
         backend = self._backend
         if backend is None:
-            raise RuntimeError("canonical telemetry runs in the worker but none was attached")
+            raise RuntimeError(ui_message("telemetry_service.3899acbf27"))
         return backend
 
     def start(

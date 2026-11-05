@@ -1,3 +1,5 @@
+import { locale as uiLocale } from './localization/index.ts'
+import { t } from './localization/index.ts'
 // Phase 14 land queue: defensive parsing and the vocabulary the panel renders.
 //
 // Parsed rather than cast, like every other daemon response this drawer reads. A
@@ -249,8 +251,8 @@ export function resumedLandsNote(rows: ResumedLand[]): string {
   const named = rows.map(row => row.branch).join(', ')
   const what = rows.every(row => row.kind === 'verify') ? 'verification' : 'landing'
   return rows.length === 1
-    ? `Re-queued the ${what} of ${named}.`
-    : `Re-queued ${rows.length} requests: ${named}.`
+    ? t("gitLand.a1272e41a1", { value1: what, value2: named })
+    : t("gitLand.e85a796a5a", { value1: rows.length, value2: named })
 }
 
 /** Where the bytes that would run came from. `trusted` is this verdict's own answer and
@@ -490,7 +492,7 @@ export function isActiveLand(request: LandRequest): boolean {
  * early, which is exactly when nobody is still watching.
  */
 export function landKindNote(request: LandRequest): string {
-  return request.kind === 'verify' ? 'verify only' : ''
+  return request.kind === 'verify' ? t("gitLand.9b87ead464") : ''
 }
 
 /**
@@ -502,19 +504,19 @@ export function landKindNote(request: LandRequest): string {
  */
 export function landStateLabel(state: LandState): string {
   switch (state) {
-    case 'queued': return 'Queued'
-    case 'waiting': return 'Waiting'
-    case 'reconciling': return 'Merging trunk'
-    case 'verifying': return 'Verifying'
-    case 'landing': return 'Fast-forwarding'
-    case 'landed': return 'Landed'
+    case 'queued': return t("gitLand.661ff40a07")
+    case 'waiting': return t("gitLand.6e293a8c00")
+    case 'reconciling': return t("gitLand.03788d9e8c")
+    case 'verifying': return t("gitLand.a7d4a9f301")
+    case 'landing': return t("gitLand.ad7e5f21ed")
+    case 'landed': return t("gitLand.8aa50b5915")
     // Not 'Landed', because nothing moved. A verify-only request's green is its own
     // answer, and reporting a land would claim a trunk movement that did not happen.
-    case 'verified': return 'Verified'
-    case 'already_landed': return 'Already on trunk'
-    case 'handed_back': return 'Returned to agent'
-    case 'refused': return 'Refused'
-    case 'cancelled': return 'Cancelled'
+    case 'verified': return t("gitLand.4f7838402f")
+    case 'already_landed': return t("gitLand.fec7282f0a")
+    case 'handed_back': return t("gitLand.28fd6ef822")
+    case 'refused': return t("gitLand.66b873543a")
+    case 'cancelled': return t("gitLand.d353a99eb4")
   }
 }
 
@@ -691,9 +693,9 @@ export function recentLandings(requests: LandRequest[], now: number): number {
 /** A duration a human reads at a glance: `9s`, `1m 12s`, `1h 04m`. */
 export function formatDuration(ms: number): string {
   const total = Math.max(0, Math.round(ms / 1000))
-  if (total < 60) return `${total}s`
-  if (total < 3600) return `${Math.floor(total / 60)}m ${String(total % 60).padStart(2, '0')}s`
-  return `${Math.floor(total / 3600)}h ${String(Math.floor((total % 3600) / 60)).padStart(2, '0')}m`
+  if (total < 60) return t("gitLand.c8168e554c", { total: total })
+  if (total < 3600) return t("gitLand.565fc0fdc0", { value1: Math.floor(total / 60), value2: String(total % 60).padStart(2, '0') })
+  return t("gitLand.bbceabb1db", { value1: Math.floor(total / 3600), value2: String(Math.floor((total % 3600) / 60)).padStart(2, '0') })
 }
 
 /**
@@ -717,15 +719,15 @@ export function verifyProgressLabel(progress: LandVerifyProgress | null): string
   const parts: string[] = []
   if (progress.stepIndex > 0) {
     parts.push(progress.expectedStepCount
-      ? `step ${progress.stepIndex} of ${progress.expectedStepCount}`
+      ? t("gitLand.6434a85981", { value1: progress.stepIndex, value2: progress.expectedStepCount })
       : `step ${progress.stepIndex}`)
     if (progress.stepName) parts.push(progress.stepName)
   }
   parts.push(formatDuration(progress.elapsedMs))
   if (progress.stepIndex === 0) {
-    parts.push(`${progress.lines.toLocaleString()} line${progress.lines === 1 ? '' : 's'}`)
+    parts.push(`${progress.lines.toLocaleString(uiLocale.value)} line${progress.lines === 1 ? '' : 's'}`)
   }
-  if (progress.attempts > 1) parts.push(`attempt ${progress.attempt} of ${progress.attempts}`)
+  if (progress.attempts > 1) parts.push(t("gitLand.2d8eaf8e83", { value1: progress.attempt, value2: progress.attempts }))
   return parts.join(' · ')
 }
 
@@ -739,8 +741,8 @@ export function verifyPlanNote(plan: LandVerifyPlan | null): string {
   if (!plan || !plan.steps.length) return ''
   const steps = `${plan.steps.length} step${plan.steps.length === 1 ? '' : 's'}`
   return plan.durationMs > 0
-    ? `Last passing run of these exact bytes: ${steps} in ${formatDuration(plan.durationMs)}.`
-    : `Last passing run of these exact bytes: ${steps}.`
+    ? t("gitLand.04eac00ea8", { value1: steps, value2: formatDuration(plan.durationMs) })
+    : t("gitLand.4599d3eb2b", { value1: steps })
 }
 
 /**
@@ -759,8 +761,8 @@ export function verifyPlanNote(plan: LandVerifyPlan | null): string {
  * ever run this content through the suite, the other means this queue ran exactly it.
  */
 export function landGateNote(request: LandRequest): string {
-  if (request.verifyGate === 'docs_only') return 'documentation only · verification skipped'
-  if (request.verifyGate === 'reused') return 'verified earlier · gate reused'
+  if (request.verifyGate === 'docs_only') return t("gitLand.8ba408f040")
+  if (request.verifyGate === 'reused') return t("gitLand.e271b80494")
   return ''
 }
 
@@ -862,16 +864,16 @@ export function landingSummary(
   // without it.
   const blockedNote = blockedWorktrees.length
     ? `${blockedWorktrees.length} worktree${blockedWorktrees.length === 1 ? '' : 's'}`
-      + ' awaiting approval'
+      + t("gitLand.d0be6e8b54")
     : ''
-  const baseGateText = gate === null ? 'verification unread'
-    : !gate.configured ? 'no verification command'
-      : gate.approved ? `verification approved · ${gate.display}`
+  const baseGateText = gate === null ? t("gitLand.5387873904")
+    : !gate.configured ? t("gitLand.14133156bc")
+      : gate.approved ? t("gitLand.a292564ed0", { value1: gate.display })
         // Named for the authority that will actually run it rather than for the approval
         // it does not have. "not approved" over a gate that is about to run is the same
         // class of lie as "approved" over one that is not.
-        : gate.runsWithoutApproval ? `verification authorised · ${gate.display}`
-          : 'verification not approved'
+        : gate.runsWithoutApproval ? t("gitLand.aa6a357bf8", { value1: gate.display })
+          : t("gitLand.d50e38aa45")
   const gateText = blockedNote ? `${baseGateText} · ${blockedNote}` : baseGateText
   const gateTone: 'ok' | 'warn' | 'idle' = gate === null ? 'idle'
     : blockedWorktrees.length ? 'warn'
@@ -887,7 +889,7 @@ export function landingSummary(
   let tone: LandingSummary['tone']
   if (installStopped) {
     // Loudest, because it is the one state where a queue can look busy and be inert.
-    queueText = 'the sweep is switched off — nothing will move'
+    queueText = t("gitLand.31cfc1c49b")
     tone = 'warn'
   } else if (running) {
     const progress = verifyProgressLabel(running.verifyProgress)
@@ -921,7 +923,7 @@ export function landingSummary(
     // "surely something is stuck, it said nothing" - is exactly what the resurrected
     // handback used to answer, wrongly.
     const landed = recentLandings(queue?.requests || [], now)
-    queueText = landed > 0 ? `nothing queued · ${landed} landed recently` : 'nothing queued'
+    queueText = landed > 0 ? t("gitLand.17b3bbc0c3", { value1: landed }) : t("gitLand.8726de8209")
     tone = gateTone === 'warn' ? 'warn' : 'idle'
   }
   // Never set up, and nothing happening: the strip has no operation to narrate, so it

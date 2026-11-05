@@ -37,6 +37,7 @@ from ..http_support import json_response
 from ..layouts import attach_terminal
 from ..openrouter import OpenRouterError
 from ..scan_consumers import handoff_progress
+from ..ui_messages import error_text, ui_message
 from . import sessions
 from .support import _project_root_for
 
@@ -70,7 +71,7 @@ async def second_opinion(request: web.Request) -> web.Response:
     )
     backend = str(body.get("backend") or (alternatives[0] if alternatives else ""))
     if not has_observable_transcript(backend) or backend == source["backend"]:
-        raise ValueError("second opinion backend must be a different observed harness")
+        raise ValueError(ui_message("insights.71e0c1a38e"))
     # Phase 7.7: the scan timeline is the behavioral-summary substrate, so prior
     # run summaries come from its spine; fall back to `summary` annotations for a
     # run with no scan records.
@@ -80,8 +81,11 @@ async def second_opinion(request: web.Request) -> web.Response:
     summaries = [
         text
         for record in scan_records
-        if (text := (str(record.get("summary") or "").strip()
-                     or str(record.get("intent") or "").strip()))
+        if (
+            text := (
+                str(record.get("summary") or "").strip() or str(record.get("intent") or "").strip()
+            )
+        )
     ][-12:]
     if not summaries:
         annotations = await request.app[keys.AUTOMATION_STORE].annotations(
@@ -121,7 +125,7 @@ async def second_opinion(request: web.Request) -> web.Response:
     if not body.get("confirm"):
         return json_response({"preview": preview, "spawned": False})
     if not secrets.compare_digest(str(body.get("preview_token") or ""), preview_token):
-        raise ValueError("review confirmation requires the current preview token")
+        raise ValueError(ui_message("insights.b97055ce82"))
     target_project = str(body.get("project_id") or source.get("project_id") or "")
     session = await sessions._spawn_from_body(
         request.app,
@@ -318,14 +322,14 @@ async def create_observer_batch(request: web.Request) -> web.Response:
     kind = str(body.get("kind") or "")
     allowed = {"experience", "procedure", "doc-drift", "convention", "regression"}
     if kind not in allowed:
-        raise ValueError(f"kind must be one of {', '.join(sorted(allowed))}")
+        raise ValueError(ui_message("insights.9b21fcf38f", value1=", ".join(sorted(allowed))))
     run_ids = body.get("run_ids")
     if (
         not isinstance(run_ids, list)
         or not 1 <= len(run_ids) <= 25
         or not all(isinstance(item, str) for item in run_ids)
     ):
-        raise ValueError("run_ids must select between 1 and 25 agent runs")
+        raise ValueError(ui_message("insights.2d11412862"))
     rows: list[dict[str, Any]] = []
     for identity in run_ids:
         row = await request.app[keys.HISTORY].history_entry(identity)
@@ -335,7 +339,7 @@ async def create_observer_batch(request: web.Request) -> web.Response:
             or not row.get("exited_at")
             or not row.get("transcript_path")
         ):
-            raise ValueError(f"batch run is not an ended agent transcript: {identity}")
+            raise ValueError(ui_message("insights.190e20e9be", value1=identity))
         rows.append(row)
     estimate = {
         "calls": len(rows),
@@ -361,9 +365,9 @@ async def create_observer_batch(request: web.Request) -> web.Response:
             }
         )
     if not secrets.compare_digest(str(body.get("preview_token") or ""), preview_token):
-        raise ValueError("batch confirmation requires the current preview token")
+        raise ValueError(ui_message("insights.a0016e0375"))
     if not request.app[keys.CONFIG].automation_enabled:
-        raise ValueError("automation kill switch is off")
+        raise ValueError(ui_message("insights.8b19685576"))
     batch_id = await request.app[keys.AUTOMATION_STORE].create_batch(kind, run_ids)
     task = asyncio.create_task(
         _run_observer_batch(request.app, batch_id, kind, rows),
@@ -392,7 +396,7 @@ async def _run_observer_batch(
             calls=0,
             tokens=0,
             cost_usd=0,
-            error="no OpenRouter standard or cheap model is configured",
+            error=ui_message("insights.6c235e2fe2"),
         )
         return
     schema_name = "experience_v1" if kind == "experience" else "summary_v1"
@@ -413,22 +417,24 @@ async def _run_observer_batch(
             rule_spend = await store.spend(rule_id=rule_id)
             for verdict in (
                 budget.spent_out(
-                    config.automation_daily_budget, spend, label="the global daily observer"
+                    config.automation_daily_budget, spend, label=ui_message("insights.669dbb9813")
                 ),
                 budget.spent_out(
-                    config.automation_rule_daily_budget, rule_spend, label="the batch observer rule"
+                    config.automation_rule_daily_budget,
+                    rule_spend,
+                    label=ui_message("insights.5c8996018b"),
                 ),
             ):
                 if verdict.exhausted:
                     raise ValueError(verdict.reason)
             hour_ago = time.time() - 3600
             if await store.observer_call_count(hour_ago) >= config.automation_hourly_call_cap:
-                raise ValueError("global hourly observer call cap is exhausted")
+                raise ValueError(ui_message("insights.10c1ee6097"))
             if (
                 await store.observer_call_count(hour_ago, rule_id=rule_id)
                 >= config.automation_rule_hourly_call_cap
             ):
-                raise ValueError("batch observer hourly call cap is exhausted")
+                raise ValueError(ui_message("insights.a5ae7df605"))
             raw_path = row["transcript_path"]
             transcript = await app[keys.AUTOMATION].slices.build(
                 Path(str(raw_path)) if raw_path else None,
@@ -502,7 +508,7 @@ async def _run_observer_batch(
                     )
                 else:
                     await store.observer_finished(call_id, status="failed", error=str(exc)[:1000])
-                results.append({"run_id": row["id"], "error": str(exc)})
+                results.append({"run_id": row["id"], "error": error_text(exc)})
                 continue
             calls += 1
             tokens += completion.input_tokens + completion.output_tokens

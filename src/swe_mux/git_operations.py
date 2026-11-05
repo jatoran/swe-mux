@@ -5,6 +5,7 @@ import logging
 from dataclasses import dataclass
 
 from .bounded_subprocess import LANE_INTERACTIVE, run_bounded
+from .ui_messages import ui_message
 
 log = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ async def _execute_git_mutation(
         # poller's spawn held by a saturated disk must not hold this one too.
         outcome = await run_bounded(
             ("git", "-C", cwd, *args),
-            label=f"git-mutation:{operation}",
+            label=ui_message("git_operations.7de94e7dd6", value1=operation),
             timeout_seconds=timeout_seconds,
             output_limit=GIT_MUTATION_OUTPUT_LIMIT,
             operation_id=operation_id,

@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 export type TutorialStepId='welcome'|'projects'|'project-add'|'project-open'|'project-create'|'accounts'|'run'|'run-choice'|'workspace'|'new-tab'|'tabs'|'splits'|'resources'|'gates'|'features'|'feature-menu'|'configurator'|'ready'
 
 /** Which collapsed chrome a step's anchor lives behind on the mobile layout.

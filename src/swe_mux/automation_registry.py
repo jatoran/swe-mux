@@ -4,6 +4,8 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from .ui_messages import ui_message
+
 # The enablement DAG for the control-plane substrate and consumers.
 #
 # Every automation is per-project opt-in. Substrate captures facts but never acts
@@ -82,10 +84,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         SUBSTRATE,
         "Raw transcript store",
         family="facts",
-        description=(
-            "Keeps each agent transcript so later automations have something to read. "
-            "It records only, and never acts."
-        ),
+        description=(ui_message("automation_registry.8cec0d1046")),
     ),
     Automation(
         "tier0",
@@ -93,10 +92,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         "Deterministic fact capture",
         ("raw_store",),
         family="facts",
-        description=(
-            "Extracts structured facts from every turn - commands run, files written, "
-            "tools used. This is the base record every model-free check reads."
-        ),
+        description=(ui_message("automation_registry.20cfd8e738")),
     ),
     Automation(
         "scan_timeline",
@@ -106,10 +102,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         spends=True,
         needs_llm=True,
         family="facts",
-        description=(
-            "Periodically asks a cheap model to distil what a run is doing into a "
-            "timeline record. Everything under Reads the timeline is built on it."
-        ),
+        description=(ui_message("automation_registry.50891e919b")),
     ),
     # Consumers. The deterministic four (control-plane step 3) are model-free
     # queries over Tier 0 and ship together; everything below them needs a layer
@@ -120,10 +113,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         "Provenance graph",
         ("tier0",),
         family="checks",
-        description=(
-            "Links each commit and file change back to the session and turn that "
-            "produced it."
-        ),
+        description=(ui_message("automation_registry.bf06bf38dd")),
     ),
     Automation(
         "declared_vs_verified",
@@ -131,10 +121,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         "Declared vs verified",
         ("tier0",),
         family="checks",
-        description=(
-            "Flags a claim that work is done or tested when nothing in the record "
-            "shows it actually ran."
-        ),
+        description=(ui_message("automation_registry.60fb90f821")),
     ),
     Automation(
         "loop_detection",
@@ -142,10 +129,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         "Loop / stall detection",
         ("tier0",),
         family="checks",
-        description=(
-            "Watches for the same action repeating with no progress, and for runs "
-            "that have gone quiet."
-        ),
+        description=(ui_message("automation_registry.95de25d909")),
     ),
     # Doc debt derives its file → owning-doc map from the repository's own docs,
     # so it needs Tier 0 and nothing else. It previously claimed a project_card
@@ -156,7 +140,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         "Doc-debt ledger",
         ("tier0",),
         family="checks",
-        description="Notices when code changes and the documentation that owns it does not.",
+        description=ui_message("automation_registry.d75f712f5e"),
     ),
     Automation(
         "dead_end_memory",
@@ -164,10 +148,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         "Dead-end memory",
         ("tier0", "scan_timeline"),
         family="timeline",
-        description=(
-            "Records the approaches a run tried and abandoned, so a later session "
-            "does not repeat them."
-        ),
+        description=(ui_message("automation_registry.6d15dc8be9")),
     ),
     # Phase 7.9: the deterministic code-structure graph. Model-free — it parses
     # the Tier 0 file_write stream with tree-sitter and stores nodes/edges, so it
@@ -180,10 +161,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         "Code-structure graph",
         ("tier0",),
         family="checks",
-        description=(
-            "Parses edited files into a symbol and import graph. It powers the "
-            "blast-radius, navigation, and test-gap reads."
-        ),
+        description=(ui_message("automation_registry.10787a1a15")),
     ),
     # Phase 7.5: the per-project opt-in that gates the `mux.prior_resolutions`
     # MCP read. It reads the experience corpus (model-scored verified fixes,
@@ -196,10 +174,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         "Prior resolutions",
         ("tier0",),
         family="checks",
-        description=(
-            "Lets an agent look up how a matching error was actually fixed before, "
-            "from reviewed past runs."
-        ),
+        description=(ui_message("automation_registry.0150998873")),
     ),
     # The built-in observers: model reads of the live conversation rather than of
     # recorded facts, so they depend on no substrate. Each is a per-Project
@@ -227,10 +202,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         spends=True,
         needs_llm=True,
         family="titling",
-        description=(
-            "Names a pane from the request it opened with, then refines that title "
-            "while the work is still taking shape."
-        ),
+        description=(ui_message("automation_registry.4b2bf4e662")),
     ),
     # Phase 7.7: re-title a session when its scope changes. It broadens an
     # auto-named run's title only on a genuine scope pivot detected over that
@@ -246,10 +218,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         spends=True,
         needs_llm=True,
         family="titling",
-        description=(
-            "Renames an already-named run when its timeline shows the work genuinely "
-            "moved on to something else."
-        ),
+        description=(ui_message("automation_registry.6671b1cc14")),
     ),
     # The three attention observers (stalled-run triage, approval-request triage,
     # context-handoff suggestion) and the periodic attention digest, as one id:
@@ -263,10 +232,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         spends=True,
         needs_llm=True,
         family="attention",
-        description=(
-            "Model triage of stalls, approval requests, and context pressure, plus a "
-            "periodic digest of what is waiting on you."
-        ),
+        description=(ui_message("automation_registry.375284fce2")),
     ),
     Automation(
         "cross_session_interlocks",
@@ -275,9 +241,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         ("provenance_graph",),
         implemented=False,
         family="attention",
-        description=(
-            "Would flag two sessions working the same branch, port, or dev server."
-        ),
+        description=(ui_message("automation_registry.ef7a147ba8")),
     ),
     Automation(
         "absence_report",
@@ -285,7 +249,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         "Absence report / digest",
         ("scan_timeline",),
         family="attention",
-        description="Summarises what the fleet did while you were away.",
+        description=ui_message("automation_registry.aafa130d72"),
     ),
     # Phase 7.7 near-term scan-timeline consumers. Each is a cheap derivation over
     # the per-record behavioral spine, independently toggleable, and reads the
@@ -300,9 +264,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         "Phase-transition signals",
         ("scan_timeline",),
         family="timeline",
-        description=(
-            "Signals when a run changes work phase, or stalls inside one for too long."
-        ),
+        description=(ui_message("automation_registry.f5f09a21f6")),
     ),
     # Timeline-based handoff regenerates the handoff export from a run's scan
     # spine rather than from raw annotations, so it is phase-structured.
@@ -312,10 +274,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         "Timeline-based handoff",
         ("scan_timeline",),
         family="timeline",
-        description=(
-            "Builds the handoff export from the run's phase timeline rather than from "
-            "raw notes."
-        ),
+        description=(ui_message("automation_registry.135603fd75")),
     ),
     # Catch-me-up is an on-demand per-session / per-Project rollup of the scan
     # spine: phases gone through, claims, and what is blocking.
@@ -325,10 +284,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         "Catch-me-up digest",
         ("scan_timeline",),
         family="timeline",
-        description=(
-            "On demand, summarises a session or Project: the phases it went through, "
-            "what it claimed, and what is blocking."
-        ),
+        description=(ui_message("automation_registry.35141e46e0")),
     ),
     # Live blockers aggregates the `blockers` field across active sessions into a
     # fleet glance without opening any of them.
@@ -338,10 +294,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         "Live blockers view",
         ("scan_timeline",),
         family="timeline",
-        description=(
-            "Collects what each active session says it is blocked on into one fleet "
-            "glance, without opening any of them."
-        ),
+        description=(ui_message("automation_registry.5bc059479a")),
     ),
     # Semantic history search resolves a query against distilled scan
     # summary/intent/target records rather than a raw transcript grep.
@@ -351,10 +304,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         "Semantic history search",
         ("scan_timeline",),
         family="timeline",
-        description=(
-            "Searches past work by meaning, over distilled timeline records rather "
-            "than by grepping transcripts."
-        ),
+        description=(ui_message("automation_registry.14d5be3d62")),
     ),
     # Phase 7.11: whether *agents* may read this Project's scan timeline through
     # the `scan_timeline` MCP tool. Its own consumer id rather than the
@@ -368,10 +318,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         "Agent scan-timeline reads",
         ("scan_timeline",),
         family="timeline",
-        description=(
-            "Whether agents may read this Project's timeline, which is a separate "
-            "question from whether one is kept."
-        ),
+        description=(ui_message("automation_registry.5d3c48cbfc")),
     ),
     # "← everything" in the design: ranking has nothing to rank without the
     # detectors and the timeline that feed it. The old `("tier0",)` would have let
@@ -388,10 +335,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
             "doc_debt",
         ),
         family="attention",
-        description=(
-            "Ranks everything the detectors found into one ordered inbox, under an "
-            "interrupt budget."
-        ),
+        description=(ui_message("automation_registry.fd8565b92c")),
     ),
     # The model tier, and the only automation here that spends tokens. It is a
     # "why" over items ranking has already produced, so it depends on ranking
@@ -404,9 +348,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         spends=True,
         needs_llm=True,
         family="attention",
-        description=(
-            "Adds a short model-written explanation of why a ranked item needs you."
-        ),
+        description=(ui_message("automation_registry.bb84b5b37f")),
     ),
     # Keep the persisted id for settings compatibility. The human observation
     # inbox UI is retired; this now names review of agent spawn requests in the
@@ -416,17 +358,14 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         CONSUMER,
         "Spawn request review",
         family="capabilities",
-        description=(
-            "A review queue for the new-session requests agents draft instead of "
-            "starting themselves."
-        ),
+        description=(ui_message("automation_registry.f62e115acc")),
     ),
     Automation(
         "screenshot_to_agent",
         CONSUMER,
         "Screenshot to agent",
         family="capabilities",
-        description="Lets a screenshot you capture be sent into an agent session.",
+        description=ui_message("automation_registry.6e50a2c35e"),
     ),
     # Phase 7.6: the per-Project opt-in that makes the `interrupt` and
     # `end_session` MCP tools reachable at all (and, with it off, collapses
@@ -445,10 +384,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         (),
         default_on=True,
         family="capabilities",
-        description=(
-            "Lets an agent that holds the authority interrupt or end another session. "
-            "The authority level beside it decides whether it acts or only asks."
-        ),
+        description=(ui_message("automation_registry.9fe7a1f845")),
     ),
     # Scheduled runs: cron/interval/one-off spawns of an agent session in this
     # Project, authored by a human ahead of time. Like `session_control` it gates
@@ -463,10 +399,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         "Scheduled runs",
         (),
         family="capabilities",
-        description=(
-            "Starts agent sessions on a cron, interval, or one-off schedule you "
-            "author. Permission alone starts nothing."
-        ),
+        description=(ui_message("automation_registry.afb260efaf")),
     ),
     # Phase 14: serialized branch landing. Like `session_control` and
     # `scheduled_runs` it gates a *capability* rather than a read over another
@@ -481,10 +414,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         "Auto-merge",
         (),
         family="capabilities",
-        description=(
-            "Reconciles, verifies, and fast-forwards finished branches one at a time. "
-            "A conflict or a failed gate goes back to the branch's own agent."
-        ),
+        description=(ui_message("automation_registry.0454983dfc")),
     ),
 )
 
@@ -511,7 +441,11 @@ def _validate_families() -> None:
     for automation in _AUTOMATIONS:
         if automation.family not in known:
             raise ValueError(
-                f"automation {automation.id} names unknown family {automation.family!r}"
+                ui_message(
+                    "automation_registry.d566a9b7d3",
+                    value1=automation.id,
+                    value2=repr(automation.family),
+                )
             )
 
 
@@ -524,7 +458,7 @@ def _validate_descriptions() -> None:
     """
     for automation in _AUTOMATIONS:
         if not automation.description.strip():
-            raise ValueError(f"automation {automation.id} ships without a description")
+            raise ValueError(ui_message("automation_registry.432d5c85ff", value1=automation.id))
 
 
 _validate_families()
@@ -565,6 +499,7 @@ def effective_global_allow(
     }
     effective["scan_timeline"] = scan_timeline_enabled
     return effective
+
 
 #: The registry's own default template - layer 3 of the four (see
 #: `install_defaults`). A Project's own map overrides it entry by entry, so
@@ -670,13 +605,17 @@ def resolve_title_refinements(project_value: object, *, default: int) -> int:
 def _validate_registry() -> None:
     for automation in REGISTRY.values():
         if automation.kind not in {SUBSTRATE, CONSUMER}:
-            raise ValueError(f"{automation.id} has unknown kind {automation.kind}")
+            raise ValueError(
+                ui_message(
+                    "automation_registry.7d63094a07", value1=automation.id, value2=automation.kind
+                )
+            )
         if automation.spends and not automation.needs_llm:
             # Every way of spending money here is a model call, so an automation
             # that claims to spend and denies needing the provider would sit
             # outside the verified-provider gate while still billing - the exact
             # silent downstream failure that gate exists to remove.
-            raise ValueError(f"{automation.id} spends money but does not need a model")
+            raise ValueError(ui_message("automation_registry.b249b28582", value1=automation.id))
         if automation.default_on and (
             automation.requires
             or automation.spends
@@ -687,13 +626,19 @@ def _validate_registry() -> None:
             # Anything that reads a substrate, calls a model, or does not exist
             # yet running on Projects that never opted in is exactly the silent
             # behaviour the per-Project opt-in exists to prevent.
-            raise ValueError(f"{automation.id} cannot be on by default")
+            raise ValueError(ui_message("automation_registry.cf5d1c0228", value1=automation.id))
         for dependency in automation.requires:
             if dependency not in REGISTRY:
-                raise ValueError(f"{automation.id} requires unknown automation {dependency}")
+                raise ValueError(
+                    ui_message(
+                        "automation_registry.060ede2b43", value1=automation.id, value2=dependency
+                    )
+                )
             if automation.kind == SUBSTRATE and REGISTRY[dependency].kind == CONSUMER:
                 raise ValueError(
-                    f"substrate {automation.id} cannot depend on consumer {dependency}"
+                    ui_message(
+                        "automation_registry.61e9825c0f", value1=automation.id, value2=dependency
+                    )
                 )
     # Reject cycles so the closure walk always terminates.
     visiting: set[str] = set()
@@ -703,7 +648,7 @@ def _validate_registry() -> None:
         if node in done:
             return
         if node in visiting:
-            raise ValueError(f"dependency cycle involving {node}")
+            raise ValueError(ui_message("automation_registry.a345a03d09", value1=node))
         visiting.add(node)
         for dependency in REGISTRY[node].requires:
             visit(dependency)
@@ -911,7 +856,7 @@ def enabling_closure(automation_ids_wanted: Iterable[str]) -> frozenset[str]:
     wanted = list(automation_ids_wanted)
     unknown = sorted({item for item in wanted if item not in REGISTRY})
     if unknown:
-        raise ValueError(f"unknown automations: {', '.join(unknown)}")
+        raise ValueError(ui_message("automation_registry.5694e8396c", value1=", ".join(unknown)))
     result: set[str] = set()
     for automation_id in wanted:
         result.add(automation_id)
@@ -951,11 +896,11 @@ RECOMMENDED_PROJECT_AUTOMATIONS: tuple[str, ...] = (
 def _validate_recommended() -> None:
     for automation_id in RECOMMENDED_PROJECT_AUTOMATIONS:
         if automation_id not in REGISTRY:
-            raise ValueError(f"recommended set names unknown automation {automation_id}")
+            raise ValueError(ui_message("automation_registry.2250a2fed0", value1=automation_id))
         if not REGISTRY[automation_id].implemented:
-            raise ValueError(f"recommended set names unimplemented {automation_id}")
+            raise ValueError(ui_message("automation_registry.e8c57319c6", value1=automation_id))
     if spends_money(RECOMMENDED_PROJECT_AUTOMATIONS):
-        raise ValueError("the recommended starting set must be free to run")
+        raise ValueError(ui_message("automation_registry.f0c0ab3644"))
 
 
 _validate_recommended()
@@ -982,14 +927,14 @@ LLM_PROJECT_AUTOMATIONS: tuple[str, ...] = (
 def _validate_llm_set() -> None:
     for automation_id in LLM_PROJECT_AUTOMATIONS:
         if automation_id not in REGISTRY:
-            raise ValueError(f"LLM set names unknown automation {automation_id}")
+            raise ValueError(ui_message("automation_registry.de9544beb9", value1=automation_id))
         if not REGISTRY[automation_id].needs_llm:
             # The checkbox says "the model-backed automations"; a model-free id here
             # would make that sentence quietly wrong.
-            raise ValueError(f"LLM set names model-free {automation_id}")
+            raise ValueError(ui_message("automation_registry.8ae0d7060d", value1=automation_id))
     for automation_id in enabling_closure(LLM_PROJECT_AUTOMATIONS):
         if not REGISTRY[automation_id].implemented:
-            raise ValueError(f"LLM set drags in unimplemented {automation_id}")
+            raise ValueError(ui_message("automation_registry.9668242dd2", value1=automation_id))
 
 
 _validate_llm_set()
@@ -1011,11 +956,11 @@ AUTONOMY_PROJECT_AUTOMATIONS: tuple[str, ...] = (
 def _validate_autonomy_set() -> None:
     for automation_id in AUTONOMY_PROJECT_AUTOMATIONS:
         if automation_id not in REGISTRY:
-            raise ValueError(f"autonomy set names unknown automation {automation_id}")
+            raise ValueError(ui_message("automation_registry.044110d4ed", value1=automation_id))
         if not REGISTRY[automation_id].implemented:
-            raise ValueError(f"autonomy set names unimplemented {automation_id}")
+            raise ValueError(ui_message("automation_registry.543b98f661", value1=automation_id))
     if spends_money(AUTONOMY_PROJECT_AUTOMATIONS):
-        raise ValueError("the autonomy starting set must be free to run")
+        raise ValueError(ui_message("automation_registry.5e7985dbce"))
 
 
 _validate_autonomy_set()

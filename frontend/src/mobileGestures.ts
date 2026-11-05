@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 // Touch-gesture recognition for the mobile workspace. Edge- and top-anchored swipes
 // are intentionally unsupported: on Android those belong to the OS (back / home /
 // notification shade), so the reliable channels are mid-screen single-finger
@@ -34,14 +35,14 @@ export const GESTURE_SLOTS: GestureSlot[] = [
 ]
 
 export const GESTURE_LABELS: Record<GestureSlot, string> = {
-  swipe_left: 'Swipe left',
-  swipe_right: 'Swipe right',
-  two_finger_swipe_left: 'Two-finger swipe left',
-  two_finger_swipe_right: 'Two-finger swipe right',
-  two_finger_swipe_up: 'Two-finger swipe up',
-  two_finger_swipe_down: 'Two-finger swipe down',
-  two_finger_tap: 'Two-finger tap',
-  rail_swipe_up: 'Swipe up on the command rail',
+  get swipe_left() { return t("mobileGestures.003d6e6fed") },
+  get swipe_right() { return t("mobileGestures.f826aca04f") },
+  get two_finger_swipe_left() { return t("mobileGestures.666d7eaf0d") },
+  get two_finger_swipe_right() { return t("mobileGestures.34959373de") },
+  get two_finger_swipe_up() { return t("mobileGestures.c36097c5f9") },
+  get two_finger_swipe_down() { return t("mobileGestures.7000ecbbc6") },
+  get two_finger_tap() { return t("mobileGestures.c0301858a5") },
+  get rail_swipe_up() { return t("mobileGestures.e55435dea2") },
 }
 
 // Command id per slot, or '' to disable the gesture.

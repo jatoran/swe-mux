@@ -1,3 +1,4 @@
+import { rich, t } from './localization/index.ts'
 import { checkpointAge, isInactiveSession, missingContentReason } from './coldSession.ts'
 import type { Session } from './types'
 
@@ -36,24 +37,14 @@ export function EndedPaneBanner(
   const captured = session.cold_terminal_at
   const missing = cold && !captured ? missingContentReason(session) : null
   return <div class="cold-pane-banner" role="status">
-    <strong>{inactive ? 'inactive' : cold ? 'recovered' : 'ended'}</strong>
+    <strong>{inactive ? t("EndedPaneBanner.d1022618b9") : cold ? t("EndedPaneBanner.f6e09cc89f") : t("EndedPaneBanner.e87ba7a0b7")}</strong>
     <span>
-      {inactive
-        ? 'No process is running. This session stays here until you resume or remove it.'
-        : cold
-        ? 'This session was recovered after an unexpected shutdown. Its process is gone.'
-        : 'This session has ended. The pane is read-only.'}
+      {inactive ? t("EndedPaneBanner.124f8939e1") : cold ? t("EndedPaneBanner.40af4d5d3b") : t("EndedPaneBanner.bc9aa1f7a8")}
     </span>
-    {cold && captured
-      ? <span>Terminal content is from {checkpointAge(captured, Date.now())}.</span>
-      : null}
+    {cold && captured ? <span>{rich("EndedPaneBanner.6f834a759f", { value1: checkpointAge(captured, Date.now()) })}</span> : null}
     {missing ? <span class="cold-pane-empty">{missing}</span> : null}
-    {onOpenTranscript ? <button onClick={onOpenTranscript}>Read transcript</button> : null}
-    {onResume
-      ? <button disabled={resuming} onClick={onResume}>{resuming ? 'Resuming…' : 'Resume'}</button>
-      : null}
-    {onRestart
-      ? <button disabled={resuming} onClick={onRestart}>{resuming ? 'Restarting…' : 'Restart terminal'}</button>
-      : null}
+    {onOpenTranscript ? <button onClick={onOpenTranscript}>{t("EndedPaneBanner.09a94f0023")}</button> : null}
+    {onResume ? <button disabled={resuming} onClick={onResume}>{resuming ? t("EndedPaneBanner.c494e3ca3e") : t("EndedPaneBanner.d640c7421d")}</button> : null}
+    {onRestart ? <button disabled={resuming} onClick={onRestart}>{resuming ? t("EndedPaneBanner.75d0f1469d") : t("EndedPaneBanner.0c709e67bb")}</button> : null}
   </div>
 }

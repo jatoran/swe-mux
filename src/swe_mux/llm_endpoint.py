@@ -66,6 +66,8 @@ from dataclasses import dataclass
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
+from .ui_messages import ui_message
+
 __all__ = [
     "LLM_PROVIDERS",
     "MAX_BASE_URL_CHARS",
@@ -401,7 +403,7 @@ def openrouter_endpoint() -> LlmEndpoint:
         # every existing install's automations on upgrade to prove something
         # they had already proven.
         requires_verification=False,
-        label="OpenRouter",
+        label=ui_message("llm_endpoint.eb70c3bc14"),
         reports_cost=True,
         capabilities=OPENROUTER_CAPABILITIES,
     )
@@ -448,7 +450,7 @@ def custom_endpoint(
         # `usage` still has no such endpoint, and asking would 404 every call.
         supports_generation_cost=False,
         requires_verification=True,
-        label="Custom OpenAI-compatible endpoint",
+        label=ui_message("llm_endpoint.7eab6c328d"),
         reports_cost=capabilities.reports_cost,
         capabilities=capabilities,
         catalog_override=normalize_catalog_url(catalog_url),

@@ -1,3 +1,5 @@
+import { locale as uiLocale } from './localization/index.ts'
+import { t } from './localization/index.ts'
 /**
  * The frontend overlay, browser side: the payload shape and the one sentence to say.
  *
@@ -118,28 +120,28 @@ export function overlayStatusSummary(status: OverlayStatus | null): string | nul
   if (!status.installed) return null
   const serving = status.serving
   if (serving?.faulted) {
-    return serving.message || `The installed overlay was refused (${serving.reason}).`
+    return serving.message || t("frontendOverlay.4aed3952c9", { value1: serving.reason })
   }
   if (serving?.reason === 'disabled') {
-    return 'Frontend overlays are turned off for this install, so the bundled frontend is served.'
+    return t("frontendOverlay.b73232a16f")
   }
   if (!status.active) {
-    return 'The overlay is reverted. The bundled frontend is being served.'
+    return t("frontendOverlay.045c16f6f3")
   }
   if (serving?.serving === 'overlay') {
-    return 'The overlay is being served in place of the bundled frontend.'
+    return t("frontendOverlay.110682792e")
   }
   // Installed, switched on, and this process is still on the bundle: the daemon
   // resolved before the install, so a restart is what is missing. Saying that is
   // the difference between a pending change and a broken one.
-  return 'The overlay is installed and will be served after the next daemon restart.'
+  return t("frontendOverlay.6b05e7c57f")
 }
 
 /** When it was installed. Absolute, for the reason the update check's is. */
 export function installedAtLabel(status: OverlayStatus | null): string | null {
   const seconds = status?.state?.installed_at
   if (typeof seconds !== 'number' || !Number.isFinite(seconds)) return null
-  return new Date(seconds * 1000).toLocaleString()
+  return new Date(seconds * 1000).toLocaleString(uiLocale.value)
 }
 
 /** The passive read. Reads daemon state; reaches nothing past it. */
@@ -153,7 +155,7 @@ async function press(path: string, gesture: string): Promise<OverlayStatus> {
     body: '{}',
   })
   const payload = await response.json() as { error?: string; message?: string }
-  if (!response.ok) throw new Error(payload.message || payload.error || 'That did not work.')
+  if (!response.ok) throw new Error(payload.message || payload.error || t("frontendOverlay.8816661d68"))
   return fetchOverlayStatus()
 }
 

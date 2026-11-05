@@ -1,3 +1,5 @@
+import { t } from './localization/index.ts'
+import type { ApiError } from './api'
 import { parseLayout, type PaneLayout } from './layout.ts'
 import type { Project } from './types.ts'
 
@@ -76,8 +78,8 @@ export function createLayoutWriter(ports: LayoutWriterPorts): LayoutWriter {
         await ports.refresh()
         const message = cause instanceof Error ? cause.message : String(cause)
         if (!options?.quiet) {
-          ports.onError(message.includes('stale layout revision')
-            ? 'Layout changed in another client; reloaded the current layout.'
+          ports.onError((cause as ApiError)?.detail?.code === 'layout_revision_conflict'
+            ? t("layoutWriter.c850cf8225")
             : message)
         }
         return false

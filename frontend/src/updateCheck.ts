@@ -1,3 +1,5 @@
+import { locale as uiLocale } from './localization/index.ts'
+import { t } from './localization/index.ts'
 /**
  * The release update check, browser side: the payload shape and the rules for
  * turning it into something a person reads.
@@ -76,8 +78,8 @@ export function shouldShowUpdateBanner(status: UpdateStatus | null): boolean {
 export function updateBannerText(status: UpdateStatus): string {
   const latest = status.latest?.version ?? ''
   const current = status.current_version
-  return current ? `swe-mux ${latest} is available. You are running ${current}.`
-    : `swe-mux ${latest} is available.`
+  return current ? t("updateCheck.621ec34982", { value1: latest, value2: current })
+    : t("updateCheck.612df5bc86", { value1: latest })
 }
 
 /**
@@ -88,18 +90,18 @@ export function updateBannerText(status: UpdateStatus): string {
 export function updateStatusSummary(status: UpdateStatus | null): string | null {
   if (!status) return null
   switch (status.status) {
-    case 'disabled': return 'Turned off. Nothing is requested.'
+    case 'disabled': return t("updateCheck.53669448cf")
     case 'unavailable': return null
-    case 'never_checked': return 'Not checked yet.'
-    case 'unreachable': return 'The last check could not reach the update manifest or GitHub.'
-    case 'malformed': return 'The last check reached a server that did not answer with a manifest.'
+    case 'never_checked': return t("updateCheck.36e770e5c8")
+    case 'unreachable': return t("updateCheck.8536ef4da6")
+    case 'malformed': return t("updateCheck.c5fea409fd")
     case 'unsupported_schema':
-      return 'The manifest uses a newer format than this build understands.'
-    case 'incomparable': return 'The manifest named a version this build could not compare.'
+      return t("updateCheck.6ec02091a1")
+    case 'incomparable': return t("updateCheck.947083540d")
     case 'ok':
       return status.update_available
-        ? `swe-mux ${status.latest?.version ?? ''} is available.`
-        : 'This is the latest release.'
+        ? t("updateCheck.612df5bc86", { value1: status.latest?.version ?? '' })
+        : t("updateCheck.b357e1fa68")
     default: return null
   }
 }
@@ -131,7 +133,7 @@ export function runningVersionLabel(status: UpdateStatus | null): string | null 
 export function lastCheckedLabel(status: UpdateStatus | null): string | null {
   const seconds = status?.checked_at
   if (typeof seconds !== 'number' || !Number.isFinite(seconds)) return null
-  return new Date(seconds * 1000).toLocaleString()
+  return new Date(seconds * 1000).toLocaleString(uiLocale.value)
 }
 
 /** The passive read. Never reaches the network past the daemon. */
@@ -145,7 +147,7 @@ export async function requestUpdateCheck(): Promise<UpdateStatus> {
     headers: { 'Content-Type': 'application/json', 'X-Mux-User-Gesture': UPDATE_CHECK_GESTURE },
   })
   const payload = await response.json() as UpdateStatus & { error?: string }
-  if (!response.ok) throw new Error(payload.error || 'The update check could not run.')
+  if (!response.ok) throw new Error(payload.error || t("updateCheck.e3e411fa20"))
   return payload
 }
 
@@ -271,7 +273,7 @@ async function post<T>(path: string, gesture: string, body: unknown): Promise<T>
   })
   const payload = await response.json().catch(() => ({})) as T & { error?: string; message?: string }
   if (response.status === 409 && payload.error) throw new UpdateRefusedError(payload as unknown as UpdateRefusal)
-  if (!response.ok) throw new Error(payload.message || payload.error || `HTTP ${response.status}`)
+  if (!response.ok) throw new Error(payload.message || payload.error || t("updateCheck.2669fecc69", { value1: response.status }))
   return payload
 }
 
@@ -310,10 +312,10 @@ export function installFinished(phase: string): boolean {
 
 export function bytesLabel(bytes: number | undefined): string {
   if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 0) return ''
-  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(2)} GB`
-  if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(1)} MB`
-  if (bytes >= 1e3) return `${(bytes / 1e3).toFixed(0)} KB`
-  return `${bytes} B`
+  if (bytes >= 1e9) return t("updateCheck.93b74ca293", { value1: (bytes / 1e9).toFixed(2) })
+  if (bytes >= 1e6) return t("updateCheck.60e78b906d", { value1: (bytes / 1e6).toFixed(1) })
+  if (bytes >= 1e3) return t("updateCheck.634b3dd62c", { value1: (bytes / 1e3).toFixed(0) })
+  return t("updateCheck.97ceb1e970", { bytes: bytes })
 }
 
 /** What the progress line says for an attempt in flight. */
@@ -323,15 +325,15 @@ export function installPhaseLabel(status: UpdateInstallStatus | null): string {
     case 'downloading': {
       const done = bytesLabel(status.bytes_downloaded)
       const total = bytesLabel(status.bytes_total)
-      if (done && total && (status.bytes_total ?? 0) > 0) return `Downloading ${done} of ${total}`
-      return done ? `Downloading ${done}` : 'Downloading'
+      if (done && total && (status.bytes_total ?? 0) > 0) return t("updateCheck.2c9336ce95", { done: done, total: total })
+      return done ? t("updateCheck.d86decd905", { value1: done }) : t("updateCheck.37b345555d")
     }
-    case 'verifying': return 'Verifying the download'
-    case 'inspecting': return 'Reading the release'
-    case 'preparing': return 'Unpacking the updater'
-    case 'handed_off': return 'Installing'
-    case 'refused': return 'Not installed'
-    case 'failed': return 'Failed'
+    case 'verifying': return t("updateCheck.a03e94e5ad")
+    case 'inspecting': return t("updateCheck.a35c9e9ce7")
+    case 'preparing': return t("updateCheck.c7a9c67853")
+    case 'handed_off': return t("updateCheck.8749b1693f")
+    case 'refused': return t("updateCheck.d177cdc09a")
+    case 'failed': return t("updateCheck.031a8f0f65")
     default: return ''
   }
 }
@@ -339,19 +341,19 @@ export function installPhaseLabel(status: UpdateInstallStatus | null): string {
 /** The one sentence about the operator's sessions, from the daemon's verdict. */
 export function planSessionsLine(plan: UpdatePlan): string {
   const count = plan.live_sessions ?? 0
-  const sessions = count === 1 ? '1 live session' : `${count} live sessions`
+  const sessions = count === 1 ? t("updateCheck.7837f0aaa6") : t("updateCheck.8606c8b120", { value1: count })
   if (plan.reaps_sessions) {
     return count > 0
-      ? `This release replaces the PTY supervisor, which ends every live terminal session - ${sessions} right now.`
-      : 'This release replaces the PTY supervisor, which ends every live terminal session. None are running right now.'
+      ? t("updateCheck.3067afb741", { value1: sessions })
+      : t("updateCheck.28ff7f2e0b")
   }
   if (!plan.supervisor.known) {
-    return 'Whether your sessions survive is decided after the download: this release published no '
-      + 'metadata sidecar. If it would replace the PTY supervisor, the install stops and asks first.'
+    return t("updateCheck.3e91387633")
+      + t("updateCheck.3201ae3634")
   }
   return count > 0
-    ? `Your ${sessions} keep running: the PTY supervisor holds them while the app restarts around them.`
-    : 'Live sessions keep running: the PTY supervisor holds them while the app restarts around them.'
+    ? t("updateCheck.7bf8e59f02", { value1: sessions })
+    : t("updateCheck.beb5acbf34")
 }
 
 /** The optional supervisor update the plan offers, in one line, or '' when none is. */
@@ -360,9 +362,9 @@ export function planSupervisorOfferLine(plan: UpdatePlan): string {
   const incoming = plan.supervisor.incoming_revision
   const running = plan.supervisor.running_revision ?? 0
   const count = plan.live_sessions ?? 0
-  const cost = count === 1 ? 'the 1 live session' : count > 1 ? `all ${count} live sessions` : 'every live session'
-  return `This release also carries a newer PTY supervisor (revision ${incoming ?? '?'}; revision ${running} is running). `
-    + `Installing it too ends ${cost}; leaving it out keeps them, and the running supervisor keeps working.`
+  const cost = count === 1 ? t("updateCheck.474f5d0524") : count > 1 ? t("updateCheck.58a51315a7", { value1: count }) : t("updateCheck.1a947d64b5")
+  return t("updateCheck.e628b0094b", { value1: incoming ?? '?', value2: running })
+    + t("updateCheck.909e8c7fb1", { value1: cost })
 }
 
 /** How much of the bundle the install writes, or '' when the plan could not say. */
@@ -372,10 +374,10 @@ export function planCostLine(plan: UpdatePlan): string {
     const fetched = bytesLabel(delta.fetch_bytes)
     const files = delta.fetch_files ?? 0
     const reused = delta.reuse_files ?? 0
-    return `Downloads the release and rewrites ${files} file${files === 1 ? '' : 's'}`
-      + `${fetched ? ` (${fetched})` : ''}; ${reused} already on this machine are reused.`
+    return t("updateCheck.b178416368", { value1: files, value2: (files === 1) ? 'yes' : 'no' })
+      + t("updateCheck.7055212b97", { value1: fetched ? ` (${fetched})` : '', value2: reused })
   }
-  if (plan.archive_cached) return 'The release is already downloaded and verified.'
+  if (plan.archive_cached) return t("updateCheck.b3c9ec6eda")
   return ''
 }
 
@@ -383,11 +385,11 @@ export function planCostLine(plan: UpdatePlan): string {
 export function planInstallLine(plan: UpdatePlan): string {
   switch (plan.managed) {
     case 'installer':
-      return 'Installed with the Windows installer. The app is replaced in place and Add/Remove Programs is updated.'
+      return t("updateCheck.4d2e170996")
     case 'checkout':
-      return 'Running from a source checkout’s dist/. The built app is replaced in place.'
+      return t("updateCheck.a23c9b6ce2")
     case 'portable':
-      return 'A portable install. The app is replaced in place.'
+      return t("updateCheck.8edd2618b4")
     default:
       return ''
   }

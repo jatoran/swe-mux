@@ -1,3 +1,4 @@
+import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 // The control that measures which chords this browser actually hands the page, and
 // the opt-in that lets a fullscreen tab take the ones it does not.
 //
@@ -44,7 +45,7 @@ async function persist(patch: Record<string, unknown>): Promise<void> {
 
 export function KeyboardProbe({ policy, platform }: Props) {
   const host = hostProfile()
-  const candidates = useMemo(() => probeCandidates(policy), [policy])
+  const candidates = useMemo(() => probeCandidates(policy), [policy, uiLocale.value, catalogRevision.value])
   const [report, setReport] = useState<ProbeReport | null>(storedProbe)
   const [running, setRunning] = useState(false)
   const [index, setIndex] = useState(0)
@@ -94,31 +95,28 @@ export function KeyboardProbe({ policy, platform }: Props) {
   const tested = report ? coverage(report) : { tested: 0, total: candidates.length }
 
   return <div class="keyboard-probe">
-    <div class="keybinding-heading"><div><h3>What this browser gives the app</h3>
-      <p>The shipped table is a guess about your browser and is wrong somewhere. Measure it instead: press each chord once, and mark the ones nothing happens for.</p></div>
-      <button type="button" onClick={running ? finish : start}>{running ? 'Save results' : report ? 'Measure again' : 'Measure'}</button></div>
+    <div class="keybinding-heading"><div><h3 data-heading-message="heading.8b07606865">{t("heading.8b07606865")}</h3>
+      <p>{t("KeyboardProbe.62b3145bb9")}</p></div>
+      <button type="button" onClick={running ? finish : start}>{running ? t("KeyboardProbe.5fc0a3943a") : report ? t("KeyboardProbe.31794226d5") : t("KeyboardProbe.ebf940f2b3")}</button></div>
 
-    {host.host === 'desktop' && <p class="keymap-host">The desktop app receives every chord, so this measures nothing here. Run it from a browser tab.</p>}
+    {host.host === 'desktop' && <p class="keymap-host">{t("KeyboardProbe.8e0325c33c")}</p>}
 
     {running && <div class="keyboard-probe-surface" ref={surface} tabIndex={-1} role="status" aria-live="polite">
-      <p>Press <kbd>{displayChord(candidates[index], platform)}</kbd> — {index + 1} of {candidates.length}.</p>
+      <p>{rich("KeyboardProbe.cb62b45fad", { value1: <kbd>{displayChord(candidates[index], platform)}</kbd>, value2: index + 1, length: candidates.length })}</p>
       <div>
-        <button type="button" onClick={blocked}>Nothing happened (the browser kept it)</button>
-        <button type="button" onClick={() => setIndex(position => Math.min(position + 1, candidates.length - 1))}>Skip</button>
-        <button type="button" onClick={finish}>Stop and save</button>
+        <button type="button" onClick={blocked}>{t("KeyboardProbe.5a39f8921c")}</button>
+        <button type="button" onClick={() => setIndex(position => Math.min(position + 1, candidates.length - 1))}>{t("KeyboardProbe.28d03596d2")}</button>
+        <button type="button" onClick={finish}>{t("KeyboardProbe.6be804aeec")}</button>
       </div>
-      <p class="keymap-host">Escape stops. A chord you skip stays <strong>untested</strong> rather than being recorded as blocked — the two look identical from in here, and treating them the same would quietly hand back every chord nobody tried.</p>
+      <p class="keymap-host">{rich("KeyboardProbe.57ba0605bc", { value1: <strong>{t("KeyboardProbe.089b71123d")}</strong> })}</p>
     </div>}
 
-    {report && !running && <p class="keymap-host">
-      Measured {tested.tested} of {tested.total} chords on this device{report.finishedAt ? '' : ' (unfinished)'}.
-      {' '}{Object.values(report.results).filter(item => item.verdict === 'delivered').length} reach the app.
-    </p>}
+    {report && !running && <p class="keymap-host">{rich("KeyboardProbe.bb556f45f3", { tested: tested.tested, total: tested.total, value3: (report.finishedAt) ? 'yes' : 'no', length: Object.values(report.results).filter(item => item.verdict === 'delivered').length })}</p>}
 
     {host.keyboardLockAvailable && host.host === 'browser' && <label class="check keyboard-lock">
       <span>
-        <strong>Capture browser shortcuts in fullscreen</strong>
-        <small>Uses the Keyboard Lock API to take Ctrl+T, Ctrl+W and Escape while swe-mux is fullscreen. Chromium only, asks permission once, and holding Escape for two seconds always releases it.</small>
+        <strong>{t("KeyboardProbe.f298db5b36")}</strong>
+        <small>{t("KeyboardProbe.620236b9c2")}</small>
       </span>
       <input type="checkbox" checked={lock} onChange={event => {
         const next = event.currentTarget.checked

@@ -1,3 +1,4 @@
+import { t } from './localization/index.ts'
 import type { JSX } from 'preact'
 
 type Props = {
@@ -15,10 +16,10 @@ export function PaneRunTrigger({ projectName, mobile, expanded, order, onOpen }:
     type="button"
     class="pane-run-trigger"
     data-tutorial="pane-run"
-    aria-label={`Run in ${projectName}`}
+    aria-label={t("PaneRunTrigger.23af12f561", { projectName: projectName })}
     aria-haspopup="menu"
     aria-expanded={expanded}
-    title={`Run in ${projectName}`}
+    title={t("PaneRunTrigger.23af12f561", { projectName: projectName })}
     style={{ order } as JSX.CSSProperties}
     onClick={event => onOpen(event.currentTarget)}
   >+</button>

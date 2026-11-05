@@ -13,6 +13,7 @@ from .git_projects import resolve_project
 from .history import HistoryIndex
 from .projects import ProjectManager
 from .reconcile import ScanFunction, scan_external_transcripts_async, summarize_transcript
+from .ui_messages import ui_message
 
 
 def _normalized_path(value: str | Path) -> str:
@@ -95,8 +96,7 @@ class HistoryBackfillManager:
         if project_id:
             jobs = [job for job in jobs if job.project_id == project_id]
         return [
-            job.payload()
-            for job in sorted(jobs, key=lambda item: item.created_at, reverse=True)
+            job.payload() for job in sorted(jobs, key=lambda item: item.created_at, reverse=True)
         ]
 
     def cancel(self, job_id: str) -> dict[str, Any]:
@@ -126,9 +126,7 @@ class HistoryBackfillManager:
 
     def _owner_for_cwd(self, cwd: str) -> tuple[str | None, bool]:
         candidates = [
-            project
-            for project in self.projects.projects.values()
-            if _contains(project.root, cwd)
+            project for project in self.projects.projects.values() if _contains(project.root, cwd)
         ]
         if not candidates:
             return None, False
@@ -220,7 +218,7 @@ class HistoryBackfillManager:
                         project_root=project.root,
                     )
                     if not history_id:
-                        raise RuntimeError("native transcript did not produce a history row")
+                        raise RuntimeError(ui_message("history_backfill.b5ec802589"))
                     state, message_count = await self.history.index_transcript(
                         history_id, item.path, item.backend, native_id=item.native_id
                     )
