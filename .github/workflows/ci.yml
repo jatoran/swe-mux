@@ -57,6 +57,14 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
+      # Pytest also launches the website Worker tests; pin Node before it runs.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
       # `voice-local` is optional to install but not optional to test: the real
       # misaki G2P tests are `importorskip`-guarded, so a bare sync turns them
       # into silent skips rather than failures. The Linux job below deliberately
@@ -185,20 +193,6 @@ jobs:
           # 500 MB/month Actions storage (see `release.yml`).
           retention-days: 7
 
-      # 22, not 20: `npm test` runs `node --experimental-strip-types test/all.ts`,
-      # and that flag does not exist before Node 22.6 - on 20 the runner answered
-      # `node: bad option` and the suite never started. It went unnoticed because
-      # every earlier CI run failed before reaching this step, and because the
-      # development host is on 22. `frontend/package.json` now declares the
-      # matching `engines.node` so the requirement lives with the script that
-      # needs it rather than only here.
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
       - name: Install frontend
         run: npm --prefix frontend ci
 
@@ -297,6 +291,14 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
+      # Pytest also launches the website Worker tests; pin Node before it runs.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
       # Deliberately bare: no extras. This is the leg that proves `pip install
       # swe-mux` still yields an importable package now that the voice closure
       # sits behind `voice-local` - a module-scope `import onnxruntime` anywhere
@@ -350,13 +352,6 @@ jobs:
       # it. The bare `uv sync` above is deliberately left alone - the wheel build
       # needs no extras, and both scripts import only the standard library, so this
       # still proves the no-extras install path it was written to prove.
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
       - name: Install frontend
         run: npm --prefix frontend ci
 

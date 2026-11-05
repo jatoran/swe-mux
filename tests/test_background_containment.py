@@ -352,3 +352,46 @@ async def test_an_uncontained_run_reports_no_resources() -> None:
     assert outcome.exit_code == 0
     assert outcome.resources is None
     assert outcome.stalled is False
+
+
+@pytest.mark.skipif(not WINDOWS, reason="Windows priority API")
+@pytest.mark.parametrize("exit_code", [0, 259, None])
+def test_priority_failures_are_ignored_only_after_a_confirmed_exit(monkeypatch, exit_code):
+    import ctypes
+    from ctypes import wintypes
+
+    monkeypatch.setattr(
+        background_containment, "_NtSetInformationProcess", lambda *args: 0xC0000022
+    )
+
+    def deny_memory(*args):
+        ctypes.set_last_error(5)
+        return False
+
+    def read_exit(handle, result):
+        if exit_code is None:
+            return False
+        ctypes.cast(result, ctypes.POINTER(wintypes.DWORD)).contents.value = exit_code
+        return True
+
+    monkeypatch.setattr(background_containment, "_SetProcessInformation", deny_memory)
+    monkeypatch.setattr(background_containment, "_GetExitCodeProcess", read_exit)
+    failures = background_containment.lower_process_priorities(123)
+    expected = [] if exit_code == 0 else [
+        "io_priority_failed:0xc0000022", "memory_priority_failed:5",
+    ]
+    assert failures == expected
+
+
+@pytest.mark.skipif(not WINDOWS, reason="Windows priority API")
+def test_terminating_member_needs_no_further_priority_or_exit_query(monkeypatch):
+    monkeypatch.setattr(
+        background_containment, "_NtSetInformationProcess", lambda *args: 0xC000010A
+    )
+
+    def unexpected(*args):
+        raise AssertionError("the kernel already confirmed that this process is terminating")
+
+    monkeypatch.setattr(background_containment, "_SetProcessInformation", unexpected)
+    monkeypatch.setattr(background_containment, "_GetExitCodeProcess", unexpected)
+    assert background_containment.lower_process_priorities(123) == []

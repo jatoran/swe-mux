@@ -481,6 +481,11 @@ if sys.platform == "win32":
     _OpenProcess = _k32.OpenProcess
     _OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
     _OpenProcess.restype = wintypes.HANDLE
+    _GetExitCodeProcess = _k32.GetExitCodeProcess
+    _GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    _GetExitCodeProcess.restype = wintypes.BOOL
+    _STILL_ACTIVE = 259
+    _STATUS_PROCESS_IS_TERMINATING = 0xC000010A
     _CloseHandle = _k32.CloseHandle
     _CloseHandle.argtypes = [wintypes.HANDLE]
     _CloseHandle.restype = wintypes.BOOL
@@ -515,6 +520,10 @@ if sys.platform == "win32":
         status = _NtSetInformationProcess(
             handle, _ProcessIoPriority, ctypes.byref(io_priority), ctypes.sizeof(io_priority)
         )
+        if status & 0xFFFFFFFF == _STATUS_PROCESS_IS_TERMINATING:
+            # NTSTATUS confirms teardown even before an exit code is available.
+            log.debug("containment_priority_target_terminating")
+            return []
         if status != 0:
             failures.append(f"io_priority_failed:{status & 0xFFFFFFFF:#x}")
         memory_priority = wintypes.ULONG(_MEMORY_PRIORITY_VERY_LOW)
@@ -525,6 +534,17 @@ if sys.platform == "win32":
             ctypes.sizeof(memory_priority),
         ):
             failures.append(_last_error("memory_priority"))
+        if failures:
+            # A job member can finish after enumeration/open but before these
+            # writes. Only a confirmed exit makes those failures irrelevant;
+            # denied writes on a live or unreadable process remain degraded.
+            exit_code = wintypes.DWORD()
+            if (
+                _GetExitCodeProcess(handle, ctypes.byref(exit_code))
+                and exit_code.value != _STILL_ACTIVE
+            ):
+                log.debug("containment_priority_target_exited exit_code=%d", exit_code.value)
+                return []
         return failures
 
     class _WindowsJob:

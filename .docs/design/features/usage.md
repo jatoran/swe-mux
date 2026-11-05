@@ -141,6 +141,7 @@ Each rule in this section answers one part of that.
   On Windows the child starts suspended inside a Job object that pins every member to the idle class, hard-caps the tree at 25% of all CPUs, lowers I/O and memory priority to very low, and ends any straggler when the run closes; macOS uses `taskpolicy -b`, Linux `ionice -c 3` and `nice -n 19`.
   The job's accounting (`read_bytes`, `cpu_seconds`, `peak_memory_bytes`) is logged on `ccusage refresh completed` and kept in `last_run.resources`.
   A mechanism that could not be applied is listed in `degraded` and in `advisories`; the run still happens.
+  A Windows priority update that races with a confirmed exit or `STATUS_PROCESS_IS_TERMINATING` is not degradation; other failures on live processes or with unknown exit status remain visible.
   CPU priority alone was not the fix: agents held the CPU at 100% for 18 s the same day without the browser lagging, while the collector froze it through I/O, memory and Defender.
 - **The npm shim is bypassed.**
   ccusage 20's `cli.js` only spawns its platform binary (`@ccusage/ccusage-<platform>-<arch>/bin/ccusage`) with the same arguments, so the collector resolves that binary the way Node would and runs it directly (`launcher: native`), and the containment lands on the process doing the reading instead of on `cmd.exe` and node.

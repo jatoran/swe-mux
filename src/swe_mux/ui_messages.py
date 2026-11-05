@@ -112,14 +112,14 @@ def localize_payload(value: Any, locale: str | None = None) -> Any:
     return value
 
 
-@lru_cache(maxsize=8)
-def _native_preference(path: str, modified_ns: int) -> str:
-    del modified_ns
+def _native_preference(path: str) -> str:
     import tomllib
 
     try:
         preference = tomllib.loads(Path(path).read_text(encoding="utf-8")).get("ui_language", "")
         return preference if preference in {"en", "zh-Hans"} else ""
+    except FileNotFoundError:
+        return ""
     except (OSError, ValueError, TypeError):
         log.warning("native_ui_language_read_failed")
         return ""
@@ -131,10 +131,9 @@ def native_ui_locale(config_path: Path | None) -> str:
 
     preference = ""
     if config_path is not None:
-        try:
-            preference = _native_preference(str(config_path), config_path.stat().st_mtime_ns)
-        except OSError:
-            pass
+        # Menu reads are infrequent. Read the small config directly: Windows can
+        # report the same modification time for successive writes.
+        preference = _native_preference(str(config_path))
     system_language = (locale.getlocale()[0] or "").replace("_", "-")
     return resolve_ui_locale(preference, system_language)
 

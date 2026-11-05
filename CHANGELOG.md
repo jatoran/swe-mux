@@ -29,6 +29,8 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ### Fixed
 
+- Native tray labels follow language changes even when successive config writes have the same filesystem timestamp.
+- A Windows background-process exit during priority adjustment no longer produces a false containment warning.
 - **Agent usage collection no longer freezes the computer.**
   The scheduled refresh re-read every agent transcript you have ever written on every run, on all CPU cores at normal priority, which on a large history could stall the whole machine for seconds every few hours.
   A refresh now reads only the days since the last one and merges them into the cached history; the whole history is read only the first time or when you choose **Rebuild history** (Usage → Agent usage → Source and collection details).

@@ -55,7 +55,8 @@ Live event messages read the current preference without reconnecting their socke
 Historical records retain their original recorded content.
 Ordinary strings and user data remain untouched.
 Localized conditional responses use distinct validators.
-Native menus resolve the saved preference when opened, and push delivery reads it when sending.
+Native menus read the saved preference directly when opened, including successive changes with identical filesystem timestamps.
+Push delivery reads the preference when sending.
 
 ## Diagnostics
 

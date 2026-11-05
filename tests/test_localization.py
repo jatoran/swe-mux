@@ -70,6 +70,8 @@ async def test_http_language_preference_and_context_are_request_scoped(monkeypat
 
 
 def test_native_menu_follows_saved_preference_without_restarting(tmp_path, monkeypatch):
+    import os
+
     from swe_mux import ui_messages as ui
 
     source = {**ui.catalog("en"), "test.open": "Open"}
@@ -80,7 +82,10 @@ def test_native_menu_follows_saved_preference_without_restarting(tmp_path, monke
     path.write_text('ui_language = "en"\n', encoding="utf-8")
     label = ui.native_label("test.open", path)
     assert label(None) == "Open"
+    original_stat = path.stat()
     path.write_text('ui_language = "zh-Hans"\n', encoding="utf-8")
+    # Force the coarse timestamp collision observed on the Windows CI runner.
+    os.utime(path, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
     assert label(None) == "打开"
 
 
