@@ -15,6 +15,18 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-05
+
+### Added
+
+- **English and Simplified Chinese in one app.**
+  Choose English or 简体中文 during setup or in Settings → General → Language.
+  Before a choice is saved, swe-mux follows a supported browser language, falling back to English.
+  The saved choice applies to desktop and phone without restarting sessions or discarding drafts.
+  Controls, help, accessibility labels, status labels, backend errors, native dialogs, and notifications are translated.
+  Terminal output, agent replies, user content, command syntax, and voice-command phrases keep their original language.
+- **A Simplified Chinese README**, linked from the English README with installation and setup instructions for the same downloads.
+
 ### Fixed
 
 - **Agent usage collection no longer freezes the computer.**
@@ -1154,7 +1166,8 @@ macOS is implemented and typechecked but has never been executed.
   resolved dependency closure that runs in the test suite, and a payload check over the built
   desktop bundle. No GPL or AGPL code ships; the two LGPL libraries ship as replaceable source.
 
-[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/jatoran/swe-mux/releases/tag/v0.4.0
 [0.3.0]: https://github.com/jatoran/swe-mux/releases/tag/v0.3.0
 [0.2.9]: https://github.com/jatoran/swe-mux/releases/tag/v0.2.9
 [0.2.8]: https://github.com/jatoran/swe-mux/releases/tag/v0.2.8

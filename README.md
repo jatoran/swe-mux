@@ -1,5 +1,7 @@
 # swe-mux
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 **Run every coding agent in one workspace. Know which ones need you, from your desk or your phone.**
 
 swe-mux is a terminal multiplexer for coding agents.
@@ -32,6 +34,16 @@ https://github.com/user-attachments/assets/1f964770-bee4-4823-a341-4c123b40605b
 - **Let sessions coordinate.** Queue a prompt behind a running turn, let a Codex session ask a Claude session something, and land a finished branch only after the checks you approved pass.
 - **Keep sessions through restarts and updates.** A separate supervisor holds every terminal, and typing keeps working while swe-mux restarts.
 - **Keep your habits.** The same editing keys in every agent's prompt, workspace keymaps for tmux, VS Code, Vim and Emacs, image paste, on-device dictation and read-aloud.
+
+## Interface language
+
+English and Simplified Chinese ship in the same app and installer.
+Choose **English** or **简体中文** during setup or in **Settings → General → Language**.
+Before you choose, the interface follows a supported browser language, with English as the fallback.
+Your saved choice applies to desktop and phone without restarting sessions or losing drafts.
+
+This translates swe-mux controls, help, status labels, and application messages.
+Terminal output, agent replies, your content, command syntax, and voice-command phrases keep their original language.
 
 ## What runs where
 

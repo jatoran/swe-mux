@@ -1089,14 +1089,29 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
     <h1>Changelog</h1>
     <div class="rel">
       <div class="relhead">
-        <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.3.0...HEAD">Unreleased</a></h2>
+        <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.4.0...HEAD">Unreleased</a></h2>
         <span class="fill"></span>
       </div>
+      <p class="prose">Nothing yet.</p>
+    </div>
+    <div class="rel">
+      <div class="relhead">
+        <h2><a href="https://github.com/jatoran/swe-mux/releases/tag/v0.4.0">0.4.0</a></h2>
+        <span class="when">2026-11-05</span>
+        <span class="fill"></span>
+        <a class="relnotes" href="https://github.com/jatoran/swe-mux/releases/tag/v0.4.0">release notes</a>
+      </div>
       <div class="relgroups">
+        <div><span class="k">Added</span> <span class="sep">2 entries</span></div>
         <div><span class="k">Fixed</span> <span class="sep">1 entry</span></div>
       </div>
       <details class="relmore">
-        <summary>all 1 entry</summary>
+        <summary>all 3 entries</summary>
+        <div class="changetype">Added</div>
+        <ul class="bullets">
+          <li><span><b>English and Simplified Chinese in one app.</b> Choose English or 简体中文 during setup or in Settings → General → Language. Before a choice is saved, swe-mux follows a supported browser language, falling back to English. The saved choice applies to desktop and phone without restarting sessions or discarding drafts. Controls, help, accessibility labels, status labels, backend errors, native dialogs, and notifications are translated. Terminal output, agent replies, user content, command syntax, and voice-command phrases keep their original language.</span></li>
+          <li><span><b>A Simplified Chinese README</b>, linked from the English README with installation and setup instructions for the same downloads.</span></li>
+        </ul>
         <div class="changetype">Fixed</div>
         <ul class="bullets">
           <li><span><b>Agent usage collection no longer freezes the computer.</b> The scheduled refresh re-read every agent transcript you have ever written on every run, on all CPU cores at normal priority, which on a large history could stall the whole machine for seconds every few hours. A refresh now reads only the days since the last one and merges them into the cached history; the whole history is read only the first time or when you choose <b>Rebuild history</b> (Usage → Agent usage → Source and collection details). Every ccusage run now executes as background work the OS enforces: idle CPU priority, at most a quarter of the machine's CPU, very-low disk and memory priority, and on Windows a job that ends any leftover process. A scheduled refresh waits while the machine is busy (up to an hour), a refresh request returns at once and the view follows it, and changing the refresh interval or switch in Settings takes effect within a minute. How much a short window saves depends on ccusage itself: versions before 20.0.26 still read every Claude Code transcript, and swe-mux now says so with the update command.</span></li>

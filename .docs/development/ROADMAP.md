@@ -5243,7 +5243,7 @@ Stack detection may inform the prompt; it may not substitute for writing and pro
 
 ## Phase 20 - English and Simplified Chinese UI
 
-Updated 2026-11-05 on `codex/localization-foundation`; not landed or deployed.
+Implemented for v0.4.0 on 2026-11-05; the owner authorized landing and production publication.
 The owner approved the localization foundation and Simplified Chinese translations, limited to English and Simplified Chinese.
 This supersedes the earlier recommendation to translate only the website and documentation.
 
@@ -5261,9 +5261,9 @@ Completeness, argument multiplicity, conditional branches, format specifications
 Browser localization tests use the shipped Chinese copy.
 The implementation and test workflow are documented in [UI localization](../design/features/localization.md) and [Localization catalogs](../technical/frontend/localization.md).
 
-Remaining release work:
-
-- Land and deploy only after owner authorization; the localization branch remains separate.
+English and Simplified Chinese README versions link to each other and describe the shared installer and language selector.
+The v0.4.0 release artifacts passed the local gate and wheel/sdist validation.
+Release publication follows `RELEASING.md`.
 
 ## Phase 21 - Update cost: making a shipped fix reach a user in seconds rather than minutes
 
