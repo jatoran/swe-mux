@@ -1,19 +1,14 @@
 # CI gate for swe-mux.
 #
-# Three jobs, because the three questions are different.
+# Windows backend and browser checks use independent runners. On 2026-11-05,
+# pytest and the renderer suite each needed about thirteen minutes; together
+# with builds they exhausted the old combined job's thirty-minute budget at
+# the final demo check. Both jobs remain required parts of this workflow.
 #
-# `verify` (windows-latest) is the full gate on the proving platform: ruff, mypy,
-# the whole pytest suite including the real-ConPTY integration tests and the
-# harness-adapter coverage matrix, the frontend typechecks and unit suite, the
-# production build, and the Playwright renderer suite. Windows remains where a
-# regression must be caught, because that is where the app ships.
-#
-# It also builds and installs the wheel, because "the tests pass" and "the thing
-# we ship works" are different questions and the second one has its own failure
-# mode: the wheel's frontend is gitignored build output that hatchling includes
-# only if it happens to be on disk, so a wheel built without one is a normal
-# build with no UI in it. That is checked on every push here rather than only in
-# `release.yml`, where the first person to see it would be a user.
+# `verify` runs ruff, mypy, pytest (including ConPTY), and the live-daemon tier.
+# `frontend` runs both TypeScript checks, the unit suite, the production build,
+# the wheel build and install smoke, the renderer suite, and demo determinism.
+# No check is skipped or given a weaker assertion by separating the runners.
 #
 # `platform` (ubuntu + macos) exists because Phase 10 made the package importable
 # and runnable off Windows, and an unexercised port breaks silently a few features
@@ -31,7 +26,7 @@
 # `.docs/development/CROSS_PLATFORM_FINDINGS.md` § What the first macOS run
 # actually found.
 #
-# `site` is the newest of the three and the narrowest: it asks whether the
+# `site` checks the generated website: it asks whether the
 # published site still matches the repository it is generated from. It exists
 # because `site/changelog/index.html` is committed build output that nothing
 # regenerated or checked, so the site advertised 0.1.2 for a day after 0.1.3
@@ -192,6 +187,29 @@ jobs:
           # Read within the week or not at all; artifacts share the account's
           # 500 MB/month Actions storage (see `release.yml`).
           retention-days: 7
+
+  frontend:
+    name: frontend, browser, and artifacts (windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Sync backend
+        run: uv sync
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend
         run: npm --prefix frontend ci
