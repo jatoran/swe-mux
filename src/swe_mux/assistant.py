@@ -48,7 +48,7 @@ from .history import HistorySearchBudgetExceeded
 from .leaf_names import suggest_folder_name, validate_leaf_name
 from .openrouter import OpenRouterClient, OpenRouterError, cache_stable_message
 from .path_identity import same_path
-from .projects import RESERVED_PROJECT_FOLDER_NAMES
+from .projects import RESERVED_PROJECT_FOLDER_NAMES, mark_session_start_used
 from .session import TERMINAL_SESSION_STATES
 from .session_titles import generated_titles, record_display_name, record_run_id
 from .spawn_contract import resolve_spawn_model
@@ -3220,6 +3220,14 @@ class AssistantService:
             if model:
                 body["model"] = model
             session = await self.spawn_op(body)
+            # The device path above reports its own start; this one has no browser.
+            await mark_session_start_used(
+                self.projects,
+                self.events,
+                project.id,
+                reason="agent_session_started",
+                source="assistant",
+            )
             result: dict[str, Any] = {"spawned": True, "session": session.record.name}
             if model:
                 # Stated so the model reports the launch it got rather than the one

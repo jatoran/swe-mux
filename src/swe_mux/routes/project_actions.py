@@ -32,6 +32,7 @@ from ..project_files import (
     read_project_config,
 )
 from ..project_init import init_script_step, select_init_scripts
+from ..projects import mark_session_start_used
 from ..session import (
     TERMINAL_SESSION_STATES,
 )
@@ -277,6 +278,16 @@ async def _start_project_action(
         session_ids=[item["id"] for item in sessions],
         failures=len(errors),
     )
+    # The Run menu reports its own start from the browser. An agent or the assistant
+    # has no browser to do that, so the daemon reports it for them.
+    if sessions and origin != "user":
+        await mark_session_start_used(
+            app[keys.PROJECTS],
+            app[keys.EVENTS],
+            project.id,
+            reason="agent_session_started",
+            source=origin,
+        )
     body = {
         "action": action.snapshot(trusted=True),
         "sessions": sessions,

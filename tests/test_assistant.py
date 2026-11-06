@@ -1894,6 +1894,37 @@ async def test_spawn_uses_the_ordinary_spawn_path(tmp_path: Path) -> None:
         service.store.close()
 
 
+async def test_a_daemon_side_spawn_counts_as_use_of_its_project(tmp_path: Path) -> None:
+    """This path has no browser to report the start, so the daemon reports it."""
+    call = {
+        "id": "call-1",
+        "type": "function",
+        "function": {
+            "name": "spawn_session",
+            "arguments": json.dumps({"project": "pixel lab", "backend": "claude"}),
+        },
+    }
+    service, emitted, _queue, _effects = make_service(
+        tmp_path, [tool_turn("", [call]), tool_turn("Spawned.")], trust="auto"
+    )
+    project = service.projects.projects["p1"]
+
+    async def touch_used(_project_id: str) -> Any:
+        project.last_used_at = 2000.0
+        return project
+
+    cast(Any, service.projects).touch_used = touch_used
+    try:
+        await run_turn(service, "spawn a claude in pixel lab")
+        used = [event for event in emitted if event.type == "project_used"]
+        assert [event.payload for event in used] == [
+            {"project_id": "p1", "last_used_at": 2000.0, "reason": "agent_session_started"}
+        ]
+        assert used[0].source == "assistant"
+    finally:
+        service.store.close()
+
+
 async def test_spawn_stage_text_travels_and_reports_unsent(tmp_path: Path) -> None:
     """stage_text reaches the spawn body and the result says the text is unsent.
 

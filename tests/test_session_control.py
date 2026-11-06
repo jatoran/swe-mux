@@ -449,6 +449,99 @@ async def test_granted_spawn_into_another_project() -> None:
     assert bodies[0]["project_id"] == "p2"
 
 
+def _projects_counting_use() -> tuple[Any, list[str]]:
+    projects = _two_projects()
+    used: list[str] = []
+
+    async def touch_used(project_id: str) -> Any:
+        used.append(project_id)
+        project = projects.projects[project_id]
+        project.last_used_at = 2000.0
+        return project
+
+    projects.touch_used = touch_used
+    return projects, used
+
+
+@pytest.mark.asyncio
+async def test_a_granted_spawn_counts_as_use_of_the_project_it_started_in() -> None:
+    """The reported bug: an agent starting work in another Project left it where it was
+    under Recently used, because only a browser ever reported a session start."""
+    caller = _caller()
+    projects, used = _projects_counting_use()
+
+    async def spawn_op(body: dict[str, Any]) -> Any:
+        return live_session("cont-1", project_id="p2", backend="claude")
+
+    events = EventsStub()
+    service = _build(caller, spawn_op=spawn_op, projects=projects, events=events)
+    await service.spawn(caller, prompt="update the editor", project="Continuity")
+
+    assert used == ["p2"]
+    payload = next(kwargs for name, kwargs in events.emitted if name == "project_used")
+    assert payload == {
+        "source": "agent",
+        "project_id": "p2",
+        "last_used_at": 2000.0,
+        "reason": "agent_session_started",
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_spawn_that_died_while_settling_is_not_use() -> None:
+    """Its pane was discarded, so nothing in that Project was actually used."""
+    caller = _caller()
+    projects, used = _projects_counting_use()
+
+    async def spawn_op(body: dict[str, Any]) -> Any:
+        return live_session("cont-1", project_id="p2", backend="claude")
+
+    async def settle_op(_session: Any) -> str:
+        return "unknown model"
+
+    service = _build(caller, spawn_op=spawn_op, settle_op=settle_op, projects=projects)
+    with pytest.raises(QueueError) as excinfo:
+        await service.spawn(caller, prompt="go", project="Continuity")
+
+    assert excinfo.value.code == "spawn_failed"
+    assert used == []
+
+
+@pytest.mark.asyncio
+async def test_a_drafted_spawn_is_not_use() -> None:
+    """A draft started nothing. Its approval is what counts, in the approval route."""
+    caller = _caller()
+    projects, used = _projects_counting_use()
+
+    async def draft(_caller: Any, **kwargs: Any) -> dict[str, Any]:
+        return {"status": "drafted", "request_id": "r1"}
+
+    service = _build(caller, spawn_grant="draft", draft_spawn=draft, projects=projects)
+    await service.spawn(caller, prompt="later", project="Continuity")
+
+    assert used == []
+
+
+@pytest.mark.asyncio
+async def test_a_lost_use_stamp_does_not_fail_a_spawn_that_succeeded() -> None:
+    """The session is up. Reporting failure would make the agent retry and start another."""
+    caller = _caller()
+    projects, _used = _projects_counting_use()
+
+    async def touch_used(_project_id: str) -> Any:
+        raise OSError("database is locked")
+
+    projects.touch_used = touch_used
+
+    async def spawn_op(body: dict[str, Any]) -> Any:
+        return live_session("cont-1", project_id="p2", backend="claude")
+
+    service = _build(caller, spawn_op=spawn_op, projects=projects)
+    result = await service.spawn(caller, prompt="go", project="Continuity")
+
+    assert result["status"] == "spawned"
+
+
 @pytest.mark.asyncio
 async def test_a_granted_spawn_records_the_pane_hint_one_shot() -> None:
     """A placement request, not layout: the daemon records what was asked for

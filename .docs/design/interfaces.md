@@ -770,9 +770,11 @@ DELETE /project-groups/{group_id}
 `DELETE /project-groups/{group_id}` ungroups the Group's Projects in the same transaction that removes the row, so nothing survives pointing at a Group that no longer exists.
 It and `PATCH /project-groups/{group_id}` answer an unknown id with `400 unknown group` rather than a server fault, because either request can come from a menu drawn before another device deleted the Group.
 
-Project payloads add `created_at` (registration), daemon-persisted `last_used_at` (explicit user use), derived `last_activity` (latest session activity from history), `history_count`, and `root_available`.
+Project payloads add `created_at` (registration), daemon-persisted `last_used_at` (user use, or a session an agent started through mux), derived `last_activity` (latest session activity from history), `history_count`, and `root_available`.
 Time fields use epoch seconds with `0` when unknown.
 `POST /projects/{project_id}/used` advances `last_used_at` monotonically and emits `project_used {project_id, last_used_at, reason}` so connected clients converge without sharing browser storage.
+The route accepts the reasons `prompt_submitted` and `session_started`.
+The daemon emits the same event for starts no browser saw, with `reason` `agent_session_started` (a granted `request_spawn`, an agent- or assistant-run Project Action, the assistant's daemon-side spawn) or `spawn_request_approved` (an approved drafted spawn); those reasons are not accepted from a client.
 Both order endpoints demand a
 complete permutation plus the `expected_order` the client last saw, answering `409` with
 `{"code": "order_conflict"}` when another device already moved something.

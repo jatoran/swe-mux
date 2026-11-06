@@ -67,7 +67,7 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
   folded cannot survive and re-fold it later. Only what is on screen is folded — a Project hidden
   from the sidebar has no row to collapse.
 - **A Group is placed by the member that leads it under the active mode**, since a Group record itself holds only a name and a position and nothing dates it.
-  Recently used takes the most recent explicit user action in it, so a Group ranks on the work the user initiated rather than its age.
+  Recently used takes the most recent recorded use in it, so a Group ranks on work that was started rather than on its age.
   Newest first takes its newest Project and Oldest first its oldest, each ignoring undated members: a single Project with no recorded registration date must not pull a Group of old Projects to the bottom of Oldest first.
   Name modes compare the Group's own name against the Project names it sits among.
   A Group with nothing measurable in it reads as unmeasured and sorts last in either direction.
@@ -150,12 +150,15 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
   already held rather than being reshuffled by a reorder the user could not see. (Empty Groups are
   now on screen and so are ordinary drag participants; `mergeVisibleOrder` stays in the Group path
   because it is what keeps this correct if anything is ever filtered out of the tree again.)
-- "Recently used" reads the daemon-persisted `ProjectRecord.last_used_at` timestamp, so mobile and desktop rank the same explicit Project use.
+- "Recently used" reads the daemon-persisted `ProjectRecord.last_used_at` timestamp, so mobile and desktop rank the same Project use.
   The sort-mode selection remains device-local; selecting Recently used on one browser does not change another browser's selected mode.
   A successful explicit prompt submission or user-initiated session start advances the timestamp through `POST /api/projects/{project_id}/used`.
+  A session an agent starts through mux advances the target Project's timestamp from the daemon, because no browser saw that start: a granted `request_spawn` once its pane has survived the settle window, an approved drafted spawn, a Project Action run by an agent or the assistant, and the assistant's daemon-side spawn.
+  A drafted spawn nobody approved, and a pane that died while settling, started nothing and do not count.
+  That stamp is best effort, because the session already exists: a failed write is logged as `project_used_not_recorded` and never reported as a failed start, which would make an agent retry and start a second session.
   The daemon emits `project_used` with the resulting timestamp so every connected client updates without a fleet refetch.
   Opening or focusing a Project, session, note, file, preview, Queue, or other resource never changes it.
-  Agent output, state transitions, session completion, session removal, history timestamps, and background automation never change it.
+  Agent output, state transitions, session completion, session removal, history timestamps, scheduled runs, and background automation never change it.
   A Project without a recorded action is unmeasured and retains manual-order tie-breaking.
   The timestamp survives browser storage loss, a daemon restart, and a desktop redeploy.
   Existing databases seed the new field from the latest non-imported session start because no older exact prompt-submit record exists.
@@ -315,7 +318,7 @@ reordering takes the same contract, including the `expected_order` guard that an
 order_conflict` when a second device already moved something — two devices each writing a full
 permutation would otherwise let the loser silently win.
 
-Project payloads carry `created_at` (registration), daemon-persisted `last_used_at` (explicit user use), derived `last_activity` (latest session activity from history), `history_count`, and `root_available`.
+Project payloads carry `created_at` (registration), daemon-persisted `last_used_at` (user use, or a session an agent started through mux), derived `last_activity` (latest session activity from history), `history_count`, and `root_available`.
 Time fields use epoch seconds with `0` when unknown.
 `POST /api/projects` returns `restored=true` and HTTP 200 when the canonical root revives a tombstoned Project; a new registration returns `restored=false` and HTTP 201.
 `DELETE /api/projects/{id}` tombstones the registration and returns `history_preserved`; a live-session conflict is HTTP 409 with `code=project_has_live_sessions` plus the blocking session identities.

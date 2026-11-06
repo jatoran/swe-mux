@@ -15,6 +15,15 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+### Fixed
+
+- **Branching a conversation on desktop now opens the new tab.**
+  The sidebar and address bar moved to the new session while the pane kept showing the tab you started from, because the window had already added the new tab in the background by the time the branch finished.
+- **Recently used now counts sessions an agent starts through mux.**
+  When an agent starts a session in a Project, that Project moves up the sidebar straight away on every connected device.
+  This covers `request_spawn`, an approved spawn request from the Fleet Queue, a Project Action an agent or the assistant runs, and a session the assistant starts.
+  Scheduled runs and background automation still do not count.
+
 ## [0.4.1] - 2026-11-05
 
 ### Added

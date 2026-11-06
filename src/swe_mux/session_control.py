@@ -31,6 +31,7 @@ from .project_scope import (
     resolve_project_scope,
     split_qualified_target,
 )
+from .projects import mark_session_start_used
 from .prompt_queue import QueueError
 from .spawn_contract import field_refusal, requested_spawn_model
 
@@ -326,6 +327,15 @@ class SessionControlService:
                 f"discarded: {failure}",
                 status=502,
             )
+        # After the proof, not at the spawn: a pane that died inside the settle window
+        # was discarded, so nothing in that Project was used.
+        await mark_session_start_used(
+            self.projects,
+            self.events,
+            str(target_project.id),
+            reason="agent_session_started",
+            source="agent",
+        )
         await self.events.emit(
             "agent_session_control",
             session_id=str(caller.record.id),

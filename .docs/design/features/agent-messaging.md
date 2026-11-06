@@ -270,7 +270,9 @@ its own is the default and nothing widens implicitly.
   time refuses in front of the wrong person, since the agent that named the model is the one
   that can pick another and by then it has moved on - and a model the approval silently
   dropped would be worse still, because the human has already agreed to it. A request can only be decided
-  once. Since 2026-08-25 the *default* grant is `granted` - the call creates the session
+  once. A spawn that actually starts, granted or approved, counts as use of the target Project
+  under the sidebar's Recently used (`projects.md`), so a Project an agent starts work in rises
+  without a human opening it. Since 2026-08-25 the *default* grant is `granted` - the call creates the session
   directly, inside the per-origin hourly budget - so the draft path is what a Project
   lowered to `draft` (or with the `session_control` automation switched off) gets. The
   fan-out hazard the draft path was built for ("an agent holding real spawn authority turns

@@ -1114,7 +1114,17 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.4.1...HEAD">Unreleased</a></h2>
         <span class="fill"></span>
       </div>
-      <p class="prose">Nothing yet.</p>
+      <div class="relgroups">
+        <div><span class="k">Fixed</span> <span class="sep">2 entries</span></div>
+      </div>
+      <details class="relmore">
+        <summary>all 2 entries</summary>
+        <div class="changetype">Fixed</div>
+        <ul class="bullets">
+          <li><span><b>Branching a conversation on desktop now opens the new tab.</b> The sidebar and address bar moved to the new session while the pane kept showing the tab you started from, because the window had already added the new tab in the background by the time the branch finished.</span></li>
+          <li><span><b>Recently used now counts sessions an agent starts through mux.</b> When an agent starts a session in a Project, that Project moves up the sidebar straight away on every connected device. This covers <code>request_spawn</code>, an approved spawn request from the Fleet Queue, a Project Action an agent or the assistant runs, and a session the assistant starts. Scheduled runs and background automation still do not count.</span></li>
+        </ul>
+      </details>
     </div>
     <div class="rel">
       <div class="relhead">

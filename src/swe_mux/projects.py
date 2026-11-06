@@ -6,6 +6,7 @@ import math
 import time
 import uuid
 from pathlib import Path
+from typing import Any
 
 from .harness import is_agent_harness
 from .history import HistoryIndex
@@ -459,3 +460,47 @@ class ProjectManager:
                 project.group_id = None
         await self.history.delete_project_group(group_id)
         await self._apply_group_order([item.id for item in self.ordered_groups()])
+
+
+async def mark_project_used(
+    projects: ProjectManager, events: Any, project_id: str, *, reason: str, source: str
+) -> ProjectRecord:
+    """Advance a Project's Recently used stamp and tell every connected client."""
+    project = await projects.touch_used(project_id)
+    await events.emit(
+        "project_used",
+        source=source,
+        project_id=project.id,
+        last_used_at=project.last_used_at,
+        reason=reason,
+    )
+    log.info(
+        "project_used project_id=%s reason=%s source=%s last_used_at=%.3f",
+        project.id,
+        reason,
+        source,
+        project.last_used_at,
+    )
+    return project
+
+
+async def mark_session_start_used(
+    projects: Any, events: Any, project_id: str, *, reason: str, source: str
+) -> None:
+    """Count a session the daemon started for an agent, from a path with no browser.
+
+    A browser reports its own launches. The daemon is the only party that sees a
+    session an agent started through mux, so it stamps the target Project itself.
+    Best effort, because the session already exists: a failed sort stamp must not
+    report that start as a failure to the caller, who would retry and start another.
+    """
+    try:
+        await mark_project_used(projects, events, project_id, reason=reason, source=source)
+    except Exception:  # noqa: BLE001 - the session is up; only the sort stamp was lost
+        log.warning(
+            "project_used_not_recorded project_id=%s reason=%s source=%s",
+            project_id,
+            reason,
+            source,
+            exc_info=True,
+        )

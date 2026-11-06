@@ -35,7 +35,7 @@ from ..project_files import (
 from ..project_files import (
     revision as file_revision,
 )
-from ..projects import ProjectManager
+from ..projects import ProjectManager, mark_project_used
 from ..ui_messages import error_text, ui_message
 from .support import _config_identity, _observations_project
 
@@ -450,13 +450,12 @@ async def record_project_use(request: web.Request) -> web.Response:
     reason = str(body.get("reason") or "")
     if reason not in _PROJECT_USE_REASONS:
         raise ValueError({"reason": ui_message("projects.b6ffb443e7")})
-    project = await request.app[keys.PROJECTS].touch_used(request.match_info["project_id"])
-    await request.app[keys.EVENTS].emit(
-        "project_used",
-        source="user",
-        project_id=project.id,
-        last_used_at=project.last_used_at,
+    project = await mark_project_used(
+        request.app[keys.PROJECTS],
+        request.app[keys.EVENTS],
+        request.match_info["project_id"],
         reason=reason,
+        source="user",
     )
     return json_response({"project_id": project.id, "last_used_at": project.last_used_at})
 
