@@ -15,6 +15,8 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-06
+
 ### Fixed
 
 - **Branching a conversation on desktop now opens the new tab.**
@@ -1192,7 +1194,8 @@ macOS is implemented and typechecked but has never been executed.
   resolved dependency closure that runs in the test suite, and a payload check over the built
   desktop bundle. No GPL or AGPL code ships; the two LGPL libraries ship as replaceable source.
 
-[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/jatoran/swe-mux/releases/tag/v0.4.2
 [0.4.1]: https://github.com/jatoran/swe-mux/releases/tag/v0.4.1
 [0.4.0]: https://github.com/jatoran/swe-mux/releases/tag/v0.4.0
 [0.3.0]: https://github.com/jatoran/swe-mux/releases/tag/v0.3.0
