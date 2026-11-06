@@ -256,6 +256,8 @@ It runs inside `refresh`, in the same pass that reconciles terminals and preview
 GET is the authoritative snapshot: it already carries whatever the daemon attached server-side
 (`attach_terminal` for branch, resume, and review spawns), so a session the daemon placed itself is
 seen as placed rather than joined a second time somewhere else.
+The reverse order is also normal: such a session is announced before the daemon attaches it, so a
+join can land first with the source tab restored, and the attach then only makes the leaf active.
 
 The pass computes the next layout map outside the `setLayoutMap` updater and issues the join
 PATCHes after it. The updater stays free of side effects, and the write goes through the ordinary

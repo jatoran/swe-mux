@@ -339,6 +339,19 @@ def _replace_pane(node: dict[str, Any], pane_id: str, replacement: Any) -> dict[
     }
 
 
+def _show_held_leaf(layout: dict[str, Any], resource_id: str) -> dict[str, Any]:
+    """Make a leaf this normalized layout already holds its pane's active tab."""
+    containing = _pane_containing(layout["root"], resource_id)
+    if containing is None:
+        return layout
+    root = _replace_pane(
+        layout["root"],
+        containing["id"],
+        lambda pane: {**pane, "active_child_id": resource_id},
+    )
+    return normalize_layout({**layout, "root": root})
+
+
 def attach_terminal(
     layout: object, session_id: str, *, target_id: str | None = None, direction: str | None = None
 ) -> dict[str, Any]:
@@ -353,11 +366,20 @@ def attach_leaf(
     target_id: str | None = None,
     direction: str | None = None,
 ) -> dict[str, Any]:
+    """Place a leaf and leave it showing, whoever placed it first.
+
+    A pane the daemon creates takes seconds to prove, and a client that sees the new
+    session in that window joins it as a background tab (`sessionJoin.ts`). Measured
+    2026-11-06: on every desktop branch the window's join landed about a second into
+    the request. So a leaf already here keeps the place the client gave it and is
+    still shown; returning the layout unchanged left a branched session behind the
+    tab it was started from. The target and direction apply only to a new leaf.
+    """
     if kind not in LEAF_KINDS:
         raise ValueError(ui_message("layouts.572c05d359", value1=kind))
     normalized = normalize_layout(layout)
     if any(leaf["id"] == resource_id for leaf in _layout_leaves(normalized)):
-        return normalized
+        return _show_held_leaf(normalized, resource_id)
     next_leaf = _leaf(kind, resource_id)
     root = normalized["root"]
     if root is None:
@@ -399,15 +421,7 @@ def stack_leaf(
         raise ValueError(ui_message("layouts.c4c51132f5", value1=kind))
     normalized = normalize_layout(layout)
     if any(leaf["id"] == resource_id for leaf in _layout_leaves(normalized)):
-        containing = _pane_containing(normalized["root"], resource_id)
-        if containing is None:
-            return normalized
-        root = _replace_pane(
-            normalized["root"],
-            containing["id"],
-            lambda pane: {**pane, "active_child_id": resource_id},
-        )
-        return normalize_layout({**normalized, "root": root})
+        return _show_held_leaf(normalized, resource_id)
     target = _pane_containing(normalized["root"], target_id)
     if target is None or target_id not in [child["id"] for child in target["children"]]:
         return None

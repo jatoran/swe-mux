@@ -5400,7 +5400,8 @@ if(keyboard.key==='Escape'){keyboard.preventDefault();finish(false)}}
       const result = await api<{ session: Session; source: string; seed_text: string | null }>('POST', `/api/sessions/${session.id}/branch`, { target_session_id: session.id, direction: 'after', ...request })
       stageBranchSeed(result.session.id, result.seed_text)
       markProjectRecent(result.session.project_id)
-      setSessions(items => [...items, result.session]); setActiveId(result.session.id); requestFocusView(result.session.id)
+      // A refresh during the request can already hold this row, so it is merged rather than appended.
+      setSessions(items => [...items.filter(item => item.id !== result.session.id), mergeSessionSnapshot(items.find(item => item.id === result.session.id), result.session)]); setActiveId(result.session.id); requestFocusView(result.session.id)
       await refresh()
       return ''
     } catch (cause) { return cause instanceof Error ? cause.message : String(cause) }

@@ -98,7 +98,8 @@ The self-event is dropped; an entry that happens to be a directory is kept.
 
 ### `layouts.py`
 
-Layout-v6 validation and migrations.
+Layout-v6 validation and migrations, plus the daemon's own placement writes.
+`attach_leaf` and `stack_leaf` always leave the leaf showing, including one a client already placed.
 
 **Not:** UI focus or drag state.
 

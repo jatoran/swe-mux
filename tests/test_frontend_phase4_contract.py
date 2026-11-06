@@ -1120,6 +1120,12 @@ def test_daemon_spawned_panes_request_focus_rather_than_setting_it() -> None:
                 "only a placeholder this flow placed itself may be focused directly"
             )
 
+    # A branch is announced seconds before its response, so a refresh in that window has
+    # usually added the row already. Appending the response drew the session twice.
+    branch_flow = re.search(r"const runBranch = ?async[^\n]*\n(.*?)\n  \}\n", app, re.DOTALL)
+    assert branch_flow
+    assert "[...items, result.session]" not in branch_flow.group(1)
+
     # The request is held in a ref and consulted by the reconciliation effect, or it
     # would be dropped by the very render it exists to survive.
     assert source_contains(

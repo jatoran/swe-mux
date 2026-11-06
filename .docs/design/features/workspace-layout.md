@@ -77,6 +77,16 @@ PaneLeaf = terminal | note | preview | history | queue
   simply appears. The single exception is a session the operator is *already* looking at - an
   unpanned focused view is that full-workspace synthetic pane, so restoring some other tab would
   hide what is on screen. Following focus there is not taking it.
+- **A daemon attach ends with the leaf showing, whichever side placed it first.**
+  A flow the daemon places itself (`attach_leaf`: Branch, History resume, review) announces its
+  session seconds before it attaches, because the pane is proved first, so a client's join
+  usually lands inside that window and restores the source tab.
+  The attach therefore keeps the place the join gave the leaf and makes it its pane's active tab,
+  so the join's no-focus rule governs sessions nobody asked for and never undoes a pane somebody did.
+  Its target and direction apply only to a leaf it is adding.
+  A phone cannot show this bug or its fix: the unified rail draws the focused view, while a desktop
+  pane draws its stack's `active_child_id`, so the same stale layout left a desktop on the source
+  tab with the sidebar row and URL already on the new session.
 - Ended sessions are deliberately left out of that join. A pane is *kept* for a session that ended
   in one (above), never minted for one nobody ever opened: a Project's archive of finished
   daemon runs would otherwise spend the 64-leaf budget at boot on sessions with nothing running.

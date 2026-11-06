@@ -451,6 +451,38 @@ def test_reopening_an_existing_preview_activates_its_stack_tab() -> None:
     assert reopened["root"]["active_child_id"] == "preview-a"  # type: ignore[index]
 
 
+def test_attaching_a_leaf_a_client_already_placed_still_shows_it() -> None:
+    """A daemon attach must end the same way whichever side of the race placed the leaf.
+
+    A client joins a new session as a background tab while the daemon is still proving
+    it, so the attach finds the leaf present with the source tab showing. The branch's
+    whole point is to land on the new tab, so finding it there must not change that.
+    """
+    layout = attach_leaf(None, "terminal", "source")
+    layout = attach_leaf(layout, "terminal", "branched", target_id="source")
+    layout["root"]["active_child_id"] = "source"  # type: ignore[index]
+
+    attached = attach_leaf(layout, "terminal", "branched", target_id="source", direction="after")
+
+    pane = attached["root"]
+    assert pane["active_child_id"] == "branched"  # type: ignore[index]
+    assert [child["id"] for child in pane["children"]] == ["source", "branched"]  # type: ignore[index]
+
+
+def test_attaching_a_held_leaf_shows_it_where_it_is_rather_than_splitting() -> None:
+    """The target and direction describe placing a new leaf, not moving a placed one."""
+    layout = attach_leaf(None, "terminal", "source")
+    layout = attach_leaf(layout, "terminal", "branched", target_id="source")
+    layout["root"]["active_child_id"] = "source"  # type: ignore[index]
+
+    attached = attach_leaf(
+        layout, "terminal", "branched", target_id="source", direction="horizontal"
+    )
+
+    assert attached["root"]["type"] == "stack"  # type: ignore[index]
+    assert attached["root"]["active_child_id"] == "branched"  # type: ignore[index]
+
+
 def test_process_reconciliation_records_descendant_exit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -9,6 +9,7 @@ import pytest
 
 from swe_mux import app_keys as keys
 from swe_mux.adapters import ClaudeAdapter
+from swe_mux.layouts import attach_terminal
 from swe_mux.routes import branch as branch_routes
 from swe_mux.routes.branch import _branch_source_id, branch_session, session_branch_points
 
@@ -411,6 +412,44 @@ async def test_a_branch_with_no_point_forks_from_the_end(tmp_path: Path) -> None
     fork = json.loads(response.body)["fork"]
     assert fork["mode"] == "after"
     assert len(harness.forked_records()) == len(read_records(harness.source_path)) - 1
+
+
+async def test_a_branch_a_client_joined_mid_request_still_opens_showing(tmp_path: Path) -> None:
+    """The reported desktop bug: the branch opened behind the tab it was started from.
+
+    The sibling is announced as soon as it spawns and proved for seconds after that, so
+    the window's own refresh joins it as a background tab with the source put back
+    (`sessionJoin.ts`). Measured on every desktop branch on 2026-11-06, about a second
+    into the request. A phone looks fine either way, because it draws the focused view
+    rather than the stack's active tab.
+    """
+    harness = BranchHarness(tmp_path, body={"target_session_id": "pane-1", "direction": "after"})
+    projects = harness.request.app[keys.PROJECTS]
+    project = projects.projects["default"]
+    project.layout = attach_terminal(None, "pane-1")
+    plain_spawn = harness._spawn
+
+    async def spawn_then_client_joins(**kwargs: Any) -> Any:
+        session = await plain_spawn(**kwargs)
+        joined = attach_terminal(project.layout, session.record.id, target_id="pane-1")
+        joined["root"]["active_child_id"] = "pane-1"
+        project.layout = joined
+        return session
+
+    written: list[dict[str, Any]] = []
+
+    async def update(_project_id: str, **changes: Any) -> None:
+        written.append(changes["layout"])
+
+    harness.manager.spawn = spawn_then_client_joins
+    projects.update = update
+
+    response = await harness.run()
+
+    assert response.status == 201
+    pane = written[-1]["root"]
+    assert pane["active_child_id"] == "pane-2"
+    assert [child["id"] for child in pane["children"]] == ["pane-1", "pane-2"]
 
 
 async def test_the_fork_owns_its_sidecar_files(tmp_path: Path) -> None:

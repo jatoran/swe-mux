@@ -1514,6 +1514,8 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   lands on a real leaf while waiting (a tab click, a project switch), which is a choice the user
   just made and outranks a request the layout still cannot satisfy. Ordering lives in
   `reconcileFocusView` (`viewState.ts`), kept pure so it is testable without a layout tree.
+  A request settles focus, not which tab a desktop pane draws: that is the stack's
+  `active_child_id`, which the daemon's attach sets (`workspace-layout.md`).
 - Focusing a pane is not enough if something is covering it. These flows also close the
   full-screen overlay they were started from and, on a phone, the navigation drawer; the side
   panel closes on mobile only, since on desktop it is a docked column beside the workspace
