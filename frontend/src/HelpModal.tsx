@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useEffect, useMemo, useState } from 'preact/hooks'
 import { dismissStack } from './dismissStack.ts'
@@ -65,7 +66,9 @@ export function HelpModal({ initialTopic, onClose, onStartTutorial, onShowGettin
 
   useDismissLevel(onClose, true, 'help')
   useEffect(() => {
-    const key = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); dismissStack.pop() } }
+    const key = (event: KeyboardEvent) => {
+      if (isComposingKey(event)) return
+ if (event.key === 'Escape') { event.preventDefault(); dismissStack.pop() } }
     window.addEventListener('keydown', key, true)
     return () => window.removeEventListener('keydown', key, true)
   }, [])
@@ -78,7 +81,7 @@ export function HelpModal({ initialTopic, onClose, onStartTutorial, onShowGettin
   const topic = selected ? helpTopic(selected) : null
 
   return <div class="modal-layer help-layer" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
-    <section class={`modal help-modal${topic ? ' topic-open' : ''}`} role="dialog" aria-modal="true" aria-label={t("HelpModal.b79cac926e")}>
+    <section data-dialog-id="help" class={`modal help-modal${topic ? ' topic-open' : ''}`} role="dialog" aria-modal="true" aria-label={t("HelpModal.b79cac926e")}>
       <div class="modal-heading">
         <div><span>{t("HelpModal.37a6760fa4")}</span><h2>{topic ? topic.title : t("HelpModal.ff49260423")}</h2></div>
         <button type="button" aria-label={t("HelpModal.88f2b69280")} onClick={onClose}>×</button>

@@ -52,7 +52,7 @@ export function ResourcesModal({
         ? t("ResourcesModal.1d30a5997e", { value1: scopedProject.name })
         : t("ResourcesModal.5c529ac006")
 
-  return <div
+  return <div data-dialog-id="resources"
     class={`usage-layer resources-layer resources-${segment}`}
     role="dialog"
     aria-modal="true"
@@ -68,8 +68,8 @@ export function ResourcesModal({
         </div>
         <div class="usage-header-actions"><button aria-label={t("ResourcesModal.6a0b9d4290")} onClick={onClose}>×</button></div>
       </header>
-      <div class="segmented-tabs resources-segmented" role="tablist" aria-label={t("ResourcesModal.aea0b39532")}>
-        {SEGMENTS.map(item => <button
+      <div data-tab-group="ResourcesModal.aea0b39532" class="segmented-tabs resources-segmented" role="tablist" aria-label={t("ResourcesModal.aea0b39532")}>
+        {SEGMENTS.map(item => <button data-tab-id={item.id}
           key={item.id}
           role="tab"
           aria-selected={item.id === segment}

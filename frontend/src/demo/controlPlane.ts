@@ -1,3 +1,4 @@
+import { dt } from './messages.ts'
 /**
  * The demo's control plane, as a small stateful daemon rather than four constants.
  *
@@ -184,7 +185,7 @@ export function queueAutoPayload(): unknown {
         sends_used: 0,
         max_sends: 10,
         sends_remaining: 10,
-        disabled_reason: enabled ? null : 'not opted in',
+        disabled_reason: enabled ? null : dt("demo.19274e5e64"),
         lapse: null,
         reply_window: null,
       }
@@ -222,7 +223,7 @@ export function deliverQueuedMessage(messageId: string, reply?: string[]): boole
   if (!session(message.target_session_id)) {
     apply({
       kind: 'queue-patch', id: messageId,
-      patch: { state: 'stranded', stranded_reason: 'the target session ended' },
+      patch: { state: 'stranded', stranded_reason: dt("demo.8bddfa3b0c") },
     })
     return false
   }
@@ -304,7 +305,7 @@ export function makeLandRequest(input: {
     created_at: now,
     updated_at: now,
     landed_at: null,
-    events: [{ at: now, state: 'queued', note: 'Requested from the session standing in this checkout.' }],
+    events: [{ at: now, state: 'queued', note: dt("demo.30fa5c70a2") }],
   }
 }
 

@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { createPortal } from 'preact/compat'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
@@ -315,7 +316,9 @@ export function AccountSwitcher({variant='full',placement,onManage,onViewUsage,p
     // its error with it, and the click that closed it is usually the impatient
     // second one.
     const dismiss=(event:PointerEvent)=>{const target=event.target as Node;if(busy)return;if(!root.current?.contains(target)&&!popover.current?.contains(target))setOpen(false)}
-    const key=(event:KeyboardEvent)=>{if(event.key==='Escape'&&!busy)setOpen(false)}
+    const key=(event:KeyboardEvent)=>{
+      if (isComposingKey(event)) return
+if(event.key==='Escape'&&!busy)setOpen(false)}
     window.addEventListener('resize',reposition);window.addEventListener('scroll',reposition,true);window.addEventListener('pointerdown',dismiss);window.addEventListener('keydown',key)
     return()=>{window.removeEventListener('resize',reposition);window.removeEventListener('scroll',reposition,true);window.removeEventListener('pointerdown',dismiss);window.removeEventListener('keydown',key)}
   },[open,opensDown,busy])
@@ -478,6 +481,8 @@ function AccountAliasField({account,disabled,onCommit}:{account:ProviderAccount;
       title={t("ProviderAccounts.10180038d7")}
       onInput={event=>setDraft(event.currentTarget.value)}
       onKeyDown={event=>{
+      if (isComposingKey(event)) return
+
         if(event.key==='Enter'){event.preventDefault();event.currentTarget.blur()}
         else if(event.key==='Escape'&&dirty){event.preventDefault();event.stopPropagation();setDraft(saved)}
       }}

@@ -770,7 +770,7 @@ function HistoryBrowserImpl({projects,initialProjectId,initialEntryId,onClose,on
   const scopeProject=projects.find(item=>item.id===project)
   const historyHarnesses=transcriptHarnesses()
   return <div class="modal-layer history-layer" onMouseDown={event=>event.target===event.currentTarget&&onClose()}>
-    <section ref={panel} class="modal history-modal" role="dialog" aria-modal="true" aria-label={t("HistoryBrowser.5ee3c464f3")}>
+    <section data-dialog-id="history" ref={panel} class="modal history-modal" role="dialog" aria-modal="true" aria-label={t("HistoryBrowser.5ee3c464f3")}>
     <div class="modal-heading"><div><span>{t("HistoryBrowser.05a87bb74b")}</span><h2>{scopeProject ? scopeProject.name : t("HistoryBrowser.4b87271b6b")}</h2></div><button type="button" aria-label={t("HistoryBrowser.2c57063b8a")} onClick={onClose}>×</button></div>
     <section class="history-workspace" aria-label={t("HistoryBrowser.5ee3c464f3")}>
     <div class="history-body">

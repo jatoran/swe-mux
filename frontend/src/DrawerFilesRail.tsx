@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { t } from './localization/index.ts'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
@@ -84,6 +85,8 @@ export function DrawerFilesRail({ projectRoot, files, active, unsaved, onSelect,
       setMenu(null); setConfirmClose('')
     }
     const key = (event: KeyboardEvent) => {
+      if (isComposingKey(event)) return
+
       if (event.key === 'Escape') {
         event.preventDefault(); event.stopImmediatePropagation(); dismissStack.pop(); return
       }
@@ -174,6 +177,8 @@ export function DrawerFilesRail({ projectRoot, files, active, unsaved, onSelect,
             onPointerDown={event => press.begin(event, openMenu(path))}
             onClickCapture={press.suppressClick}
             onKeyDown={event => {
+      if (isComposingKey(event)) return
+
               if (press.keyboardMenu(event, openMenu(path))) return
               if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') focusAdjacent(event, event.key === 'ArrowLeft' ? -1 : 1)
             }}

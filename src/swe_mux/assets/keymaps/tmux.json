@@ -1,12 +1,14 @@
 {
   "id": "tmux",
   "title": "tmux",
-  "description": "The tmux prefix and its letters, mapped onto swe-mux's panes, tabs and sessions. Read the warning before choosing it: swe-mux is an outer shell, so taking Ctrl+B here takes it away from any tmux running INSIDE a pane. If you use tmux inside swe-mux, rebind this preset's prefix to Ctrl+A (or the other way round) - one of the two has to give it up.",
   "leader": "ctrl+shift+space",
   "prefix": "ctrl+b",
-  "prefix_alternates": ["ctrl+a"],
-  "warning": "Ctrl+B is tmux's own prefix. If you run tmux inside a swe-mux pane, swe-mux will now eat it before tmux sees it. Ctrl+A is the usual escape from that collision and is one edit away in Settings.",
-  "include": ["leader-tree"],
+  "prefix_alternates": [
+    "ctrl+a"
+  ],
+  "include": [
+    "leader-tree"
+  ],
   "bindings": {
     "ctrl+b c": "session.spawnShell",
     "ctrl+b shift+5": "pane.splitHorizontal",
@@ -51,5 +53,7 @@
     "ctrl+b 9": "tab.activate(9)",
     "ctrl+shift+p": "palette.open",
     "f1": "palette.open"
-  }
+  },
+  "description_message": "keybinding.preset.tmux.description",
+  "warning_message": "keybinding.preset.tmux.warning"
 }

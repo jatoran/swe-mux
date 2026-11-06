@@ -1,3 +1,5 @@
+import { dt } from './messages.ts'
+import { localizedKeymapFixture } from './keymapPresentation.ts'
 import { api } from '../api.ts'
 import { KEYBINDINGS_EVENT, chordHint } from '../keybindingsStore.ts'
 import { displayChord } from '../keys.ts'
@@ -13,9 +15,9 @@ export function keymapSnapshot() {
   const bindings = currentKeybindings()
   return {
     preset: state.keymapPreset || 'swemux',
-    presets: [...KEYMAP_FIXTURE.presets].sort((a,b) => ['swemux','tmux','vscode','vim','emacs'].indexOf(a.id) - ['swemux','tmux','vscode','vim','emacs'].indexOf(b.id)).map(preset => ({ id: preset.id, title: preset.title })),
+    presets: [...localizedKeymapFixture().presets].sort((a,b) => ['swemux','tmux','vscode','vim','emacs'].indexOf(a.id) - ['swemux','tmux','vscode','vim','emacs'].indexOf(b.id)).map(preset => ({ id: preset.id, title: preset.title })),
     hint: [
-      ['pane.splitHorizontal', 'split right'], ['pane.next', 'next pane'],
+      ['pane.splitHorizontal', dt("demo.9d4ed6323c")], ['pane.next', dt("demo.7ac2b66f01")],
     ].map(([command, label]) => {
       const preferred = chosen.prefix && Object.entries(bindings).find(([key, rules]) => key.startsWith(chosen.prefix + ' ') && rules.some(rule => rule.command === command))?.[0]
       const chord = preferred ? displayChord(preferred, KEYMAP_FIXTURE.platform) : chordHint(command)
@@ -26,7 +28,7 @@ export function keymapSnapshot() {
 
 export async function selectDemoKeymap(preset: string): Promise<void> {
   if (!KEYMAP_FIXTURE.presets.some(item => item.id === preset)) {
-    throw new Error('Choose a keyboard preset from the list.')
+    throw new Error(dt("demo.cff25e4b7d"))
   }
   stop('dismissed')
   try {
@@ -45,5 +47,6 @@ export function installKeymapControls(): void {
   const publish = () => window.dispatchEvent(new CustomEvent(DEMO_KEYMAP_EVENT))
   onMutation(mutation => { if (mutation.kind === 'keymap-preset') publish() })
   window.addEventListener(KEYBINDINGS_EVENT, publish)
+  window.addEventListener('swemux-demo:language-changed', publish)
   Object.assign(window, { __demoControls: { keymap: keymapSnapshot, selectKeymap: selectDemoKeymap } })
 }

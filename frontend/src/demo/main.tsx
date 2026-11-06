@@ -1,3 +1,4 @@
+import { dt } from './messages.ts'
 /**
  * Demo entry: install the fake daemon (fetch + WebSocket shims) BEFORE the app
  * modules load, then boot the real, unmodified App against it.
@@ -12,6 +13,8 @@
 // evaluation. An import below this line that pulled the store in first would seed the
 // whole fleet off the wall clock before the switch had been thrown.
 import './determinism.ts'
+import './languageBootstrap.ts'
+import { installDemoLanguageControls } from './languageControls.ts'
 import { Component, render, type ComponentChildren } from 'preact'
 import { installFakeFetch } from './fakeApi.ts'
 import { installFakeWebSocket } from './fakeSocket.ts'
@@ -28,6 +31,7 @@ import './demoBar.css'
 installFakeFetch()
 installFakeWebSocket()
 installKeymapControls()
+installDemoLanguageControls()
 // The fleet already mirrors across frames through the demo store; this mirrors what the
 // store cannot see - which modal is open, which panel and tab, which session is focused
 // - so the desktop and phone shown side by side behave as one app rather than two.
@@ -168,11 +172,10 @@ class DemoBoundary extends Component<{ children: ComponentChildren }, { failed: 
   render() {
     if (!this.state.failed) return this.props.children
     return <div class="demo-crash" role="alert">
-      <h1>This part of the demo broke.</h1>
-      <p>The demo runs the real interface against a simulated daemon, and this surface
-      asked it for something it does not fake. Nothing on your machine is affected.</p>
+      <h1>{dt("demo.bdd8bec8f8")}</h1>
+      <p>{dt("demo.d45b315a3b")}</p>
       <pre>{this.state.failed}</pre>
-      <button onClick={() => location.reload()}>Reload the demo</button>
+      <button onClick={() => location.reload()}>{dt("demo.2301aa69ee")}</button>
     </div>
   }
 }

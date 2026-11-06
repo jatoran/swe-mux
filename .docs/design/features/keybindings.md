@@ -32,6 +32,19 @@ never dispatches to the page at all, and chords the page receives and can suppre
 Roughly half the list was the second kind. Nothing is refused for being reserved any
 more, with one exception below.
 
+## Language and input methods
+
+English and Simplified Chinese share the same command IDs, physical-key chords, presets and saved rules.
+Only command labels, group names, preset explanations and conflict warnings change language.
+User-authored keymap titles and descriptions remain untouched.
+Settings updates the presentation after a language change without discarding unsaved shortcut edits.
+
+Input-method composition bypasses application shortcuts and shortcut recording.
+Starting composition cancels a pending leader sequence; candidate Enter, Escape, arrows and Space remain available to the input method.
+The terminal yields composing events to xterm.
+This protection applies in either UI language.
+Browser regression coverage does not replace native Windows, Android and iOS Pinyin checks.
+
 ## The chord vocabulary
 
 A **chord** is `ctrl+shift+k`: modifiers in one fixed order, then a key token. A

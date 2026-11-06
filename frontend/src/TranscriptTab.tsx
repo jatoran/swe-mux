@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { Fragment, type VNode } from 'preact'
 import { memo } from 'preact/compat'
@@ -931,6 +932,8 @@ export function TranscriptTab({ session, readAloud = false }: {
           disabled={!messages.length}
           onInput={event => updateSearch(event.currentTarget.value)}
           onKeyDown={event => {
+      if (isComposingKey(event)) return
+
             if (event.key !== 'Escape' || !query) return
             event.stopPropagation()
             updateSearch('')

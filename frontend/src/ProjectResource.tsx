@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
@@ -561,6 +562,8 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     const frame=requestAnimationFrame(()=>treeMenuPanel.current?.querySelector<HTMLButtonElement>('button')?.focus())
     const dismiss=()=>setTreeMenu(null)
     const key=(event:KeyboardEvent)=>{
+      if (isComposingKey(event)) return
+
       if(event.key==='Escape'){
         event.preventDefault();event.stopImmediatePropagation();dismissStack.pop();return
       }
@@ -1028,6 +1031,8 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     })
     const dismiss=()=>setOutlineOpen(false)
     const key=(event:KeyboardEvent)=>{
+      if (isComposingKey(event)) return
+
       if(event.key==='Escape'){
         // The level's own dismiss restores editor focus, so popping covers both.
         event.preventDefault();event.stopImmediatePropagation();dismissStack.pop()
@@ -1146,6 +1151,8 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
    * policy leaves the chord alone, so it reaches this handler from inside the editor.
    */
   const handleFindKey=(event:KeyboardEvent&{currentTarget:HTMLElement})=>{
+      if (isComposingKey(event)) return
+
     const direction=findOpen&&!event.ctrlKey&&!event.metaKey&&!event.altKey
       ?findStepDirection(event.key,event.shiftKey)
       :null
@@ -1536,6 +1543,8 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   </section>
 
   const handleEditorKey=(event:KeyboardEvent&{currentTarget:HTMLTextAreaElement})=>{
+      if (isComposingKey(event)) return
+
     if(!isFocusTraversalKey(event))return
     event.preventDefault()
     const editor=event.currentTarget
@@ -1576,6 +1585,8 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       <input ref={findInput} value={findQuery} spellcheck={false} placeholder={t("ProjectResource.2d886a5309")} aria-label={t("ProjectResource.2f38ab701e")}
         onInput={event=>setFindQuery(event.currentTarget.value)}
         onKeyDown={event=>{
+      if (isComposingKey(event)) return
+
           // Escape is stopped here rather than left to bubble, so the keypress resolves to
           // exactly one pop: this handler's, on the find bar's own level.
           if(event.key==='Escape'){event.preventDefault();event.stopPropagation();dismissStack.pop()}

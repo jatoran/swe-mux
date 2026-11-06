@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { DROPDOWN_PRESS_SLOP_PX, dropdownScrollTop } from './dropdownOptions'
@@ -133,6 +134,8 @@ export function ModelPicker({id,value,options,emptyLabel,required,onChange}:Prop
         onFocus={()=>{if(!open)openPicker()}}
         onInput={event=>{setQuery(event.currentTarget.value);setOpen(true)}}
         onKeyDown={event=>{
+      if (isComposingKey(event)) return
+
           if(event.key==='ArrowDown'){event.preventDefault();move(1)}
           else if(event.key==='ArrowUp'){event.preventDefault();move(-1)}
           else if(event.key==='Enter'&&open&&commitKey()){event.preventDefault();choose(commitKey())}

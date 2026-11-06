@@ -10,7 +10,8 @@ const PRESENCE_TTL = 90
 let presenceStarted = false
 
 export function pushSupported(): boolean {
-  return typeof navigator !== 'undefined'
+  return !(typeof document !== 'undefined' && document.documentElement.hasAttribute('data-demo'))
+    && typeof navigator !== 'undefined'
     && 'serviceWorker' in navigator
     && typeof window !== 'undefined'
     && 'PushManager' in window

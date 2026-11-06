@@ -1,5 +1,7 @@
 # Documentation routing
 
+- Changing the website demo, its language controls, fixtures, walkthroughs or captures: `design/features/demo.md`.
+
 - Changing language selection, UI copy catalogs, locale-dependent rendering, or translation checks: `design/features/localization.md`, `technical/frontend/localization.md`, `design/features/first-run.md`, and `design/features/ui.md`.
 
 - Changing process/session lifecycle or package boundaries: `design/architecture.md`,

@@ -1,3 +1,4 @@
+import { dt } from './messages.ts'
 /**
  * The demo's own bar, drawn only when the demo is the whole page.
  *
@@ -15,6 +16,7 @@
  * bar's height. The app computes `--app-height` from the visual viewport and rewrites it
  * on every keyboard open, so subtracting in CSS is the only place the arithmetic survives.
  */
+import { DemoLanguage } from './DemoLanguage.tsx'
 import { DemoKeymaps } from './DemoKeymaps.tsx'
 import { useEffect, useState } from 'preact/hooks'
 import { scenarioMenu, start, stop, subscribeDirector } from './director.ts'
@@ -44,25 +46,26 @@ export function DemoBar() {
     {/* A link rather than `history.back()`: the visitor may have arrived here directly,
         from a share or a bookmark, and a back button that does nothing is worse than a
         link that always goes somewhere. */}
-    <a class="demo-bar-exit" href="/" title="Leave the demo and go back to swemux.dev">← swemux.dev</a>
-    <span class="demo-bar-kick">DEMO</span>
+    <a class="demo-bar-exit" href="/" title={dt("demo.8573bb969f")}>← swemux.dev</a>
+    <span class="demo-bar-kick">{dt("demo.4ff006ca6b")}</span>
+    <DemoLanguage />
     <DemoKeymaps />
     <label class="demo-bar-pick">
-      <span>scenarios</span>
+      <span>{dt("demo.d1a1c36265")}</span>
       <select
         value=""
-        title="Play a scripted run, or replay the walkthrough"
+        title={dt("demo.8565a725ac")}
         onChange={event => {
           const chosen = event.currentTarget.value
           event.currentTarget.value = ''
           if (chosen) void start(chosen)
         }}
       >
-        <option value="">scenarios</option>
+        <option value="">{dt("demo.d1a1c36265")}</option>
         {scenarios.map(entry => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
       </select>
     </label>
-    {running && <button class="demo-bar-stop" onClick={() => stop('dismissed')}>stop</button>}
-    <button class="demo-bar-reset" onClick={resetDemo} title="Discard everything you changed and start fresh">reset</button>
+    {running && <button class="demo-bar-stop" onClick={() => stop('dismissed')}>{dt("demo.6c45cb72a3")}</button>}
+    <button class="demo-bar-reset" onClick={resetDemo} title={dt("demo.8902d9ed9a")}>{dt("demo.01be30bb4a")}</button>
   </div>
 }

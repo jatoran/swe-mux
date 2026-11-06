@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { rich, t } from './localization/index.ts'
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import {
@@ -408,6 +409,8 @@ export function AssistantPanel({
         placeholder={t("AssistantPanel.1f8414212b")}
         onInput={event => setInput(event.currentTarget.value)}
         onKeyDown={event => {
+      if (isComposingKey(event)) return
+
           if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void submit() }
           if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); event.currentTarget.blur() }
         }}

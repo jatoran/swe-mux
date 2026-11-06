@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from .keybindings import Rule, normalize_rule
-from .ui_messages import ui_message
+from .ui_messages import catalog, ui_message
 
 log = logging.getLogger(__name__)
 
@@ -130,6 +130,22 @@ def _document_rules(document: dict[str, Any], leader: str, *, source: str) -> li
     return rules
 
 
+def _presentation_text(document: dict[str, Any], field: str, fallback: str = "") -> str:
+    """Catalog IDs belong to shipped metadata; legacy/custom text stays literal."""
+    message_id = document.get(f"{field}_message")
+    if message_id:
+        if not isinstance(message_id, str) or message_id not in catalog("en"):
+            raise ValueError(
+                ui_message(
+                    "keybinding.preset.invalidMessage",
+                    reference=message_id,
+                    field=field,
+                )
+            )
+        return ui_message(message_id)
+    return str(document.get(field) or fallback)
+
+
 def _load(name: str) -> Preset:
     document = _read(name)
     leader = str(document.get("leader") or "ctrl+shift+space")
@@ -140,13 +156,13 @@ def _load(name: str) -> Preset:
     rules.extend(_document_rules(document, leader, source=name))
     return Preset(
         id=str(document.get("id") or name),
-        title=str(document.get("title") or name),
-        description=str(document.get("description") or ""),
+        title=_presentation_text(document, "title", name),
+        description=_presentation_text(document, "description"),
         leader=leader,
         rules=tuple(rules),
         prefix=str(document.get("prefix") or ""),
         prefix_alternates=tuple(str(item) for item in document.get("prefix_alternates") or ()),
-        warning=str(document.get("warning") or ""),
+        warning=_presentation_text(document, "warning"),
     )
 
 

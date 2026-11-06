@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { t } from './localization/index.ts'
 import { createPortal } from 'preact/compat'
 import { useCallback, useLayoutEffect, useRef, useState } from 'preact/hooks'
@@ -255,6 +256,8 @@ export function Dropdown({
   useDismissLevel(() => close(), expanded, 'dropdown')
 
   const onKeyDown = (event: KeyboardEvent) => {
+      if (isComposingKey(event)) return
+
     const modified = event.altKey || event.ctrlKey || event.metaKey
     if (!expanded) {
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter' || event.key === ' ') {

@@ -8079,5 +8079,7 @@
   "wslBridge.471c663416": "No agent CLI is installed natively inside this distribution. A Windows CLI reached through /mnt does not count - it would run, but write its transcript on the Windows side where mux cannot follow it.",
   "wslBridge.fb1e0435d6": "Not checked yet - use \"Check distributions\".",
   "Settings.loading": "loading…",
-  "Settings.restoring": "restoring defaults…"
+  "Settings.restoring": "restoring defaults…",
+  "drawer.sessionContext": "Session: {name}",
+  "deliveryReadiness.deliverable": "deliverable"
 }

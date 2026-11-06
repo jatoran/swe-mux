@@ -1,3 +1,4 @@
+import { dt } from './messages.ts'
 /**
  * Correctly-shaped answers for the surfaces the demo does not populate.
  *
@@ -67,7 +68,7 @@ export function pluginDevelopmentPayload(): unknown {
     exists: false,
     candidates: [],
     truncated: false,
-    diagnostic: 'The demo has no filesystem to scan for plugins in development.',
+    diagnostic: dt("demo.9e3798ee4b"),
   }
 }
 
@@ -82,7 +83,7 @@ export function promptsPayload(): unknown {
       // and a form needs a keyboard the embed deliberately refuses (`main.tsx`), so
       // without one of these there is no keyboard-free way to say anything to an agent.
       {
-        id: 'demo-blocked', key: 'blocked', scope: 'global', title: 'What is blocked?',
+        id: 'demo-blocked', key: 'blocked', scope: 'global', get title() { return dt("demo.2516a8370f") },
         body: 'What is blocked right now, and what is it waiting on?',
         tags: ['status'], variables: [], backends: [],
         created_at: nowSeconds() - 12 * 86400, updated_at: nowSeconds() - 86400,
@@ -90,7 +91,7 @@ export function promptsPayload(): unknown {
         project_id: null, project_name: null,
       },
       {
-        id: 'demo-review', key: 'review', scope: 'global', title: 'Review this diff',
+        id: 'demo-review', key: 'review', scope: 'global', get title() { return dt("demo.a04113ca0f") },
         body: 'Review the diff on {{branch}} for correctness bugs, then stop.',
         tags: ['review'], variables: ['branch'], backends: [],
         created_at: nowSeconds() - 9 * 86400, updated_at: nowSeconds() - 2 * 86400,
@@ -98,7 +99,7 @@ export function promptsPayload(): unknown {
         project_id: null, project_name: null,
       },
       {
-        id: 'demo-repro', key: 'repro', scope: 'project', title: 'Minimal repro',
+        id: 'demo-repro', key: 'repro', scope: 'project', get title() { return dt("demo.0d2d997160") },
         body: 'Reduce {{failure}} to the smallest input that still fails.',
         tags: ['debug'], variables: ['failure'], backends: [],
         created_at: nowSeconds() - 4 * 86400, updated_at: nowSeconds() - 86400,
@@ -119,7 +120,7 @@ export function clipboardPayload(): unknown {
     source: 'terminal',
     session_id: state.sessions[0]?.id ?? null,
     project_id: DEMO_PROJECT_ID,
-    device: 'demo desktop',
+    device: dt("demo.1d59aa2530"),
     pinned,
     created_at: nowSeconds() - minutesAgo * 60,
     updated_at: nowSeconds() - minutesAgo * 60,
@@ -130,7 +131,7 @@ export function clipboardPayload(): unknown {
     entries: [
       entry('clip-1', 'npm test -- --runInBand tests/checkout.spec.ts', 4),
       entry('clip-2', 'git worktree add ../.worktrees/coupon-table -b agent/coupon-table', 26, true),
-      entry('clip-3', '92% of samples sit inside JSON.parse on the coupon table', 71),
+      entry('clip-3', dt("demo.87a27362df"), 71),
     ],
   }
 }
@@ -166,7 +167,7 @@ export function attentionInboxPayload(): unknown {
     cost_to_resolve: input.channel === 'interrupt_now' ? 'seconds' : 'minutes',
     score: input.score,
     confidence: input.confidence,
-    evidence: [{ kind: 'demo', note: 'Invented for the demo; nothing was observed.' }],
+    evidence: [{ kind: 'demo', note: dt("demo.0b6380d27f") }],
     contributions: 2,
     narration_status: 'off',
     state: 'open',
@@ -178,29 +179,29 @@ export function attentionInboxPayload(): unknown {
     channels: {
       interrupt_now: rage ? [item({
         id: 'att-1', channel: 'interrupt_now', cls: 'context_pressure',
-        title: 'Context is nearly full on "prod is down (4h)"',
-        summary: '86% of the window is used and the last three turns each added more than they resolved.',
-        action: 'Compact the conversation or start a fresh one from a summary.',
+        get title() { return dt("demo.902c502603") },
+        summary: dt("demo.8ea4f20875"),
+        action: dt("demo.b3d6901212"),
         score: 0.91, confidence: 0.84, session: rage.id, age: 240,
       })] : [],
       next_breakpoint: working ? [item({
         id: 'att-2', channel: 'next_breakpoint', cls: 'possibly_stuck',
-        title: '"refactor the coupon table" has run one command for 96 seconds',
-        summary: 'A test run has not returned and no output has arrived since it started.',
-        action: 'Look at the pane before it reaches the interrupt budget.',
+        get title() { return dt("demo.233642c24a") },
+        summary: dt("demo.768edc4a16"),
+        action: dt("demo.c04235a946"),
         score: 0.62, confidence: 0.55, session: working.id, age: 96,
       })] : [],
       inbox: [item({
         id: 'att-3', channel: 'inbox', cls: 'cross_session_conflict',
-        title: 'Two checkouts are editing src/cart.js',
-        summary: 'agent/coupon-table and agent/cart-profile both have uncommitted changes to the same file.',
-        action: 'Land one of them before the other rebases.',
+        get title() { return dt("demo.b31fa042d1") },
+        summary: dt("demo.09bcc898da"),
+        action: dt("demo.b96d0aad6d"),
         score: 0.44, confidence: 0.71, age: 1800,
       })],
       digest: [item({
         id: 'att-4', channel: 'digest', cls: 'record',
-        title: 'agent/cart-profile landed',
-        summary: 'Verification was skipped: the incoming diff was documentation only.',
+        get title() { return dt("demo.ea09bf7131") },
+        summary: dt("demo.153299993d"),
         action: '',
         score: 0.1, confidence: 0.99, age: 2 * HOUR,
       })],
@@ -252,7 +253,7 @@ export function usagePayload(): unknown {
     cache: {
       version: 1,
       updated_at: nowSeconds() - 1800,
-      sources: { demo: { id: 'demo', label: 'demo transcripts', daily } },
+      sources: { demo: { id: 'demo', get label() { return dt("demo.9983fe79dd") }, daily } },
     },
   }
 }
@@ -263,7 +264,7 @@ export function automationDashboardPayload(): unknown {
     controls: { automation_enabled: false, scan_timeline_enabled: true },
     engine: {
       enabled: false,
-      diagnostic: 'Automation is switched off in the demo; nothing here can call a model.',
+      diagnostic: dt("demo.c0ff380349"),
       rules: [],
       built_in_rules: [],
       queue: { size: 0, capacity: 256, dropped: 0, loop_rejections: 0 },
@@ -308,7 +309,7 @@ export function automationMatrixPayload(): unknown {
       blocked: {},
       unverified: [],
       globally_disabled: [],
-      llm: { ready: false, reason: 'No model provider is configured in the demo.' },
+      llm: { ready: false, reason: dt("demo.13fac1230f") },
       scan_timeline_auto_enable: true,
       authority: {},
       authority_effective: {},
@@ -342,7 +343,7 @@ export function grantsPayload(): unknown {
   return {
     items: [],
     project_starting_sets: { sets: [] },
-    llm: { ready: false, reason: 'No model provider is configured in the demo.' },
+    llm: { ready: false, reason: dt("demo.13fac1230f") },
   }
 }
 
@@ -390,13 +391,13 @@ type DemoAccount = {
 const ACCOUNTS: DemoAccount[][] = [
   [
     {
-      suffix: 'personal', label: 'personal', email: 'demo@example.invalid',
+      suffix: 'personal', get label() { return dt("demo.4a0a339b0c") }, email: 'demo@example.invalid',
       organization: 'Personal', plan: 'Max 20x',
       session: 62, weekly: 41, resetsIn: 94, weeklyResetsIn: 4 * 24 * 60,
       fable: 12, verified: true,
     },
     {
-      suffix: 'work', label: 'rocket-shop work', email: 'demo@rocket-shop.invalid',
+      suffix: 'work', get label() { return dt("demo.fe4c498b07") }, email: 'demo@rocket-shop.invalid',
       organization: 'Rocket Shop', plan: 'Team',
       session: 18, weekly: 77, resetsIn: 212, weeklyResetsIn: 2 * 24 * 60 + 9 * 60,
       fable: 68, verified: true,
@@ -404,13 +405,13 @@ const ACCOUNTS: DemoAccount[][] = [
   ],
   [
     {
-      suffix: 'personal', label: 'personal', email: 'demo@example.invalid',
+      suffix: 'personal', get label() { return dt("demo.4a0a339b0c") }, email: 'demo@example.invalid',
       organization: 'Personal', plan: 'Pro',
       session: 35, weekly: 22, resetsIn: 41, weeklyResetsIn: 6 * 24 * 60 + 2 * 60,
       fable: null, verified: true,
     },
     {
-      suffix: 'team', label: 'content-garden team', email: 'bots@content-garden.invalid',
+      suffix: 'team', get label() { return dt("demo.73869ef9ab") }, email: 'bots@content-garden.invalid',
       organization: 'Meme Garden', plan: 'Business',
       session: 88, weekly: 53, resetsIn: 17, weeklyResetsIn: 24 * 60 + 15 * 60,
       fable: null, verified: false,
@@ -532,7 +533,7 @@ export function projectAutomationsPayload(): unknown {
     blocked: {},
     unverified: [],
     globally_disabled: [],
-    llm: { ready: false, reason: 'No model provider is configured in the demo.' },
+    llm: { ready: false, reason: dt("demo.13fac1230f") },
     automations: [],
     scan_timeline_auto_enable: true,
   }
@@ -559,7 +560,7 @@ export function agentEnvironmentPayload(sessionId: string): unknown {
       model: session?.model ?? null,
       loaded_at: session?.created_at ?? now,
       run_started_at: session?.agent_run_started_at ?? null,
-      options: [{ label: 'demo', value: 'nothing here is real' }],
+      options: [{ get label() { return dt("demo.2a97516c35") }, value: dt("demo.cf41ebc2bb") }],
       modes: ['demo'],
     },
     sources: [
@@ -568,23 +569,23 @@ export function agentEnvironmentPayload(sessionId: string): unknown {
     ],
     sections: [
       {
-        id: 'tools', label: 'Tools', completeness: 'complete', total: 3, truncated: false,
-        note: 'Invented for the demo.',
+        id: 'tools', get label() { return dt("demo.ea93d6a262") }, completeness: 'complete', total: 3, truncated: false,
+        note: dt("demo.07bf20750d"),
         items: [
-          item('t-read', 'tool', 'Read', 'Read a file from the checkout', 'built_in', 'built in'),
-          item('t-edit', 'tool', 'Edit', 'Apply an exact string replacement', 'built_in', 'built in'),
-          item('t-bash', 'tool', 'Bash', 'Run a command in the session shell', 'built_in', 'built in'),
+          item('t-read', 'tool', 'Read', dt("demo.2877262502"), 'built_in', dt("demo.33a7431aad")),
+          item('t-edit', 'tool', 'Edit', dt("demo.8759a2fd6f"), 'built_in', dt("demo.33a7431aad")),
+          item('t-bash', 'tool', 'Bash', dt("demo.738195e9b8"), 'built_in', dt("demo.33a7431aad")),
         ],
       },
       {
-        id: 'mcp', label: 'MCP servers', completeness: 'complete', total: 1, truncated: false,
-        note: 'The demo ships one invented server.',
-        items: [item('m-mux', 'mcp', 'mux', 'Fleet visibility across sibling sessions', 'managed', 'swe-mux')],
+        id: 'mcp', get label() { return dt("demo.22a7559f09") }, completeness: 'complete', total: 1, truncated: false,
+        note: dt("demo.5869d790c3"),
+        items: [item('m-mux', 'mcp', 'mux', dt("demo.6ddfbdf3e8"), 'managed', 'swe-mux')],
       },
       {
-        id: 'instructions', label: 'Instructions', completeness: 'complete', total: 1, truncated: false,
-        note: 'Instruction files this agent reads.',
-        items: [item('i-claude', 'instruction', 'CLAUDE.md', 'Project instructions', 'project', 'checkout')],
+        id: 'instructions', get label() { return dt("demo.934652dce4") }, completeness: 'complete', total: 1, truncated: false,
+        note: dt("demo.7d513da299"),
+        items: [item('i-claude', 'instruction', 'CLAUDE.md', dt("demo.6205b4d88e"), 'project', 'checkout')],
       },
     ],
     diagnostics: [],
@@ -607,13 +608,13 @@ export function skillsPayload(sessionId: string): unknown {
     agent_loaded_at: session?.created_at ?? now,
     agent_run_started_at: session?.agent_run_started_at ?? now,
     roots: [
-      { path: '~/.agent/skills', scope: 'user', kind: 'skill', origin: 'user skills', exists: true, count: 2 },
-      { path: '.agent/skills', scope: 'project', kind: 'skill', origin: 'this project', exists: true, count: 1 },
+      { path: '~/.agent/skills', scope: 'user', kind: 'skill', origin: dt("demo.66153ea97a"), exists: true, count: 2 },
+      { path: '.agent/skills', scope: 'project', kind: 'skill', origin: dt("demo.11453073e0"), exists: true, count: 1 },
     ],
     skills: [
-      skill('code-review', 'Review the diff for correctness bugs', 'user', 'user skills'),
-      skill('documentation', 'Create or update project documentation', 'user', 'user skills'),
-      skill('release', 'Cut a release from the checklist', 'project', 'this project'),
+      skill('code-review', dt("demo.984719ecce"), 'user', dt("demo.66153ea97a")),
+      skill('documentation', dt("demo.9bd15aca11"), 'user', dt("demo.66153ea97a")),
+      skill('release', dt("demo.049d4a92b4"), 'project', dt("demo.11453073e0")),
     ],
     errors: [],
     truncated: false,

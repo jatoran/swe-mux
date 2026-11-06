@@ -1,3 +1,4 @@
+import { dt } from './messages.ts'
 /**
  * The demo's WebSockets. `installFakeWebSocket()` replaces the constructor so
  * the app's two socket call sites - the `/events` bus and `/pty/{id}` terminal
@@ -503,7 +504,7 @@ function streamReply(id: string, submitted: string): void {
   }
   if (busy.has(id)) {
     if (agent) repaintComposers(id)
-    else appendOutput(id, `\x1b[38;5;243m(one thing at a time - still typing the last answer)\x1b[0m\r\n${promptFor(kind)}`)
+    else appendOutput(id, dt("demo.d84242563a", { value1: promptFor(kind) }))
     return
   }
   // A permanently-working pane answers rather than running the joke responder,
@@ -574,7 +575,7 @@ onMutation((mutation, local) => {
   // too: the transcript reader refreshes on `transcript_message` by name, and a
   // mirrored mutation that only produced `demo_state_changed` would leave the second
   // frame's reader a turn behind the pane it is sitting next to.
-  if (mutation.kind === 'keymap-preset') broadcastEvent('configuration_changed', '')
+  if (mutation.kind === 'keymap-preset' || mutation.kind === 'config-patch') broadcastEvent('configuration_changed', '')
   if (mutation.kind === 'transcript-append') {
     broadcastEvent('transcript_message', mutation.id)
     if (mutation.message.role === 'assistant') broadcastEvent('turn_ended', mutation.id)

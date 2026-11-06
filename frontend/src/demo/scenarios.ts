@@ -1,3 +1,5 @@
+import { dt } from './messages.ts'
+import { t } from '../localization/index.ts'
 /**
  * Everything the director can play, as data.
  *
@@ -133,10 +135,7 @@ export type Scenario = {
 
 // -------------------------------------------------------------------- small helpers
 
-const DRAWER_TAB = (label: string): string[] => [
-  `button[title^="${label} -"]`,
-  `button[aria-label^="${label} -"]`,
-]
+const DRAWER_TAB = (id: string): string[] => [`[data-drawer-tab-id="${id}"]`]
 
 const sessionRow = (id: string): string[] => [`[data-sidebar-session-id="${id}"]`]
 
@@ -210,14 +209,14 @@ function tourDesktop(): Beat[] {
   return [
     {
       at: 0,
-      eyebrow: 'THE REAL INTERFACE',
-      say: 'The real interface. Simulated agents.',
-      body: ['Invented sessions, shipped frontend.'],
+      get eyebrow() { return dt("demo.2da0ce5d12") },
+      get say() { return dt("demo.f9580bc4ee") },
+      body: [dt("demo.50d025f84e")],
     },
     {
       at: 3_200,
-      eyebrow: 'THE FLEET',
-      say: 'Every agent, at a glance.',
+      get eyebrow() { return dt("demo.eb515701f8") },
+      get say() { return dt("demo.2eca68e379") },
       spotlight: ['.sidebar'],
       // The one beat that labels rather than points, and it does it one label at a time.
       // Nine at once is nine things being pointed at: a visitor reading any of them has to
@@ -229,27 +228,27 @@ function tourDesktop(): Beat[] {
         sweep: ['.sidebar'],
         crt: true,
         notes: [
-          { at: rowPart('s-working', '.ind-core'), label: 'working', sub: 'this one is mid-turn' },
-          { at: rowPart('s-claude', '.ind-core'), label: 'idle', sub: 'waiting on you' },
-          { at: rowPart('s-working', '.ind-fill'), label: 'the ring is context used' },
-          { at: rowPart('s-rage', '.ind-fill'), label: 'and this one is nearly full' },
-          { at: rowField('s-working', 'badges'), label: 'subagents it started' },
-          { at: rowField('s-working', 'duration'), label: 'this turn, still running' },
-          { at: rowField('s-working', 'worktree'), label: 'its own checkout' },
+          { at: rowPart('s-working', '.ind-core'), get label() { return dt("demo.dd5ace9e01") }, get sub() { return dt("demo.410fdf9f1d") } },
+          { at: rowPart('s-claude', '.ind-core'), get label() { return dt("demo.4fb6234885") }, get sub() { return dt("demo.40fd9e27fc") } },
+          { at: rowPart('s-working', '.ind-fill'), get label() { return dt("demo.84c2149f9d") } },
+          { at: rowPart('s-rage', '.ind-fill'), get label() { return dt("demo.4bb63c7233") } },
+          { at: rowField('s-working', 'badges'), get label() { return dt("demo.3f978e7d48") } },
+          { at: rowField('s-working', 'duration'), get label() { return dt("demo.4cbe60de8f") } },
+          { at: rowField('s-working', 'worktree'), get label() { return dt("demo.94edcf3d17") } },
           // The model comes off a different row on purpose: the checkout token above
           // spends that row's width, so its model name is elided to fit and pointing at
           // it names something the visitor cannot read. A row with no worktree has the
           // room to print the name in full.
-          { at: rowField('s-rage', 'model'), label: 'model' },
-          { at: rowPart('s-shell', '.row-title'), label: 'a plain shell' },
+          { at: rowField('s-rage', 'model'), get label() { return dt("demo.9372c470ee") } },
+          { at: rowPart('s-shell', '.row-title'), get label() { return dt("demo.696f3fc979") } },
         ],
       },
-      body: ['State, context left, and what it started.'],
+      body: [dt("demo.30e1be90bb")],
     },
     {
       at: 21_700,
-      eyebrow: 'YOUR ROW, NOT OURS',
-      say: 'The row is two lines and four sections.',
+      get eyebrow() { return dt("demo.daaa56c14d") },
+      get say() { return dt("demo.525bce5c4b") },
       // Three presets applied to the *live* column rather than a picture of three
       // columns, because the claim is that these are the same nine sessions drawn
       // differently and a screenshot cannot make it.
@@ -266,28 +265,28 @@ function tourDesktop(): Beat[] {
       },
       spotlight: ['.sidebar'],
       show: { shimmer: [['.sidebar']] },
-      body: ['Minimal: a title and a clock.'],
+      body: [dt("demo.bd44ad36cd")],
     },
     {
       at: 25_100,
-      say: 'Or everything it can say, always.',
+      get say() { return dt("demo.e62ce8e2d8") },
       mutate: () => { void saveSessionRowConfig(presetConfig('detailed')) },
       spotlight: ['.sidebar'],
       show: { shimmer: [['.sidebar']] },
-      body: ['Detailed: branch, diff, queue depth, account.'],
+      body: [dt("demo.14527db97d")],
     },
     {
       at: 28_500,
-      say: 'Any field, anywhere, or only when notable.',
+      get say() { return dt("demo.d973ede81b") },
       mutate: () => { if (seededRows) void saveSessionRowConfig(seededRows) },
       spotlight: ['.sidebar'],
       show: { shimmer: [['.sidebar']] },
-      body: ['Three presets ship. The rest is yours.'],
+      body: [dt("demo.07bdcb8286")],
     },
     {
       at: 31_900,
-      eyebrow: 'THE COMMAND RAIL',
-      say: 'The acts a terminal has no key for.',
+      get eyebrow() { return dt("demo.0ac60907e0") },
+      get say() { return dt("demo.2888d0c50a") },
       spotlight: ['.terminal-action-rail'],
       // This stop comes *before* the split, and the order is load-bearing: splitting the
       // workspace halves the pane, which halves the rail, and half of what this beat names
@@ -308,20 +307,20 @@ function tourDesktop(): Beat[] {
         reveal: 'walk',
         sweep: ['.terminal-action-rail'],
         notes: [
-          { at: railItem('attach'), label: 'attach a file', sub: 'by path, into the composer' },
-          { at: railItem('copyReply'), label: 'copy what it just said' },
-          { at: railItem('paste'), label: 'paste, bracketed', sub: 'one block, not 400 keys' },
-          { at: railItem('markdownCodeFence'), label: 'customise your common inserts', sub: 'a code fence, a rule, a signature' },
-          { at: railItem('copyResume'), label: 'the command to resume it elsewhere' },
-          { at: railItem('clipboardHistory'), label: 'everything you have copied' },
-          { at: railItem('skills'), label: 'skills, by name' },
+          { at: railItem('attach'), get label() { return dt("demo.bf7e7432b5") }, get sub() { return dt("demo.87a74feefb") } },
+          { at: railItem('copyReply'), get label() { return dt("demo.f90e805392") } },
+          { at: railItem('paste'), get label() { return dt("demo.104849f4e4") }, get sub() { return dt("demo.e16a01effb") } },
+          { at: railItem('markdownCodeFence'), get label() { return dt("demo.a6d24db96c") }, get sub() { return dt("demo.204897d9c1") } },
+          { at: railItem('copyResume'), get label() { return dt("demo.00ec658d98") } },
+          { at: railItem('clipboardHistory'), get label() { return dt("demo.d7e4d84748") } },
+          { at: railItem('skills'), get label() { return dt("demo.8a2770e36e") } },
         ],
       },
     },
     {
       at: 46_400,
-      eyebrow: 'THE CLIPBOARD',
-      say: 'Two of those open a picker.',
+      get eyebrow() { return dt("demo.fcd06cb0b8") },
+      get say() { return dt("demo.5fa8fc6130") },
       click: railItem('clipboardHistory'),
       spotlight: ['.rail-dropup'],
       // A raised `hold`, and this is the beat it was added for: the rows are sentences
@@ -332,77 +331,77 @@ function tourDesktop(): Beat[] {
         reveal: 'walk',
         hold: 2_200,
         notes: [
-          { at: ['.rail-dropup-list .rail-dropup-row'], label: 'everything you have copied' },
-          { at: ['.rail-dropup-row small'], label: 'from where, and how long ago' },
-          { at: ['.rail-dropup-open'], label: 'the whole history is a tab' },
+          { at: ['.rail-dropup-list .rail-dropup-row'], get label() { return dt("demo.d7e4d84748") } },
+          { at: ['.rail-dropup-row small'], get label() { return dt("demo.672efe61c1") } },
+          { at: ['.rail-dropup-open'], get label() { return dt("demo.bd351b245b") } },
         ],
       },
-      body: ['Panes and app both, kept per Project.'],
+      body: [dt("demo.7d5454bba7")],
     },
     {
       at: 55_300,
       key: 'Escape',
       spotlight: railItem('skills'),
-      body: ['The other one is the skills the CLI can run.'],
+      body: [dt("demo.edb00dc7e8")],
     },
     {
       at: 57_700,
-      eyebrow: 'THE SKILLS',
-      say: 'Every skill, by name.',
+      get eyebrow() { return dt("demo.ab30ce608f") },
+      get say() { return dt("demo.8572fc04ac") },
       click: railItem('skills'),
       spotlight: ['.rail-dropup'],
       show: {
         reveal: 'walk',
         hold: 2_200,
         notes: [
-          { at: ['.rail-dropup-row code'], label: 'the command it sends' },
-          { at: ['.rail-dropup-row .skill-flag'], label: 'and how the CLI loads it' },
-          { at: ['.rail-dropup-note'], label: 'what it cannot see from out here' },
+          { at: ['.rail-dropup-row code'], get label() { return dt("demo.e4556a2ae0") } },
+          { at: ['.rail-dropup-row .skill-flag'], get label() { return dt("demo.1d0a53ae90") } },
+          { at: ['.rail-dropup-note'], get label() { return dt("demo.b94b3f7e14") } },
         ],
       },
-      body: ['Yours, the Project\'s, and the ones a plugin brought.'],
+      body: [dt("demo.6d9575418f")],
     },
     {
       at: 66_600,
-      eyebrow: 'ALL OF THEM',
-      say: 'The strip is a ranking, not the whole set.',
+      get eyebrow() { return dt("demo.3412ecf2bf") },
+      get say() { return dt("demo.171694e927") },
       // Escape on a beat of its own, and this is the reason: `perform` runs a beat's
       // `key` *after* its `click`, so a beat that closed one surface and opened another
       // would open it and then shut it again.
       key: 'Escape',
       spotlight: ['.rail-more'],
-      body: ['What fits is what a pane this wide has room for.'],
+      body: [dt("demo.98db710ca8")],
     },
     {
       at: 69_000,
-      say: 'The rest are one press away.',
+      get say() { return dt("demo.41ba5941b7") },
       click: ['.rail-more'],
       spotlight: ['.rail-overflow-popover'],
       show: {
         reveal: 'blueprint',
         notes: [
-          { at: ['.rail-overflow-grid'], label: 'the complete row' },
-          { at: ['.rail-overflow-configure'], label: 'and where you rebuild it' },
+          { at: ['.rail-overflow-grid'], get label() { return dt("demo.07fce09fce") } },
+          { at: ['.rail-overflow-configure'], get label() { return dt("demo.345e78efee") } },
         ],
       },
-      body: ['In the order you put them, on every pane.'],
+      body: [dt("demo.0b32a26c98")],
     },
     {
       at: 74_000,
-      eyebrow: 'BRANCHING',
-      say: 'And one chip opens a surface of its own.',
+      get eyebrow() { return dt("demo.c4f6624585") },
+      get say() { return dt("demo.6b4e5edb7b") },
       // A long stop for a short sentence, deliberately. The next beat opens a dialog over
       // the whole frame, and going straight there from a ring on a 30px chip gives nobody
       // time to connect the two.
       key: 'Escape',
       spotlight: railItem('branch'),
-      body: ['The one that forks the conversation.'],
+      body: [dt("demo.defcf58309")],
     },
     {
       at: 78_600,
-      say: 'Fork it from any turn.',
+      get say() { return dt("demo.e01b5bebd6") },
       click: railItem('branch'),
-      spotlight: ['[aria-label="Choose where to branch this conversation"]'],
+      spotlight: ['[data-dialog-id="branch"]'],
       // The real dialog, on the real transcript: the point list is this session's own
       // messages (`branchPointsPayload` in `fakeApi.ts`). Nothing is branched - the next
       // beat closes it - because the claim here is "from any point", and that is a claim
@@ -414,23 +413,23 @@ function tourDesktop(): Beat[] {
         reveal: 'walk',
         hold: 3_000,
         notes: [
-          { at: ['.branch-point-list'], label: 'every turn, newest first' },
-          { at: ['.branch-point-action'], label: 'before this one, or after it' },
-          { at: ['.modal-footer span'], label: 'and exactly what it will carry' },
+          { at: ['.branch-point-list'], get label() { return dt("demo.23ec131796") } },
+          { at: ['.branch-point-action'], get label() { return dt("demo.7f7b5e918c") } },
+          { at: ['.modal-footer span'], get label() { return dt("demo.0a28a70faf") } },
         ],
       },
-      body: ['A wrong turn costs one branch, not the thread.'],
+      body: [dt("demo.015bb85df4")],
     },
     {
       at: 90_900,
-      say: 'Nothing was branched.',
+      get say() { return dt("demo.b951034871") },
       key: 'Escape',
-      body: ['The conversation it forks from is untouched.'],
+      body: [dt("demo.c323cc0bba")],
     },
     {
       at: 93_900,
-      eyebrow: 'ONE PANE, OR SEVERAL',
-      say: 'One pane, every session a tab.',
+      get eyebrow() { return dt("demo.cb44185241") },
+      get say() { return dt("demo.a22e0b142b") },
       key: 'Escape',
       spotlight: ['.sidebar'],
     },
@@ -438,69 +437,69 @@ function tourDesktop(): Beat[] {
       at: 96_900,
       click: sessionRow(talker),
       spotlight: sessionRow(talker),
-      body: ['Picking one brings it to the front.'],
+      body: [dt("demo.97e908eaef")],
     },
     {
       at: 99_700,
-      say: 'Any of them can have its own.',
+      get say() { return dt("demo.d5f9beb686") },
       // `pane.detach` rather than a split: splitting spawns a *new* session, which would
       // put a session in the fleet that the tour never mentions. Detaching moves the tab
       // that is already there, which is the act a visitor rearranging a workspace does.
       command: 'pane.detach',
       spotlight: ['.workspace'],
       show: { arrive: [['.terminal-pane.focused']] },
-      body: ['The arrangement belongs to the Project, not this browser.'],
+      body: [dt("demo.2e0ca3775f")],
     },
     {
       at: 103_300,
-      eyebrow: 'TALK TO IT',
-      say: 'The composer is the CLI\'s own.',
-      type: { session: talker, text: 'is the cart endpoint still slow?', pace: 42 },
+      get eyebrow() { return dt("demo.ae22c605c6") },
+      get say() { return dt("demo.15decafe50") },
+      type: { session: talker, text: dt("demo.faa3aa5f71"), pace: 42 },
       spotlight: ['.terminal-pane.focused', '.terminal-pane'],
-      body: ['A multiplexer around it, not a chat window.'],
+      body: [dt("demo.9fe23cedae")],
     },
     {
       at: 106_700,
-      say: 'Try a prompt in this simulated conversation.',
+      get say() { return dt("demo.ea1fca2c78") },
       mutate: () => {
         scriptedTurn({
           id: talker,
-          prompt: 'is the cart endpoint still slow?',
+          prompt: dt("demo.faa3aa5f71"),
           reply: [
             '● §Bash§(curl -w %{time_total} localhost:3000/cart)  ¶⎿ 0.011s¶',
-            '● No. It has been eleven milliseconds for four hours, which is roughly',
-            '  how long you have been asking me whether it is still slow.',
+            dt("demo.0e3ab9d7f0"),
+            dt("demo.69cef7f9cb"),
           ],
         })
       },
-      body: ['A real process, not replayed video.'],
+      body: [dt("demo.918e6975e9")],
     },
     {
       at: 114_200,
-      eyebrow: 'THE SIDE PANEL',
-      say: 'Notes that outlive the context window.',
+      get eyebrow() { return dt("demo.24ceabcc9f") },
+      get say() { return dt("demo.2b5b50cdc7") },
       command: 'drawer.show:notes',
-      spotlight: DRAWER_TAB('Notes'),
-      show: { arrive: [DRAWER_TAB('Notes')] },
-      body: ['One per Project, one for the machine.'],
+      spotlight: DRAWER_TAB('notes'),
+      show: { arrive: [DRAWER_TAB('notes')] },
+      body: [dt("demo.092609b525")],
     },
     {
       at: 119_800,
-      eyebrow: 'THE FILES',
-      say: 'The checkout, beside the terminal.',
+      get eyebrow() { return dt("demo.b287de241d") },
+      get say() { return dt("demo.7c82f83419") },
       command: 'drawer.show:files',
       spotlight: ['.drawer-files-browser'],
-      body: ['Search names or contents; Recent is fed by Git.'],
+      body: [dt("demo.4b5d6c2392")],
     },
     {
       at: 123_800,
       click: ['.file-tree-row.directory[data-file-path="src"]'],
       spotlight: ['.file-tree'],
-      body: ['Folders expand in place.'],
+      body: [dt("demo.787b7cb540")],
     },
     {
       at: 126_400,
-      say: 'A file opens where you are looking.',
+      get say() { return dt("demo.fba59e3964") },
       click: ['.file-tree-row.file[data-file-path="src/coupons.js"]'],
       spotlight: ['.project-resource.file-editor'],
       // Both halves at once, and they are far apart: the tree down one side of the panel
@@ -509,32 +508,32 @@ function tourDesktop(): Beat[] {
       show: {
         reveal: 'walk',
         notes: [
-          { at: ['.file-tree-row.file[data-file-path="src/coupons.js"]'], label: 'the file you picked' },
-          { at: ['.code-editor'], label: 'highlighted, editable, saved back' },
+          { at: ['.file-tree-row.file[data-file-path="src/coupons.js"]'], get label() { return dt("demo.55586c0d6e") } },
+          { at: ['.code-editor'], get label() { return dt("demo.e6cb9a1f72") } },
         ],
       },
-      body: ['Ctrl-click opens it as a pane instead.'],
+      body: [dt("demo.734ec6db2c")],
     },
     {
       at: 132_400,
-      eyebrow: 'THE CONVERSATION',
-      say: 'That turn, as readable messages.',
+      get eyebrow() { return dt("demo.d36274518e") },
+      get say() { return dt("demo.b6e67ced43") },
       command: 'drawer.show:transcript',
-      spotlight: DRAWER_TAB('Transcript'),
-      body: ['Searchable, copyable, never scrolled away.'],
+      spotlight: DRAWER_TAB('transcript'),
+      body: [dt("demo.ced7e8c3e6")],
     },
     {
       at: 137_400,
-      eyebrow: 'THE REPOSITORY',
-      say: 'Worktrees, commits, and who made them.',
+      get eyebrow() { return dt("demo.60cf072bca") },
+      get say() { return dt("demo.26b7d72b65") },
       command: 'drawer.show:git',
-      spotlight: DRAWER_TAB('Git'),
-      body: ['Every commit traced to the run that wrote it.'],
+      spotlight: DRAWER_TAB('git'),
+      body: [dt("demo.b41328805a")],
     },
     {
       at: 142_400,
-      eyebrow: 'THE MACHINE',
-      say: 'What the fleet is actually consuming.',
+      get eyebrow() { return dt("demo.01f9e45ec7") },
+      get say() { return dt("demo.f1045ae284") },
       // The summary button by its own class rather than "a button in the footer": the
       // footer carries several now, and any of them would have satisfied the step.
       command: 'drawer.close',
@@ -543,51 +542,51 @@ function tourDesktop(): Beat[] {
     },
     {
       at: 146_000,
-      say: 'And the full accounting behind it.',
+      get say() { return dt("demo.18d7ab4c9e") },
       // The popover's own footer route rather than the menu command that opens the same
       // modal: the point of the beat is that the small reading is a door into the large
       // one, which is a thing about the surface rather than about the command bus.
       click: ['.resource-usage-popover footer button:last-child'],
-      spotlight: ['[role="dialog"][aria-label="Resources"]'],
+      spotlight: ['[data-dialog-id="resources"]'],
       show: {
         reveal: 'walk',
         crt: true,
         notes: [
-          { at: ['[role="dialog"][aria-label="Resources"] [role="tab"]:nth-child(1)'], label: 'every process, per session' },
-          { at: ['[role="dialog"][aria-label="Resources"] [role="tab"]:nth-child(2)'], label: 'what is listening, and on which port' },
-          { at: ['[role="dialog"][aria-label="Resources"] [role="tab"]:nth-child(4)'], label: 'and the durable telemetry behind both' },
+          { at: ['[data-dialog-id="resources"] [role="tab"]:nth-child(1)'], get label() { return dt("demo.41105616db") } },
+          { at: ['[data-dialog-id="resources"] [role="tab"]:nth-child(2)'], get label() { return dt("demo.4a800faa0e") } },
+          { at: ['[data-dialog-id="resources"] [role="tab"]:nth-child(4)'], get label() { return dt("demo.7fb2630a3b") } },
         ],
       },
-      body: ['Per session, per Project, and for swe-mux itself.'],
+      body: [dt("demo.b97452d8f7")],
     },
     {
       at: 152_200,
-      eyebrow: 'WHOSE QUOTA',
-      say: 'Every quota window, always in view.',
+      get eyebrow() { return dt("demo.425dfdefd5") },
+      get say() { return dt("demo.2008b9bd31") },
       key: 'Escape',
       spotlight: ['.account-summary'],
       show: {
         reveal: 'blueprint',
-        notes: [{ at: ['.account-summary button'], label: 'three windows', sub: 'five-hour, weekly, and the big model' }],
+        notes: [{ at: ['.account-summary button'], get label() { return dt("demo.ccdba0bea4") }, get sub() { return dt("demo.e821a74643") } }],
       },
     },
     {
       at: 156_400,
-      say: 'Several accounts, and what each is carrying.',
+      get say() { return dt("demo.7d20b099f8") },
       click: ['.account-summary button'],
       spotlight: ['.account-popover'],
       show: {
         reveal: 'walk',
         notes: [
-          { at: ['.account-popover .quota-row.has-fable'], label: 'the same three, per account' },
-          { at: ['.account-popover .account-refresh-age'], label: 'and when that was last true' },
+          { at: ['.account-popover .quota-row.has-fable'], get label() { return dt("demo.1b016f2833") } },
+          { at: ['.account-popover .account-refresh-age'], get label() { return dt("demo.36d6cd1964") } },
         ],
       },
-      body: ['Polled, not guessed.'],
+      body: [dt("demo.0ff8cc0cbe")],
     },
     {
       at: 161_800,
-      say: 'Switch which credential is current.',
+      get say() { return dt("demo.7e405af21f") },
       click: ['.account-popover [data-provider-account$="-work"]'],
       show: { shimmer: [['.account-popover [data-provider-account$="-work"]']] },
       // Not "running sessions keep the one they started on", which is what this said and
@@ -595,20 +594,20 @@ function tourDesktop(): Beat[] {
       // each request and follows the switch, the other reads its login once at startup.
       // The popover says which, per provider, off a fact the daemon declares
       // (`switch_reaches_live`) rather than off the provider's name.
-      body: ['What it does to a running one depends on the CLI.'],
+      body: [dt("demo.db81036e3d")],
     },
     {
       at: 165_400,
       click: ['.account-popover [data-provider-account$="-personal"]'],
       show: { shimmer: [['.account-popover [data-provider-account$="-personal"]']] },
-      body: ['And back. Nothing was signed in or out.'],
+      body: [dt("demo.fe23435484")],
     },
     {
       at: 169_000,
-      eyebrow: 'IT IS YOURS NOW',
-      say: 'It is yours. Break it.',
+      get eyebrow() { return dt("demo.effd00600f") },
+      get say() { return dt("demo.06a1fd6ce7") },
       key: 'Escape',
-      body: ['Everything persists in this browser and nowhere else.'],
+      body: [dt("demo.e694c7caab")],
     },
   ]
 }
@@ -626,21 +625,21 @@ function tourMobile(): Beat[] {
   return [
     {
       at: 0,
-      eyebrow: 'THE REAL INTERFACE',
-      say: 'The phone layout, not a picture of one.',
-      body: ['The same frontend, laid out for a thumb.'],
+      get eyebrow() { return dt("demo.2da0ce5d12") },
+      get say() { return dt("demo.df037137a9") },
+      body: [dt("demo.89b3357286")],
     },
     {
       at: 2_800,
-      eyebrow: 'GESTURE',
-      say: 'Swipe right for the fleet.',
+      get eyebrow() { return dt("demo.d5dff3d126") },
+      get say() { return dt("demo.48fe91c80f") },
       command: 'sidebar.open',
       gesture: 'right',
     },
     {
       at: 6_200,
-      eyebrow: 'THE FLEET',
-      say: 'Every agent, at a glance.',
+      get eyebrow() { return dt("demo.eb515701f8") },
+      get say() { return dt("demo.2eca68e379") },
       // A walk rather than the desktop's swept column: an open panel covers most of a
       // phone, so there is no gutter to lay six labels out in, and the targets that stay
       // narrow enough to point at individually are the ones worth naming anyway. The
@@ -651,21 +650,21 @@ function tourMobile(): Beat[] {
         sweep: ['.sidebar'],
         crt: true,
         notes: [
-          { at: rowPart('s-working', '.ind-core'), label: 'working' },
-          { at: rowPart('s-claude', '.ind-core'), label: 'idle' },
-          { at: rowPart('s-rage', '.ind-fill'), label: 'context nearly full' },
-          { at: rowField('s-working', 'badges'), label: 'subagents' },
-          { at: rowField('s-working', 'duration'), label: 'this turn' },
+          { at: rowPart('s-working', '.ind-core'), get label() { return dt("demo.dd5ace9e01") } },
+          { at: rowPart('s-claude', '.ind-core'), get label() { return dt("demo.4fb6234885") } },
+          { at: rowPart('s-rage', '.ind-fill'), get label() { return dt("demo.6d94bc9b7b") } },
+          { at: rowField('s-working', 'badges'), get label() { return dt("demo.d298391b07") } },
+          { at: rowField('s-working', 'duration'), get label() { return dt("demo.9a915caa61") } },
           // Off the worktree-less row, for the reason the desktop beat gives: a phone is
           // where an elided model name is least readable, not most.
-          { at: rowField('s-rage', 'model'), label: 'model' },
+          { at: rowField('s-rage', 'model'), get label() { return dt("demo.9372c470ee") } },
         ],
       },
     },
     {
       at: 18_800,
-      eyebrow: 'THE COMMAND RAIL',
-      say: 'Here, the rail is the keyboard.',
+      get eyebrow() { return dt("demo.0ac60907e0") },
+      get say() { return dt("demo.a04e421161") },
       command: 'sidebar.close',
       spotlight: ['.terminal-action-rail'],
       // The opposite trade from the desktop stop, and the reason the two say different
@@ -682,53 +681,53 @@ function tourMobile(): Beat[] {
         reveal: 'walk',
         sweep: ['.terminal-action-rail'],
         notes: [
-          { at: railItem('padArrows'), label: 'arrows', sub: 'drag a direction' },
-          { at: railItem('ctrlC'), label: 'interrupt the turn' },
-          { at: railItem('ctrlU'), label: 'clear the line' },
-          { at: railItem('copyReply'), label: 'copy what it just said' },
-          { at: railItem('prompts'), label: 'send a saved prompt', sub: 'no typing at all' },
+          { at: railItem('padArrows'), get label() { return dt("demo.d93e854302") }, get sub() { return dt("demo.2938b04ce2") } },
+          { at: railItem('ctrlC'), get label() { return dt("demo.1ac80084a1") } },
+          { at: railItem('ctrlU'), get label() { return dt("demo.6a136f7843") } },
+          { at: railItem('copyReply'), get label() { return dt("demo.f90e805392") } },
+          { at: railItem('prompts'), get label() { return dt("demo.bbebbc803a") }, get sub() { return dt("demo.6437dcd6ea") } },
         ],
       },
-      body: ['No arrows and no control key on a phone.'],
+      body: [dt("demo.5a040f2e2e")],
     },
     {
       at: 29_400,
-      eyebrow: 'TALK TO IT',
-      say: 'A simulated turn in the agent pane.',
-      type: { session: talker, text: 'is the checkout test still flaky?', pace: 42 },
+      get eyebrow() { return dt("demo.ae22c605c6") },
+      get say() { return dt("demo.80512be257") },
+      type: { session: talker, text: dt("demo.a6313eb304"), pace: 42 },
       spotlight: ['.terminal-pane.focused', '.terminal-pane'],
-      body: ['This frame refuses the soft keyboard; open it full screen.'],
+      body: [dt("demo.f04699421d")],
     },
     {
       at: 32_600,
-      say: 'Try a prompt in this simulated conversation.',
+      get say() { return dt("demo.ea1fca2c78") },
       mutate: () => {
         scriptedTurn({
           id: talker,
-          prompt: 'is the checkout test still flaky?',
+          prompt: dt("demo.a6313eb304"),
           reply: [
-            '● §Bash§(npm test -- checkout --repeat 40)  ¶⎿ 40 passed¶',
-            '● Forty green runs. The flake was a fixed sleep, which is a bet on a',
-            '  machine being idle, and this one never is.',
+            dt("demo.152d8a61c5"),
+            dt("demo.e80cee6a5b"),
+            dt("demo.b470f0b099"),
           ],
         })
       },
-      body: ['The rail sends it; the pane is the CLI\'s own.'],
+      body: [dt("demo.dbba9b165b")],
     },
     {
       at: 40_400,
-      eyebrow: 'GESTURE',
-      say: 'Swipe left for the side panel.',
+      get eyebrow() { return dt("demo.d5dff3d126") },
+      get say() { return dt("demo.11ff4c3261") },
       command: 'drawer.toggle',
       gesture: 'left',
       body: ['Notes, files, transcript, Git, alerts.'],
     },
     {
       at: 45_000,
-      eyebrow: 'IT IS YOURS NOW',
-      say: 'It is yours. Have a look.',
+      get eyebrow() { return dt("demo.effd00600f") },
+      get say() { return dt("demo.2560f58316") },
       command: 'drawer.close',
-      body: ['Everything persists in this browser and nowhere else.'],
+      body: [dt("demo.e694c7caab")],
     },
   ]
 }
@@ -736,7 +735,7 @@ function tourMobile(): Beat[] {
 // ----------------------------------------------------------- 2. the queued delivery
 
 const QUEUED_PROMPT
-  = 'when the tests are green, open a land request for this branch'
+  = dt("demo.446e4692b5")
 
 /**
  * The cheapest scenario and the one that demonstrates the part that is not commodity: a
@@ -748,16 +747,16 @@ function queueBeats(): Beat[] {
   return [
     {
       at: 0,
-      eyebrow: 'THE CONTROL PLANE',
-      say: 'A session is mid-turn. Watch what happens when it finishes.',
+      get eyebrow() { return dt("demo.d5078497fa") },
+      get say() { return dt("demo.ff985f5b29") },
       click: sessionRow(target),
       spotlight: sessionRow(target),
     },
     {
       at: 1_400,
-      say: 'A follow-up is queued behind the running turn. It does not interrupt it.',
+      get say() { return dt("demo.66bf0c677b") },
       command: 'drawer.show:queue',
-      spotlight: DRAWER_TAB('Queue'),
+      spotlight: DRAWER_TAB('queue'),
       // The row's own depth token changes under the visitor at exactly this moment, and
       // it is two characters wide. A shimmer where it sits is the difference between a
       // fact the demo demonstrated and one it merely contained.
@@ -775,44 +774,44 @@ function queueBeats(): Beat[] {
     },
     {
       at: 3_400,
-      say: 'Auto-delivery is switched on for this one session, inside the install-wide switch.',
+      get say() { return dt("demo.9f17332d4c") },
       mutate: () => { apply({ kind: 'auto-delivery-set', id: target, enabled: true }) },
     },
     {
       at: 5_000,
-      say: 'The turn ends.',
+      get say() { return dt("demo.7cd8d705ed") },
       spotlight: ['.terminal-pane.focused', '.terminal-pane'],
       mutate: () => {
         scriptedCompletion({
           id: target,
-          ask: 'pull the coupon table out of the request path',
+          ask: dt("demo.a9516a5fe3"),
           reply: [
-            '● §Bash§(npm test -- --runInBand)  ¶⎿ 214 passed, 0 failed¶',
-            '● The table is loaded once at boot and the request path never touches',
-            '  disk. p95 on the cart endpoint fell from 480ms to 11ms locally.',
-            '● Nothing in production changed. The 40MB coupon file is still a',
-            '  conversation for a human.',
+            dt("demo.1c6df3b0a6"),
+            dt("demo.f66cd99a36"),
+            dt("demo.d3484d0784"),
+            dt("demo.bdf20de261"),
+            dt("demo.ff39153505"),
           ],
         })
       },
     },
     {
       at: 9_800,
-      say: 'The queued prompt delivers itself into the pane, as keystrokes, exactly as a person would have typed it.',
+      get say() { return dt("demo.5ea2c2310b") },
       mutate: () => {
         const queued = state.queue.find(item => item.body === QUEUED_PROMPT && item.state === 'armed')
         if (queued) {
           deliverQueuedMessage(queued.id, [
-            '● §Bash§(git status --porcelain)  ¶⎿ clean¶',
-            '● Tests are green and the checkout is clean, so the branch is landable.',
-            '● §RequestLand§(agent/coupon-table)  ¶⎿ queued, one branch at a time¶',
+            dt("demo.c77e15d039"),
+            dt("demo.dcd506a17d"),
+            dt("demo.a206905ad9"),
           ])
         }
       },
     },
     {
       at: 15_500,
-      say: 'And swe-mux tells you, rather than leaving you to notice.',
+      get say() { return dt("demo.c59e8e03b5") },
       mutate: () => {
         apply({
           kind: 'notification-add',
@@ -820,8 +819,8 @@ function queueBeats(): Beat[] {
             id: demoId('note'),
             session_id: target,
             kind: 'queue_delivery',
-            title: `Delivered a queued prompt to "${nameOf(target)}"`,
-            message: 'The turn ended, the session went idle for eight seconds, and the head of its queue was sent.',
+            get title() { return dt("demo.67e2b51acd", { value1: nameOf(target) }) },
+            message: dt("demo.711f5b93e3"),
             severity: 'info',
             created_at: nowSeconds(),
           },
@@ -830,12 +829,12 @@ function queueBeats(): Beat[] {
     },
     {
       at: 18_500,
-      say: 'It arrives as an alert - ranked by what actually needs you, with every record kept behind it.',
+      get say() { return dt("demo.1bf5dd5c5b") },
       command: 'drawer.show:notifications',
-      spotlight: DRAWER_TAB('Alerts'),
-      show: { arrive: [DRAWER_TAB('Alerts')] },
+      spotlight: DRAWER_TAB('notifications'),
+      show: { arrive: [DRAWER_TAB('notifications')] },
     },
-    { at: 22_000, say: 'That is the control plane: it watches, it waits, and it never acts on its own.' },
+    { at: 22_000, get say() { return dt("demo.29345795e5") } },
   ]
 }
 
@@ -851,29 +850,29 @@ function orchestrateBeats(): Beat[] {
   return [
     {
       at: 0,
-      eyebrow: 'AGENTS ASKING FOR AGENTS',
-      say: 'One session, asked to split the work across two more.',
+      get eyebrow() { return dt("demo.06b5d7d914") },
+      get say() { return dt("demo.b7582087d8") },
       click: sessionRow(lead),
       spotlight: sessionRow(lead),
     },
     {
       at: 1_200,
-      type: { session: lead, text: 'split the coupon migration in two and report back', pace: 42 },
+      type: { session: lead, text: dt("demo.1d4cb73fd9"), pace: 42 },
       spotlight: ['.terminal-pane.focused', '.terminal-pane'],
     },
     {
       at: 4_200,
-      say: 'It cannot start a session. It can only ask for one.',
+      get say() { return dt("demo.d106e428e4") },
       mutate: () => {
         scriptedTurn({
           id: lead,
-          prompt: 'split the coupon migration in two and report back',
+          prompt: dt("demo.1d4cb73fd9"),
           reply: [
-            '● §Read§(src/coupons/)  ¶⎿ 31 files, two independent seams¶',
-            '● The readers and the writers do not share a module, so this is two',
-            '  branches rather than one with a merge conflict in the middle.',
-            '● §RequestSpawn§(2 sessions)  ¶⎿ drafted, awaiting a human¶',
-            '● I have asked for them. I cannot approve my own request.',
+            dt("demo.b28b6ba574"),
+            dt("demo.517247c3b1"),
+            dt("demo.6c489001e8"),
+            dt("demo.70c7446fb2"),
+            dt("demo.99dcd056d0"),
           ],
         })
       },
@@ -884,14 +883,14 @@ function orchestrateBeats(): Beat[] {
         const backend = backendOf(lead)
         for (const draft of [
           {
-            name: 'coupon readers',
-            prompt: 'move every coupon reader onto the cached table, keep the ids stable',
-            reason: 'The reader seam is independent of the writer seam and can land on its own.',
+            name: dt('demo.session.readers'),
+            prompt: dt("demo.ca03e65064"),
+            reason: dt("demo.2e894aff7c"),
           },
           {
-            name: 'coupon writers',
-            prompt: 'move the coupon writers behind the cache invalidation hook',
-            reason: 'The writer seam needs the invalidation decision, which is the risky half.',
+            name: dt('demo.session.writers'),
+            prompt: dt("demo.a803bf31dd"),
+            reason: dt("demo.7dcd324612"),
           },
         ]) {
           apply({
@@ -909,9 +908,9 @@ function orchestrateBeats(): Beat[] {
     },
     {
       at: 11_200,
-      say: 'Both requests land in the fleet queue, where a person decides.',
+      get say() { return dt("demo.7cd57c7ee3") },
       command: 'queue.fleet',
-      spotlight: ['[role="dialog"][aria-label="Fleet queue"]'],
+      spotlight: ['[data-dialog-id="fleet"]'],
       // A walk rather than a diagram, and only narrow targets. The card is nearly as wide
       // as the frame, so a shared gutter column would sit in the sixty pixels left over
       // beside it with leader lines running the whole way across; one label at a time is
@@ -919,15 +918,15 @@ function orchestrateBeats(): Beat[] {
       show: {
         reveal: 'walk',
         notes: [
-          { at: ['.observation-request-tag'], label: 'a request', sub: 'not a session' },
-          { at: ['.observation-request-status'], label: 'waiting on a person' },
-          { at: ['.observation-request-actions .primary'], label: 'who decides here' },
+          { at: ['.observation-request-tag'], get label() { return dt("demo.af0bf2a562") }, get sub() { return dt("demo.4b8d58cdfa") } },
+          { at: ['.observation-request-status'], get label() { return dt("demo.3726868849") } },
+          { at: ['.observation-request-actions .primary'], get label() { return dt("demo.cc4b1bcaa5") } },
         ],
       },
     },
     {
       at: 16_800,
-      say: 'Approved. Now they start.',
+      get say() { return dt("demo.1916bf6861") },
       mutate: () => {
         for (const request of state.spawnRequests.filter(item => !item.done)) {
           const created = spawnSession({
@@ -950,7 +949,7 @@ function orchestrateBeats(): Beat[] {
     {
       at: 18_800,
       key: 'Escape',
-      say: 'Two panes, in the same Project, standing in the same repository.',
+      get say() { return dt("demo.89c4db2782") },
       // The ids only exist because the previous beat made them, which is what the thunk
       // form of `show` is for. Stepped rather than eased: a row arriving in a fleet is a
       // terminal painting a line, not a panel sliding in.
@@ -958,7 +957,7 @@ function orchestrateBeats(): Beat[] {
     },
     {
       at: 20_800,
-      say: 'They work, and they answer the session that asked - into its queue, not into its keyboard.',
+      get say() { return dt("demo.020f0878f3") },
       mutate: () => {
         for (const [index, id] of spawned.entries()) {
           const label = nameOf(id)
@@ -970,10 +969,10 @@ function orchestrateBeats(): Beat[] {
               senderLabel: label,
               originSessionId: id,
               state: 'armed',
-              reason: 'reporting back on a split it was asked to take',
+              reason: dt("demo.afff4c83b9"),
               body: index === 0
-                ? 'Readers are done: 14 call sites moved to the cached table, ids unchanged, 214 tests green.'
-                : 'Writers are blocked on one decision - who owns invalidation when the file is replaced on disk?',
+                ? dt("demo.38150edcff")
+                : dt("demo.6c2f926b5d"),
             }),
           })
         }
@@ -982,12 +981,12 @@ function orchestrateBeats(): Beat[] {
     {
       at: 22_300,
       command: 'drawer.show:queue',
-      spotlight: DRAWER_TAB('Queue'),
+      spotlight: DRAWER_TAB('queue'),
       click: sessionRow(lead),
     },
     {
       at: 25_300,
-      say: 'Nothing was interrupted, nothing was auto-approved, and every step is on the record.',
+      get say() { return dt("demo.7e7db62d58") },
     },
   ]
 }
@@ -1002,24 +1001,24 @@ function orchestrateBeats(): Beat[] {
 function previewBeats(mobile = false): Beat[] {
   const shell = 's-shell'
   return [
-    { at: 0, eyebrow: mobile ? 'PREVIEWS ON YOUR PHONE' : 'AGENT AND PREVIEW, SIDE BY SIDE',
-      say: 'Start with a shell tab.', click: sessionRow(shell), spotlight: sessionRow(shell) },
-    { at: 3_000, say: mobile ? 'The shell uses the full phone screen.' : 'Give the server its own pane.',
+    { at: 0, eyebrow: mobile ? dt("demo.d429913cdf") : dt("demo.4ce25930f5"),
+      get say() { return dt("demo.edff985c2b") }, click: sessionRow(shell), spotlight: sessionRow(shell) },
+    { at: 3_000, say: mobile ? dt("demo.900f6598f8") : dt("demo.d649fc59ac"),
       ...(mobile ? {} : { command: 'pane.detach' }), spotlight: ['.terminal-pane.focused'] },
-    { at: 7_000, say: 'Start the dev server.', type: { session: shell, text: 'npm run dev', submit: true, pace: 70 },
+    { at: 7_000, get say() { return dt("demo.dba1a3cd84") }, type: { session: shell, text: 'npm run dev', submit: true, pace: 70 },
       spotlight: ['.terminal-pane.focused'] },
-    { at: 12_000, say: 'Open the preview from the detected listener.',
+    { at: 12_000, get say() { return dt("demo.dc4a3b162c") },
       mutate: () => { createPreview({ session_id: shell }) } },
     // A phone has one pane, so the new preview arrives as a tab that is not selected; the
     // beat has to press it or the caption describes a preview nobody can see.
-    { at: 17_000, say: mobile ? 'The preview opens as a full-width tab.' : 'The agent and preview are now side by side.',
-      ...(mobile ? { click: ['button[role="tab"][aria-label$=" preview tab"]'] } : {}),
+    { at: 17_000, say: mobile ? dt("demo.965d8e07a8") : dt("demo.8efcb3f58d"),
+      ...(mobile ? { click: ['button[role="tab"][data-pane-kind="preview"]'] } : {}),
       spotlight: ['.preview-frame'] },
-    { at: 22_000, say: 'The server keeps running in its terminal tab.',
-      body: ['The preview and terminal share the pane. Switching tabs does not stop either.'] },
-    { at: 28_000, say: 'The same preview is available from your phone.',
-      body: ['This example page is static. The installed app can proxy your local dev server.'],
-      show: { notes: [{ at: ['.preview-frame'], label: 'your running preview' }] } },
+    { at: 22_000, get say() { return dt("demo.b6ba533d39") },
+      body: [dt("demo.7a28075ed8")] },
+    { at: 28_000, get say() { return dt("demo.2f63d84a6b") },
+      body: [dt("demo.0810650b7f")],
+      show: { notes: [{ at: ['.preview-frame'], get label() { return dt("demo.fae1d8395a") } }] } },
   ]
 }
 
@@ -1035,13 +1034,13 @@ function landBeats(failure = false): Beat[] {
   const branch = 'agent/coupon-table'
   return [
     {
-      at: 0, eyebrow: 'LAND A FINISHED BRANCH',
-      say: 'This agent finished its branch.',
-      body: ['Watch a simulated request move through the same landing interface.'],
-      command: 'drawer.show:git', spotlight: DRAWER_TAB('Git'),
+      at: 0, get eyebrow() { return dt("demo.869c264ede") },
+      get say() { return dt("demo.2ad6a35dc8") },
+      body: [dt("demo.d0ed066386")],
+      command: 'drawer.show:git', spotlight: DRAWER_TAB('git'),
     },
     {
-      at: 5_000, say: 'It requests a place in the landing queue.',
+      at: 5_000, get say() { return dt("demo.89c8cf914c") },
       mutate: () => {
         if (state.lands.some(item => item.id === id)) apply({ kind: 'land-remove', id })
         apply({ kind: 'land-add', request: makeLandRequest({
@@ -1049,71 +1048,71 @@ function landBeats(failure = false): Beat[] {
           requestedBy: 's-working',
         }) })
       },
-      show: { notes: [{ at: ['.git-land-pipeline-step.queue'], label: 'one branch at a time' }] },
+      show: { notes: [{ at: ['.git-land-pipeline-step.queue'], get label() { return dt("demo.2ecf14c167") } }] },
     },
     {
-      at: 11_000, say: 'First, bring the branch up to date with master.',
-      body: ["This happens in the agent's worktree."],
+      at: 11_000, get say() { return dt("demo.bdec91eb30") },
+      body: [dt("demo.5c1c195b93")],
       mutate: () => { apply({ kind: 'land-patch', id, patch: { state: 'reconciling' },
-        event: { state: 'reconciling', note: 'Merged master into agent/coupon-table cleanly.' } }) },
-      show: { notes: [{ at: ['.git-land-pipeline-step.run'], label: 'updating the branch' }] },
+        event: { state: 'reconciling', note: dt("demo.6c5a5ce914") } }) },
+      show: { notes: [{ at: ['.git-land-pipeline-step.run'], get label() { return dt("demo.caf1ca9c62") } }] },
     },
     {
-      at: 17_000, say: 'Run the checks you approved.',
-      body: ['The checks run against the updated branch.'],
+      at: 17_000, get say() { return dt("demo.e7d124a107") },
+      body: [dt("demo.ed94009be7")],
       mutate: () => { apply({ kind: 'land-patch', id,
         patch: { state: 'verifying', verification: { kind: 'running', step: '.worktree-verify' } },
-        event: { state: 'verifying', note: 'Running the approved verification command.' } }) },
-      show: { notes: [{ at: ['.git-land-pipeline-step.gate'], label: 'your approved checks' }] },
+        event: { state: 'verifying', note: dt("demo.7bf033221e") } }) },
+      show: { notes: [{ at: ['.git-land-pipeline-step.gate'], get label() { return dt("demo.46da621683") } }] },
     },
     {
       at: 24_000,
-      say: failure ? 'A test failed. The branch stays out of master.' : 'Checks passed. The branch lands on master.',
+      say: failure ? dt("demo.fcd9260525") : dt("demo.6950983b7c"),
       mutate: () => {
         apply({ kind: 'land-patch', id,
           patch: failure
-            ? { state: 'failed', error: 'Coupon expiry test failed.', verification: { kind: 'failed', reason: 'Coupon expiry test failed.' } }
-            : { state: 'landed', landed_at: nowSeconds(), verification: { kind: 'passed', reason: 'Example checks passed' } },
-          event: { state: failure ? 'failed' : 'landed', note: failure ? 'Returned the failure to the requesting session.' : 'Fast-forwarded master to agent/coupon-table.' },
+            ? { state: 'failed', error: dt("demo.73935a9f70"), verification: { kind: 'failed', reason: dt("demo.73935a9f70") } }
+            : { state: 'landed', landed_at: nowSeconds(), verification: { kind: 'passed', reason: dt("demo.8822e6cc18") } },
+          event: { state: failure ? 'failed' : 'landed', note: failure ? dt("demo.65e5987858") : dt("demo.79e3e2a224") },
         })
         if (failure) apply({ kind: 'queue-add', message: makeQueueMessage({
           targetSessionId: 's-working', body: 'Landing stopped: the coupon expiry test failed. Fix the branch and request landing again.',
-          senderKind: 'rule', senderLabel: 'Land queue',
+          senderKind: 'rule', senderLabel: dt("demo.088fc313fe"),
         }) })
         else apply({ kind: 'notification-add', notification: {
           id: demoId('note'), session_id: 's-working', kind: 'land_completed',
-          title: 'agent/coupon-table landed', message: 'Checks passed. Master fast-forwarded.',
+          get title() { return dt("demo.ca370632cb") }, message: dt("demo.d8b5a7a742"),
           severity: 'info', created_at: nowSeconds(),
         } })
       },
-      show: { notes: [{ at: ['.git-landing-headline', '.git-land-pipeline-step.run'], label: failure ? 'stopped at the failed check' : 'landed' }] },
+      show: { notes: [{ at: ['.git-landing-headline', '.git-land-pipeline-step.run'], label: failure ? dt("demo.ec22261b12") : 'landed' }] },
     },
     {
       at: 31_000,
-      say: failure ? 'The failure goes back to the agent that requested the landing.' : 'The next branch can take its turn.',
-      body: [failure ? 'You keep the result and the reason. The branch can be fixed and submitted again.' : 'Only a fast-forward updates master. Conflicts and failed checks stop the request.'],
-      ...(failure ? { command: 'drawer.show:queue', spotlight: DRAWER_TAB('Queue') } : {}),
+      say: failure ? dt("demo.da780e39e5") : dt("demo.ed9bfc130b"),
+      body: [failure ? dt("demo.40bd7935a8") : dt("demo.0acba6d7af")],
+      ...(failure ? { command: 'drawer.show:queue', spotlight: DRAWER_TAB('queue') } : {}),
     },
   ]
 }
 
 function statusBeats(): Beat[] {
   return [
-    { at: 0, mutate: () => apply({ kind: 'session-patch', id: 's-migrate', patch: { state: 'awaiting', awaiting_reason: 'question' } }), eyebrow: 'KNOW WHICH AGENT NEEDS YOU', say: 'See which agents are working and which are waiting.',
+    { at: 0, mutate: () => apply({ kind: 'session-patch', id: 's-migrate', patch: { state: 'awaiting', awaiting_reason: 'question' } }), get eyebrow() { return dt("demo.e343355f5f") }, get say() { return dt("demo.7cd597290d") },
       spotlight: ['.sidebar'], show: { reveal: 'walk', notes: [
-        { at: rowPart('s-working', '.ind-core'), label: 'working' },
-        { at: rowPart('s-migrate', '.ind-core'), label: 'needs your decision' },
+        { at: rowPart('s-working', '.ind-core'), get label() { return dt("demo.dd5ace9e01") } },
+        { at: rowPart('s-migrate', '.ind-core'), get label() { return dt("demo.d197592962") } },
       ] } },
-    { at: 7_000, say: 'An alert names the session and the reason.',
+    { at: 7_000, get say() { return dt("demo.cdcfb0ddcc") },
       mutate: () => apply({ kind: 'notification-add', notification: {
         id: demoId('note'), session_id: 's-migrate', kind: 'awaiting',
-        title: 'A decision is waiting', message: 'Choose who owns cache invalidation before the migration continues.',
+        get title() { return dt("demo.1ddf55a332") }, message: dt("demo.1b5ff8a75b"),
         severity: 'warning', created_at: nowSeconds(),
       } }), spotlight: ['.sidebar'] },
-    { at: 13_000, say: 'Open the waiting session and read the question.', click: sessionRow('s-migrate'),
+    { at: 13_000, get say() { return dt("demo.85204ef23f") }, click: sessionRow('s-migrate'),
       spotlight: ['.terminal-pane.focused'] },
-    { at: 19_000, say: 'Choose which events notify you and which sounds they use.',
-      body: ['Desktop and mobile have separate alert profiles, with quiet hours.'],
+    { at: 19_000, get say() { return dt("demo.c03eacac13") },
+      body: [dt("demo.aebe5b6a12")],
       command: 'settings.open', field: { at: ['.settings-search input'], text: 'alerts' } },
   ]
 }
@@ -1121,61 +1120,61 @@ function statusBeats(): Beat[] {
 function inputBeats(): Beat[] {
   const target = 's-rage'
   return [
-    { at: 0, eyebrow: 'FAMILIAR INPUT', say: 'Edit a prompt in the active agent pane.',
+    { at: 0, get eyebrow() { return dt("demo.46a18cf4c1") }, get say() { return dt("demo.115b378269") },
       click: sessionRow(target), spotlight: sessionRow(target),
       mutate: () => apply({ kind: 'term-input', id: target, data: '\x03' }) },
-    { at: 4_000, say: 'Type your request.', type: { session: target, text: 'Review the checkout code', pace: 85 },
+    { at: 4_000, get say() { return dt("demo.0da641295d") }, type: { session: target, text: dt("demo.41e63c1410"), pace: 85 },
       spotlight: ['.terminal-pane.focused'] },
-    { at: 10_000, say: 'Ctrl+Backspace deletes the previous word.',
+    { at: 10_000, get say() { return dt("demo.43f72ae0c9") },
       show: { keys: ['ctrl', 'backspace'] },
       mutate: () => apply({ kind: 'term-input', id: target, data: '\x17' }) },
-    { at: 15_000, say: 'Shift+Enter adds a line without sending the prompt.',
+    { at: 15_000, get say() { return dt("demo.29e1f4244c") },
       show: { keys: ['shift', 'enter'] },
       mutate: () => apply({ kind: 'term-input', id: target, data: 'flow\x1b\r' }),
-      type: { session: target, text: 'Check expiry handling.', pace: 85 } },
-    { at: 22_000, say: 'The draft is still yours to edit.',
-      body: ['The demo marks line breaks with an arrow. Installed agent composers keep their native layout.'],
+      type: { session: target, text: dt("demo.781e1b6a5b"), pace: 85 } },
+    { at: 22_000, get say() { return dt("demo.0f5155bcf1") },
+      body: [dt("demo.d63efb94fc")],
       spotlight: ['.terminal-pane.focused'] },
   ]
 }
 
 function attachmentBeats(): Beat[] {
   return [
-    { at: 0, eyebrow: 'PASTE AN IMAGE', say: 'Add an image to an agent prompt.',
+    { at: 0, get eyebrow() { return dt("demo.f52fe85e35") }, get say() { return dt("demo.2919a7a096") },
       click: sessionRow('s-rage'), spotlight: sessionRow('s-rage'),
       mutate: () => apply({ kind: 'term-input', id: 's-rage', data: '\x03' }) },
-    { at: 4_000, say: 'Paste the example checkout image.', pasteImage: true,
+    { at: 4_000, get say() { return dt("demo.1b96f8ddb8") }, pasteImage: true,
       show: { keys: ['ctrl', 'v'] }, spotlight: ['.terminal-pane.focused'] },
-    { at: 8_000, say: 'The image reference is attached. Add your question.',
+    { at: 8_000, get say() { return dt("demo.622d49c80b") },
       type: { session: 's-rage', text: ' Explain.', pace: 95 },
       spotlight: ['.terminal-pane.focused'] },
-    { at: 14_000, say: 'Ready to send to an image-capable agent.',
-      body: ['This example stays in the browser. No image is uploaded to a server or provider.'] },
+    { at: 14_000, get say() { return dt("demo.11a8773de9") },
+      body: [dt("demo.7dd36cb69e")] },
   ]
 }
 
 function clipboardBeats(): Beat[] {
   return [
-    { at: 0, eyebrow: 'YOUR COPIED TEXT, ACROSS DEVICES', say: 'Open text copied inside swe-mux.',
+    { at: 0, get eyebrow() { return dt("demo.94b026b2ec") }, get say() { return dt("demo.bf1c57372b") },
       click: railItem('clipboardHistory'), spotlight: ['.clipboard-panel', '.utility-drawer'] },
-    { at: 6_000, say: 'Read an entry before inserting it.',
-      body: ['The history is shared by devices connected to the same swe-mux install.'],
+    { at: 6_000, get say() { return dt("demo.b76e673dbc") },
+      body: [dt("demo.6ab23ec2f6")],
       spotlight: ['.clipboard-panel', '.utility-drawer'] },
-    { at: 12_000, say: 'Keep useful entries pinned. Turn on persistence to retain history across restarts.',
-      body: ['Only in-app text copies are recorded. This is separate from pasting an image attachment.'] },
+    { at: 12_000, get say() { return dt("demo.9a19c63b43") },
+      body: [dt("demo.fa39f2f8b3")] },
   ]
 }
 
 function historyBeats(): Beat[] {
   return [
-    { at: 0, eyebrow: 'FIND THE SESSION. INSPECT THE WORK.', say: 'Search earlier conversations across agent CLIs.',
+    { at: 0, get eyebrow() { return dt("demo.7d20a5cebe") }, get say() { return dt("demo.8dc3d0728c") },
       command: 'history.open', spotlight: ['.history-browser', '.history-panel'] },
-    { at: 7_000, say: 'Open a transcript to read the messages and tool activity.',
-      body: ['History remains available after the terminal session ends.'],
-      command: 'drawer.show:transcript', key: 'Escape', spotlight: DRAWER_TAB('Transcript') },
-    { at: 14_000, say: 'Inspect the changes and the recorded evidence behind them.',
-      command: 'drawer.show:git', spotlight: DRAWER_TAB('Git'),
-      body: ['Evidence capture is a separate Project opt-in.'] },
+    { at: 7_000, get say() { return dt("demo.b07ecf76c2") },
+      body: [dt("demo.b3c067ce02")],
+      command: 'drawer.show:transcript', key: 'Escape', spotlight: DRAWER_TAB('transcript') },
+    { at: 14_000, get say() { return dt("demo.ab02750a60") },
+      command: 'drawer.show:git', spotlight: DRAWER_TAB('git'),
+      body: [dt("demo.67898bebd2")] },
   ]
 }
 
@@ -1198,45 +1197,45 @@ function paletteBeats(): Beat[] {
   return [
     {
       at: 0,
-      eyebrow: 'ONE FIELD',
-      say: 'Everything the app can do, by name.',
+      get eyebrow() { return dt("demo.f1aa00c550") },
+      get say() { return dt("demo.0e552a391c") },
       command: 'palette.open',
       spotlight: ['.palette'],
       show: { keys: ['ctrl', 'shift', 'p'] },
     },
     {
       at: 1_500,
-      say: 'Type what you want rather than remembering where it lives.',
-      field: { at: input, text: 'transcript' },
+      get say() { return dt("demo.8fbff35002") },
+      field: { at: input, text: dt('demo.searchTranscript') },
     },
     {
       at: 4_400,
-      say: 'The same field addresses four different things, and one character says which.',
+      get say() { return dt("demo.a13ef57407") },
       show: {
         reveal: 'walk',
         notes: [
-          { at: paletteScope(1), label: 'commands', sub: '>' },
-          { at: paletteScope(2), label: 'sessions', sub: '@' },
-          { at: paletteScope(3), label: 'Projects', sub: '#' },
-          { at: paletteScope(4), label: 'files', sub: ':' },
+          { at: paletteScope(1), get label() { return dt("demo.10f5f77eef") }, sub: '>' },
+          { at: paletteScope(2), get label() { return dt("demo.1225ae6c1a") }, sub: '@' },
+          { at: paletteScope(3), get label() { return dt("demo.04e2a9728a") }, sub: '#' },
+          { at: paletteScope(4), get label() { return dt("demo.3d7db37d08") }, sub: ':' },
         ],
       },
     },
     {
       at: 11_800,
-      say: 'Jumping to a session is navigation rather than a command, so it has its own scope.',
+      get say() { return dt("demo.f871e3beee") },
       click: paletteScope(2),
-      field: { at: input, text: 'coupon', clear: true },
+      field: { at: input, text: session('s-working')?.name || 'coupon', clear: true },
     },
     {
       at: 15_200,
-      say: 'And every entry carries the chord that would have run it, in whichever keymap you chose.',
+      get say() { return dt("demo.54a917470e") },
       show: {
         reveal: 'glitch',
-        notes: [{ at: ['#command-results [role="option"] kbd'], label: 'your own binding' }],
+        notes: [{ at: ['#command-results [role="option"] kbd'], get label() { return dt("demo.164cb894c8") } }],
       },
     },
-    { at: 17_800, key: 'Escape', say: 'Nothing here is a second interface. It is the same commands.' },
+    { at: 17_800, key: 'Escape', get say() { return dt("demo.1033f1f217") } },
   ]
 }
 
@@ -1260,18 +1259,18 @@ function keymapBeats(): Beat[] {
   return [
     {
       at: 0,
-      eyebrow: 'YOUR MUSCLE MEMORY',
-      say: 'Five keymaps ship. Take the one your hands already know.',
+      get eyebrow() { return dt("demo.2fb89d89d7") },
+      get say() { return dt("demo.56db70ed93") },
       command: 'settings.open',
       spotlight: ['.settings-panel'],
     },
     {
       at: 1_600,
-      say: 'They are documents the daemon owns, not a handful of chords the demo invented.',
+      get say() { return dt("demo.d8865d4740") },
       // Through the panel's own search rather than three presses down its nav. Both are
       // real paths a visitor has; this one is one act instead of three, and it does not
       // depend on the shape of a tab list that exists to be reorganised.
-      field: { at: ['.settings-search input'], text: 'keyboard preset' },
+      field: { at: ['.settings-search input'], text: t('heading.f5281d5e03') },
     },
     {
       at: 3_800,
@@ -1283,34 +1282,34 @@ function keymapBeats(): Beat[] {
       show: {
         reveal: 'blueprint',
         notes: [
-          { at: card('.keymap-preset-count'), label: 'the whole table', sub: 'not a starter set' },
-          { at: card('.keymap-warning'), label: 'and what it takes from the pane below' },
+          { at: card('.keymap-preset-count'), get label() { return dt("demo.3197a9f3f1") }, get sub() { return dt("demo.86126cf910") } },
+          { at: card('.keymap-warning'), get label() { return dt("demo.fc05f0f36b") } },
         ],
       },
-      say: 'A prefix keymap is a real trade: swe-mux is the outer shell, so it takes the prefix first.',
+      get say() { return dt("demo.f894e739fb") },
     },
     {
       at: 8_600,
-      say: 'Applying one replaces every binding, immediately.',
+      get say() { return dt("demo.79b936757d") },
       click: card('.keymap-preset-apply'),
       show: { keys: ['ctrl', 'b', '→', 'o'], crt: true },
     },
     { at: 10_400, click: ['.keymap-confirm .primary'] },
     {
       at: 12_600,
-      say: 'This is a browser tab, and a tab does not get every chord. So the table is resolved for one.',
+      get say() { return dt("demo.640ceab1a1") },
       show: {
         reveal: 'sweep',
         sweep: ['.keybinding-policy', '.keymap-host'],
         notes: [
-          { at: ['.keymap-host'], label: 'resolved for this host', sub: 'not for a hope' },
-          { at: ['.keybinding-policy'], label: 'what the browser keeps', sub: 'and what it merely shares' },
+          { at: ['.keymap-host'], get label() { return dt("demo.d0943086b7") }, get sub() { return dt("demo.fee9d137c7") } },
+          { at: ['.keybinding-policy'], get label() { return dt("demo.66e85abf8b") }, get sub() { return dt("demo.262452b759") } },
         ],
       },
     },
     {
       at: 16_400,
-      say: 'A chord a tab cannot receive is marked desktop-only in the preset itself, so it is never drawn as live here.',
+      get say() { return dt("demo.6335ff1e01") },
     },
   ]
 }
@@ -1333,35 +1332,35 @@ function voiceBeats(): Beat[] {
   return [
     {
       at: 0,
-      eyebrow: 'TALKING TO THE MULTIPLEXER',
-      say: 'Ask the assistant what needs your attention.',
+      get eyebrow() { return dt("demo.a7adac1b9f") },
+      get say() { return dt("demo.8b7f382376") },
       command: 'assistant.toggle',
       spotlight: ['.assistant-panel', '.voice-dock-anchor'],
       show: { keys: ['ctrl', 'shift', 'space', 'x', 'a'], crt: true },
     },
     {
       at: 1_800,
-      say: 'The question is a sentence, not a command it had to be taught.',
+      get say() { return dt("demo.cffa879e08") },
       mutate: () => { assistantHeard('what needs my attention?') },
     },
     {
       at: 3_400,
       mutate: () => {
-        assistantSays(`One thing. "${nameOf(target)}" is waiting on a decision:`
-          + ' who owns invalidation when a file is replaced on disk.')
+        assistantSays(dt("demo.9832ae978d", { value1: nameOf(target) })
+          + dt("demo.50cc6530a4"))
       },
     },
     {
       at: 6_000,
-      say: 'The example answer names the waiting session.',
+      get say() { return dt("demo.ae411d81b0") },
       mutate: () => {
-        assistantSays('Everything else is moving: two turns running, one branch already'
-          + ' landed, nothing else waiting on you.')
+        assistantSays(dt("demo.2acaf4112a")
+          + dt("demo.fb3e19ecf9"))
       },
     },
     {
       at: 8_600,
-      say: 'Review the proposed message before it runs.',
+      get say() { return dt("demo.bf6233b75d") },
       mutate: () => {
         proposed = assistantProposes({
           kind: 'queue_message',
@@ -1372,35 +1371,35 @@ function voiceBeats(): Beat[] {
       show: {
         reveal: 'blueprint',
         notes: [
-          { at: ['.assistant-action p strong'], label: 'proposed message' },
-          { at: ['.assistant-countdown'], label: 'cancel window' },
-          { at: ['.assistant-action .cancel'], label: 'cancel this action' },
+          { at: ['.assistant-action p strong'], get label() { return dt("demo.a062975343") } },
+          { at: ['.assistant-countdown'], get label() { return dt("demo.62f9384cfe") } },
+          { at: ['.assistant-action .cancel'], get label() { return dt("demo.8f0d965ab8") } },
         ],
       },
     },
     {
       at: 13_000,
-      say: 'The approved action queues a prompt for that session.',
+      get say() { return dt("demo.eb9649081e") },
       mutate: () => {
-        if (proposed) assistantResolved(proposed, `Queued one prompt for "${nameOf(target)}".`)
+        if (proposed) assistantResolved(proposed, dt("demo.7a08f4b8ef", { value1: nameOf(target) }))
         assistantDone()
         apply({
           kind: 'queue-add',
           message: makeQueueMessage({
             targetSessionId: target,
             senderKind: 'agent',
-            senderLabel: 'the assistant',
+            senderLabel: dt("demo.02cc4028cc"),
             body: 'the file owner invalidates; treat a replaced file as a write',
-            reason: 'answering a question you asked out loud',
+            reason: dt("demo.4a893ffc1e"),
             state: 'armed',
           }),
         })
       },
-      show: { shimmer: [rowField(target, 'queue')], arrive: [DRAWER_TAB('Queue')] },
+      show: { shimmer: [rowField(target, 'queue')], arrive: [DRAWER_TAB('queue')] },
     },
     {
       at: 17_000,
-      say: 'This example is scripted. The installed app can listen and speak when you enable voice.',
+      get say() { return dt("demo.88c3c29164") },
     },
   ]
 }
@@ -1420,94 +1419,94 @@ function voiceBeats(): Beat[] {
 export const SCENARIOS: Scenario[] = [
   {
     id: 'tour',
-    label: 'Take a tour of the workspace',
-    blurb: 'A hands-off walk around the whole app. Touch anything to take over.',
+    get label() { return dt("demo.5da8039a7c") },
+    get blurb() { return dt("demo.eb69def6b7") },
     // The one run whose card follows the chrome and counts its stops. Every other entry
     // is a caption at the foot of the frame: they narrate a thing happening rather than
     // walk somebody through a surface.
     card: 'anchored',
-    beats: tourDesktop(),
-    mobileBeats: tourMobile(),
+    get beats() { return tourDesktop() },
+    get mobileBeats() { return tourMobile() },
   },
   {
     id: 'status',
-    label: 'See which agent needs you',
-    blurb: 'Live state, an alert, and the session behind it.',
-    beats: statusBeats(),
+    get label() { return dt("demo.782f20e6e0") },
+    get blurb() { return dt("demo.f965b29a6c") },
+    get beats() { return statusBeats() },
   },
   {
     id: 'input',
-    label: 'See familiar editing keys in an agent prompt',
-    blurb: 'Newlines and word deletion in the simulated composer.',
-    beats: inputBeats(),
+    get label() { return dt("demo.16f58626eb") },
+    get blurb() { return dt("demo.d7fdd0cd36") },
+    get beats() { return inputBeats() },
   },
   {
     id: 'attachment',
-    label: 'See an image pasted into an agent prompt',
-    blurb: 'An invented image goes through the real attachment UI, with no upload.',
-    beats: attachmentBeats(),
+    get label() { return dt("demo.93dc658750") },
+    get blurb() { return dt("demo.8f72d5a525") },
+    get beats() { return attachmentBeats() },
   },
   {
     id: 'clipboard',
-    label: 'Open your shared clipboard history',
-    blurb: 'In-app text copies, available on desktop and phone.',
-    beats: clipboardBeats(),
+    get label() { return dt("demo.3e5ab6a962") },
+    get blurb() { return dt("demo.bcf5e39313") },
+    get beats() { return clipboardBeats() },
   },
   {
     id: 'history',
-    label: 'Find earlier sessions and inspect their work',
-    blurb: 'Search, transcripts, and the changes behind a session.',
-    beats: historyBeats(),
+    get label() { return dt("demo.fd433189f9") },
+    get blurb() { return dt("demo.d413e2a225") },
+    get beats() { return historyBeats() },
   },
   {
     id: 'queue',
-    label: 'Queue a prompt behind a running turn',
-    blurb: 'An example of enabled auto-delivery: the turn ends, then the next prompt is sent.',
+    get label() { return dt("demo.6a72438272") },
+    get blurb() { return dt("demo.82ebdf3cec") },
     prepare: () => { reopenTurn('s-working') },
-    beats: queueBeats(),
+    get beats() { return queueBeats() },
   },
   {
     id: 'orchestrate',
-    label: 'Let agents request help and report back',
-    blurb: 'One session drafts the requests, a human decides, and they report back.',
-    beats: orchestrateBeats(),
+    get label() { return dt("demo.fbb5a3e583") },
+    get blurb() { return dt("demo.1abab7e4f6") },
+    get beats() { return orchestrateBeats() },
   },
   {
     id: 'preview',
-    label: 'Open your dev server as a pane',
-    blurb: 'A shell starts one and its listener becomes a preview beside the terminal.',
-    beats: previewBeats(),
-    mobileBeats: previewBeats(true),
+    get label() { return dt("demo.329a666b8d") },
+    get blurb() { return dt("demo.adbe6a3722") },
+    get beats() { return previewBeats() },
+    get mobileBeats() { return previewBeats(true) },
   },
   {
     id: 'land',
-    label: 'Land a branch behind your approved checks',
-    blurb: 'Reconcile, verify, fast-forward - one branch at a time.',
-    beats: landBeats(),
+    get label() { return dt("demo.c830a60471") },
+    get blurb() { return dt("demo.26d0b0f811") },
+    get beats() { return landBeats() },
   },
   {
     id: 'landfailure',
-    label: 'See what happens when a check fails',
-    blurb: 'The branch stays out of master and the result returns to its agent.',
-    beats: landBeats(true),
+    get label() { return dt("demo.5d07a05335") },
+    get blurb() { return dt("demo.1fddc49a2f") },
+    get beats() { return landBeats(true) },
   },
   {
     id: 'palette',
-    label: 'Find any command or session by name',
-    blurb: 'One field, four scopes, and the chord beside every answer.',
-    beats: paletteBeats(),
+    get label() { return dt("demo.d60124a9be") },
+    get blurb() { return dt("demo.44fc8bf30b") },
+    get beats() { return paletteBeats() },
   },
   {
     id: 'keymap',
-    label: 'Switch to familiar keyboard shortcuts',
-    blurb: 'Five presets, applied live, and which chords a browser tab keeps.',
-    beats: keymapBeats(),
+    get label() { return dt("demo.a8874acc87") },
+    get blurb() { return dt("demo.6df6105217") },
+    get beats() { return keymapBeats() },
   },
   {
     id: 'voice',
-    label: 'Ask the assistant what needs you',
-    blurb: 'A scripted assistant example with a proposed action you can confirm or cancel.',
-    beats: voiceBeats(),
+    get label() { return dt("demo.4840454222") },
+    get blurb() { return dt("demo.4793c1125d") },
+    get beats() { return voiceBeats() },
   },
 ]
 

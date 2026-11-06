@@ -1,3 +1,4 @@
+import { isComposingKey, type CompositionKey } from './inputComposition.ts'
 import { DEFAULT_COMPOSER_NEWLINE, composerNewline, isAgentBackend } from './harnessRegistry.ts'
 
 export type TerminalKeyDecision =
@@ -11,7 +12,7 @@ export type TerminalKeyDecision =
   | { kind: 'copySelection' }
   | { kind: 'sendInput'; data: string }
 
-export type TerminalKey = {
+export type TerminalKey = CompositionKey & {
   type: string; key: string; ctrlKey: boolean; shiftKey: boolean; altKey: boolean; metaKey: boolean
 }
 
@@ -33,7 +34,7 @@ export function terminalKeyDecision(
   hasSelection: boolean,
   backend?: string,
 ): TerminalKeyDecision {
-  if (event.type !== 'keydown') return { kind: 'pass' }
+  if (event.type !== 'keydown' || isComposingKey(event)) return { kind: 'pass' }
   if (claimed) return { kind: 'claimed' }
   const key = event.key.toLowerCase()
   if (key === 'enter' && (event.shiftKey || event.ctrlKey) && !event.altKey && !event.metaKey) {

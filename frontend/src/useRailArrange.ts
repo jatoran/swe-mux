@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 // The arrange mode's state and its pointer wiring, as one controller.
 //
 // Its own module rather than JSX inside `TerminalPane` for the reason `RailPad` and
@@ -88,7 +89,9 @@ export function useRailArrange({ device, surface, config, save, rootSelector = '
     // Bubble phase, deliberately after the drag driver's own capture-phase Escape: a drag in
     // flight puts the chip back and the mode stays open, so the two escapes are ordered the
     // way a hand expects rather than collapsing into one.
-    const key = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.stopPropagation(); exit.current() } }
+    const key = (event: KeyboardEvent) => {
+      if (isComposingKey(event)) return
+ if (event.key === 'Escape') { event.stopPropagation(); exit.current() } }
     const outside = (event: PointerEvent) => {
       if (event.target instanceof Element && event.target.closest(rootSelector)) return
       exit.current()

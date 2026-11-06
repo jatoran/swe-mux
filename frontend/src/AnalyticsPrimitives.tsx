@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { rich, t } from './localization/index.ts'
 import type { ComponentChildren } from 'preact'
 import { useEffect, useState } from 'preact/hooks'
@@ -22,6 +23,8 @@ export function AnalyticsNav<T extends string>({label, value, items, onChange, p
 }) {
   return <div class={`analytics-nav ${primary?'analytics-primary':'analytics-secondary'}`}>
     <div class="analytics-tab-row" role="tablist" aria-label={label} onKeyDown={event=>{
+      if (isComposingKey(event)) return
+
       if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return
       event.preventDefault()
       const current=items.findIndex(item=>item.id===value)
@@ -29,7 +32,7 @@ export function AnalyticsNav<T extends string>({label, value, items, onChange, p
       onChange(items[next].id)
       event.currentTarget.querySelectorAll('button')[next]?.focus()
     }}>
-      {items.map(item=><button key={item.id} role="tab" tabIndex={value===item.id?0:-1} aria-selected={value===item.id} class={value===item.id?'active':''} onClick={()=>onChange(item.id)}>{item.label}</button>)}
+      {items.map(item=><button data-tab-id={item.id} key={item.id} role="tab" tabIndex={value===item.id?0:-1} aria-selected={value===item.id} class={value===item.id?'active':''} onClick={()=>onChange(item.id)}>{item.label}</button>)}
     </div>
     {primary && <label class="analytics-section-picker">{rich("AnalyticsPrimitives.eeac61af2e", { value1: <select aria-label={label} value={value} onChange={event=>onChange(event.currentTarget.value as T)}>{items.map(item=><option key={item.id} value={item.id}>{item.label}</option>)}</select> })}</label>}
   </div>

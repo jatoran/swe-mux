@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { useEffect, useRef } from 'preact/hooks'
 import type { RefObject } from 'preact'
 import { isFocusTraversalKey } from './keys'
@@ -55,6 +56,8 @@ export function useModalFocus(ref:RefObject<HTMLElement>,onClose:()=>void,enable
     const previous=document.activeElement instanceof HTMLElement?document.activeElement:null
     const frame=requestAnimationFrame(()=>ref.current?.querySelector<HTMLElement>(SELECTOR)?.focus())
     const keydown=(event:KeyboardEvent)=>{
+      if (isComposingKey(event)) return
+
       // Escape dismisses one level rather than this one: with nested overlays every
       // enabled hook has a listener on window at the same phase, so all of them see the
       // key. Routing through the stack makes the innermost level the one that closes,

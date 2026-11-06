@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { locale as uiLocale } from './localization/index.ts'
 import { t } from './localization/index.ts'
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
@@ -106,6 +107,8 @@ export function MobileTerminalDraft({
       placeholder={t("TerminalDraftComposer.977c4041df")}
       onInput={event => { setCopyState(''); onInput(event.currentTarget.value) }}
       onKeyDown={event => {
+      if (isComposingKey(event)) return
+
         if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
           event.preventDefault()
           insert()

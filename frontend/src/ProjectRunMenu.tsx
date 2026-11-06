@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { codeLabel } from './localization/codeLabels.ts'
 import { rich, t } from './localization/index.ts'
 import { Fragment } from 'preact'
@@ -123,7 +124,9 @@ export function ProjectRunMenu({project,profiles,anchor,onClose,onLaunch,onCusto
   useDismissLevel(()=>setPrompting(null),!!prompting,'run-menu-inputs')
   useDismissLevel(()=>setSource(null),!!source,'run-menu-source')
   useEffect(()=>{
-    const close=(event:KeyboardEvent)=>{if(event.key==='Escape')dismissStack.pop()}
+    const close=(event:KeyboardEvent)=>{
+      if (isComposingKey(event)) return
+if(event.key==='Escape')dismissStack.pop()}
     window.addEventListener('keydown',close)
     return()=>window.removeEventListener('keydown',close)
   },[])

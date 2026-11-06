@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { t } from './localization/index.ts'
 import type { ComponentChildren } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
@@ -81,6 +82,8 @@ export function RailOverflowPopover({ label, anchor, onClose, onConfigure, onArr
       close.current()
     }
     const key = (event: KeyboardEvent) => {
+      if (isComposingKey(event)) return
+
       if (event.key !== 'Escape' || dropupOpen()) return
       event.stopPropagation()
       close.current()

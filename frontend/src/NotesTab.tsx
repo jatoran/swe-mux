@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { ComponentChildren, JSX } from 'preact'
@@ -150,6 +151,8 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
       setMenu(null);setDeleteConfirm('')
     }
     const key=(event:KeyboardEvent)=>{
+      if (isComposingKey(event)) return
+
       if(event.key==='Escape'){
         event.preventDefault();event.stopImmediatePropagation();dismissStack.pop();return
       }
@@ -382,7 +385,9 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
   >
     <button
       onClick={()=>openNote(note,'drawer')}
-      onKeyDown={event=>{openMenuFromKeyboard(note,event)}}
+      onKeyDown={event=>{
+      if (isComposingKey(event)) return
+openMenuFromKeyboard(note,event)}}
       title={t("NotesTab.8268f4fbeb", { title: note.title })}
     >
       <strong>{note.title}</strong>
@@ -427,6 +432,8 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
           onClick={()=>openScratchpad('drawer')}
           onContextMenu={event=>{event.preventDefault();event.stopPropagation();openScratchpadMenu(event.clientX,event.clientY)}}
           onKeyDown={event=>{
+      if (isComposingKey(event)) return
+
             if(openScratchpadMenuFromKeyboard(event))return
             if(event.key==='ArrowLeft'||event.key==='ArrowRight')focusAdjacentTab(event,event.key==='ArrowLeft'?-1:1)
           }}
@@ -434,7 +441,7 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
         {projectItems.map(note=>{
           const resourceId=projectNoteTabId(note.note_id)
           const active=selectedTabId===resourceId
-          return <button
+          return <button data-tab-id={resourceId}
             key={resourceId}
             role="tab"
             aria-selected={active}
@@ -446,6 +453,8 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
             onPointerDown={event=>beginLongPress(note,event)}
             onClickCapture={suppressLongPressClick}
             onKeyDown={event=>{
+      if (isComposingKey(event)) return
+
               if(openMenuFromKeyboard(note,event))return
               if(event.key==='ArrowLeft'||event.key==='ArrowRight')focusAdjacentTab(event,event.key==='ArrowLeft'?-1:1)
             }}

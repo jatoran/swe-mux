@@ -44,7 +44,7 @@
 
   /* Mono carries identity: headings, labels, commands, anything terminal-shaped.
      Sans carries prose, because monospace paragraphs are what made this page tiring. */
-  --mono: ui-monospace, "SF Mono", SFMono-Regular, "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, "Microsoft YaHei UI", "Noto Sans CJK SC", "PingFang SC", monospace;
   --sans: "Inter var", Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI Variable Text",
           "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --pad: clamp(18px, 4vw, 40px);
@@ -646,6 +646,9 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 .hero .sub { max-width: 850px; }
 .hero-facts { color: var(--fg-2); margin: 0 0 20px; }
 .demo-disclosure { padding: 8px 12px; margin: 0; color: var(--fg-2); font: 13px/1.5 var(--sans); border-top: 1px solid var(--line); }
+.demo-language { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.demo-language select { max-width: 120px; background: var(--panel); color: var(--fg); border: 1px solid var(--line-2); padding: 5px; font: inherit; }
+.demo-head { flex-wrap: wrap; }
 .demo-keymap-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--line); font-size: 12px; }
 .demo-keymap-bar[hidden] { display: none; }
 .demo-keymap-buttons { display: inline-flex; flex-wrap: wrap; gap: 4px; }

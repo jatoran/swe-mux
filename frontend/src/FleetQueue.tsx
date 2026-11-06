@@ -148,7 +148,7 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
   const promotion = auto?.promotion
 
   return (
-    <div
+    <div data-dialog-id="fleet"
       class="usage-layer fleet-queue-layer"
       role="dialog"
       aria-modal="true"
@@ -169,9 +169,9 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
         <div class="fleet-queue-controls">
           {/* Not `.queue-scope`: that class is sized for the drawer's 300px column, where
               equal-flex buttons and a bottom rule are right. Here it is a modal toolbar. */}
-          <div class="fleet-queue-author-scope" role="tablist" aria-label={t("FleetQueue.4a0734833f")}>
+          <div data-tab-group="FleetQueue.4a0734833f" class="fleet-queue-author-scope" role="tablist" aria-label={t("FleetQueue.4a0734833f")}>
             {AUTHOR_SCOPES.map(scope => (
-              <button
+              <button data-tab-id={scope.id}
                 key={scope.id}
                 type="button"
                 role="tab"

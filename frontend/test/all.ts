@@ -253,3 +253,6 @@ import './demoDirector.test.ts'
 import './telemetryCaption.test.ts'
 import './emptyStage.test.ts'
 import './localization.test.ts'
+
+import './inputComposition.test.ts'
+import './demoLocalization.test.ts'

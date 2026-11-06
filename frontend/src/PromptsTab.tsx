@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { codeLabel } from './localization/codeLabels.ts'
 import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
@@ -151,6 +152,8 @@ export function PromptsTab({ project, backend, onInsert, onDone, onManage, showM
       setMenu(null)
     }
     const key = (event: KeyboardEvent) => {
+      if (isComposingKey(event)) return
+
       if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); setMenu(null); return }
       if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
       const buttons = [...menuPanel.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') || []]

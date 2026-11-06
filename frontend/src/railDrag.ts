@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 // Pointer-drag machinery shared by the Action editors — the Configure Actions
 // modal (`RailEditor.tsx`).
 //
@@ -305,6 +306,8 @@ export function beginRailDrag(
   }
   function onBlur() { finish(false) }
   function onKey(keyEvent: KeyboardEvent) {
+      if (isComposingKey(keyEvent)) return
+
     if (keyEvent.key !== 'Escape') return
     keyEvent.preventDefault()
     keyEvent.stopPropagation()

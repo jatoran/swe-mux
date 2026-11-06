@@ -141,9 +141,9 @@ export function clickSession(sessionId: string): boolean {
  *  when it is already selected, because pressing it again is not a no-op everywhere. */
 export function clickTab(label: string, wanted: string): boolean {
   for (const strip of document.querySelectorAll('[role="tablist"][aria-label]')) {
-    if (strip.getAttribute('aria-label') !== label || !mirrorableTablist(strip)) continue
+    if ((strip.getAttribute('data-tab-group') || strip.getAttribute('aria-label')) !== label || !mirrorableTablist(strip)) continue
     for (const tab of strip.querySelectorAll<HTMLElement>('[role="tab"]')) {
-      if (text(tab.textContent) !== wanted) continue
+      if ((tab.getAttribute('data-tab-id') || tab.getAttribute('data-settings-tab') || text(tab.textContent)) !== wanted) continue
       if (tab.getAttribute('aria-selected') === 'true') return false
       tab.click()
       return true

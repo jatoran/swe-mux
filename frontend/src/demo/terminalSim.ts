@@ -1,3 +1,5 @@
+import { dt } from './messages.ts'
+import { cellWidth, composerWindow, graphemes, wrappedRows } from './terminalWidth.ts'
 /**
  * The demo's terminals: canned ANSI scrollback per session, a line-editing echo,
  * and a responder that streams a reply when the visitor presses Enter.
@@ -100,15 +102,15 @@ export function composerInfo(session: ComposerSession): ComposerInfo {
   }
 }
 
-export function composerBlock(info: ComposerInfo, buffer: string): string {
+export function composerBlock(info: ComposerInfo, buffer: string, cursor = buffer.length): string {
   const inner = BOX_WIDTH - 4
   const accent = info.kind === 'codex' ? CYAN : ORANGE
   const glyph = info.kind === 'codex' ? '›' : '>'
-  const placeholder = info.kind === 'codex' ? 'ask codex anything' : 'try "fix the flaky test"'
+  const placeholder = info.kind === 'codex' ? dt("demo.dd69a639e3") : dt("demo.e7ff85df56")
   // A single-line composer scrolls its own text: keep the tail under the cursor
   // rather than letting a long line break the box.
   const room = inner - 2
-  const typed = buffer.length > room ? buffer.replaceAll('\n', '↵').slice(buffer.length - room) : buffer
+  const typed = composerWindow(buffer, cursor, room).text
   // No drawn caret. The block ends by parking the terminal's *own* cursor after the
   // typed text (`composerCaret`), which is what a real CLI does - and drawing a second
   // one here is what put a block glyph in the box while the real cursor blinked on the
@@ -122,19 +124,19 @@ export function composerBlock(info: ComposerInfo, buffer: string): string {
   // phone-width pane, where hint plus meter would wrap by a character.
   const left = 100 - Math.round(info.contextPct * 100)
   const status = info.working
-    ? `  ${accent}✻${RESET} ${DIM}working… (esc to interrupt)${RESET}`
+    ? dt("demo.a38d6c623a", { value1: accent, value2: RESET, value3: DIM, value4: RESET })
     : (() => {
-      const hint = `${DIM}? for shortcuts${RESET}`
+      const hint = dt("demo.21c3d52273", { value1: DIM, value2: RESET })
       const meter = `${DIM}${info.model} · ${left}% ctx${RESET}`
       // Right-aligned against the box, measured on the bare text so the escapes
       // do not count toward the column.
-      const gap = Math.max(1, BOX_WIDTH - 2 - bare(hint).length - bare(meter).length)
+      const gap = Math.max(1, BOX_WIDTH - 2 - cellWidth(hint) - cellWidth(meter))
       return `  ${hint}${' '.repeat(gap)}${meter}`
     })()
 
   return [
     `${DIM}╭${rule}╮${RESET}`,
-    `${DIM}│${RESET} ${row}${' '.repeat(Math.max(0, inner - bare(row).length))} ${DIM}│${RESET}`,
+    `${DIM}│${RESET} ${row}${' '.repeat(Math.max(0, inner - cellWidth(row)))} ${DIM}│${RESET}`,
     `${DIM}╰${rule}╯${RESET}`,
     status,
   ].join(CRLF)
@@ -148,15 +150,15 @@ export const CLEAR_SCREEN = `${ESC}[H${ESC}[2J`
  *
  * Used to work out the top padding that pins the composer to the bottom of a pane, so
  * it only has to be right about *authored* content: the demo's transcripts contain no
- * cursor movement and no wide characters, which is what makes counting wrapped lines a
- * sufficient answer rather than a terminal emulator.
+ * cursor movement. Grapheme widths include Chinese characters, and wrapping leaves a
+ * final single cell empty when the next character occupies two cells.
  */
 export function renderedRows(transcript: string, cols: number): number {
   if (!transcript) return 0
   const width = Math.max(1, cols)
   // A trailing newline ends the last line rather than starting an empty one.
   const lines = transcript.replace(/\r\n$/, '').split(/\r?\n/)
-  return lines.reduce((total, text) => total + Math.max(1, Math.ceil(bare(text).length / width)), 0)
+  return lines.reduce((total, text) => total + wrappedRows(bare(text), width), 0)
 }
 
 /**
@@ -175,13 +177,13 @@ const BOX_TEXT_COLUMN = 5
  */
 export function composerCaret(buffer: string, cursor = buffer.length): string {
   const room = BOX_WIDTH - 4 - 2
-  const typed = Math.min(cursor, room)
+  const typed = composerWindow(buffer, cursor, room).caret
   return `${ESC}[2A${ESC}[${BOX_TEXT_COLUMN + typed}G`
 }
 
 /** The whole box, with the caret placed inside it. */
 export const composerFrame = (info: ComposerInfo, buffer: string, cursor = buffer.length): string =>
-  `${composerBlock(info, buffer)}${composerCaret(buffer, cursor)}`
+  `${composerBlock(info, buffer, cursor)}${composerCaret(buffer, cursor)}`
 
 /**
  * Replace the composer in place: down to the status line, up over the block, clear to
@@ -208,45 +210,45 @@ const yelled = (kind: DemoBackendKind, text: string): string =>
 // --------------------------------------------------------------- transcripts
 
 export function claudeScrollback(): string {
-  return line('Claude Code - simulated session') + line()
-    + said('claude', 'Fix the flaky checkout test.') + line()
-    + line('Read tests/checkout.spec.ts.')
-    + line('The assertion ran before the order request completed.')
-    + line('Updated the test to wait for the cart response.')
-    + line('Example result: the checkout tests passed.')
+  return line(dt("demo.a3d24ef110")) + line()
+    + said('claude', dt("demo.2d6c061479")) + line()
+    + line(dt("demo.bcaf7d3d9d"))
+    + line(dt("demo.906653bdb9"))
+    + line(dt("demo.56fe6721e8"))
+    + line(dt("demo.d2e24506c8"))
 }
 
 export function codexScrollback(): string {
-  return line('Codex - simulated session') + line()
-    + said('codex', 'Profile the cart endpoint.') + line()
-    + line('Traced the cart request through the coupon lookup.')
-    + line('Repeated JSON parsing accounts for most of this sample.')
-    + line('Prepared a cache change and added an expiry test.')
+  return line(dt("demo.29367e7ce9")) + line()
+    + said('codex', dt("demo.cd93b77079")) + line()
+    + line(dt("demo.19bfd032d9"))
+    + line(dt("demo.c3c7ffc775"))
+    + line(dt("demo.7dc704b877"))
 }
 
 export function rageScrollback(): string {
-  return line('Claude Code - simulated session') + line()
-    + said('claude', 'Review the checkout flow.') + line()
-    + line('Read the checkout and coupon handling code.')
-    + line('Checking expiry handling and the empty-cart case.')
-    + line('The next prompt can be queued while this turn is running.')
+  return line(dt("demo.a3d24ef110")) + line()
+    + said('claude', dt("demo.0d9795c6ca")) + line()
+    + line(dt("demo.b71906e31c"))
+    + line(dt("demo.dc150c2b84"))
+    + line(dt("demo.44130da37c"))
 }
 
 export function vibeScrollback(): string {
-  return line('Claude Code - simulated session') + line()
-    + said('claude', 'Review the search results.') + line()
-    + line('Compared search results against the fixture queries.')
-    + line('Found a missing empty-result state.')
-    + line('Added the state and its regression case.')
+  return line(dt("demo.a3d24ef110")) + line()
+    + said('claude', dt("demo.bd9dfe6f1e")) + line()
+    + line(dt("demo.8a5db8f0da"))
+    + line(dt("demo.e4f5167c0f"))
+    + line(dt("demo.eeb7a40996"))
 }
 
 export function shellScrollback(): string {
   return (
-    line(`${DIM}demo shell - commands are canned, nothing executes${RESET}`) +
+    line(dt("demo.3d85296710", { value1: DIM, value2: RESET })) +
     line() +
     line(`${SHELL_PROMPT}git status`) +
-    line(`On branch ${GREEN}feature/faster-cart${RESET}`) +
-    line(`Your branch is ahead of 'origin/master' by 2 commits.`) +
+    line(dt("demo.f38f6a8c0a", { value1: GREEN, value2: RESET })) +
+    line(dt("demo.1a186e62cf")) +
     line() +
     line(`  modified:   ${YELLOW}src/cart.js${RESET}`) +
     line(`  modified:   ${YELLOW}tests/checkout.spec.ts${RESET}`) +
@@ -256,11 +258,11 @@ export function shellScrollback(): string {
 }
 
 export function awaitingScrollback(): string {
-  return line('Codex - simulated session') + line()
-    + said('codex', 'Migrate the cache schema, keeping existing IDs.') + line()
-    + line('The migration is prepared. One decision is needed:')
-    + line('Who invalidates the cache when a file is replaced?')
-    + line('Choose the file owner or the migration worker.') + line()
+  return line(dt("demo.29367e7ce9")) + line()
+    + said('codex', dt("demo.a14b6de130")) + line()
+    + line(dt("demo.78ced1dabb"))
+    + line(dt("demo.86a334f75d"))
+    + line(dt("demo.e4e1ac2634")) + line()
 }
 
 /** A pane that is mid-turn: the transcript stops, and the status keeps ticking. */
@@ -271,10 +273,10 @@ export function workingScrollback(info: ComposerInfo, task: string): string {
     line() +
     said(info.kind, task) +
     line() +
-    line(`${b} Reading the relevant files and checking the current tests.`) +
+    line(dt("demo.082859507c", { value1: b })) +
     line(`${b} ${BOLD}Read${RESET}${DIM}(src/) ⎿ 47 files${RESET}`) +
     line(`${b} ${BOLD}Grep${RESET}${DIM}(coupon) ⎿ 214 matches${RESET}`) +
-    line(`${b} Updating the implementation and its regression tests.`) +
+    line(dt("demo.bc27d8ce3a", { value1: b })) +
     line(`${b} ${BOLD}Bash${RESET}${DIM}(npm test -- --runInBand)${RESET}`) +
     line(`  ${DIM}⎿ running…${RESET}`) +
     line()
@@ -285,19 +287,19 @@ export function workingScrollback(info: ComposerInfo, task: string): string {
 export function spawnScrollback(info: ComposerInfo): string {
   if (info.kind === 'claude') {
     return (
-      line(`${ORANGE}✻${RESET} ${BOLD}Claude Code${RESET} ${DIM}(demo) - simulated activity${RESET}`) +
+      line(dt("demo.44f094a1c4", { value1: ORANGE, value2: RESET, value3: BOLD, value4: RESET, value5: DIM, value6: RESET })) +
       line()
     )
   }
   if (info.kind === 'codex') {
     return (
-      line(`${CYAN}◆${RESET} ${BOLD}Codex${RESET} ${DIM}(demo) - simulated, replies are pre-written${RESET}`) +
+      line(dt("demo.dddc26f6ec", { value1: CYAN, value2: RESET, value3: BOLD, value4: RESET, value5: DIM, value6: RESET })) +
       line()
     )
   }
   // A shell has no composer, and that contrast is worth keeping: it echoes at a
   // prompt exactly as the real one does.
-  return line(`${DIM}demo shell - try 'git status', 'ls', 'npm test', 'whoami'${RESET}`) + line() + SHELL_PROMPT
+  return line(dt("demo.cde7248d36", { value1: DIM, value2: RESET })) + line() + SHELL_PROMPT
 }
 
 // ---------------------------------------------------------------- responders
@@ -344,25 +346,25 @@ const replyProse = (body: string[]): string =>
 
 /** Agent replies, written entirely out of 2026's most-complained-about tells. */
 const AGENT_EXAMPLES: string[][] = [
-  ['This is a simulated response.', 'Try the queue, split this pane, or open its transcript.', 'The installed app runs your own agent CLI in this terminal.'],
-  ['Example update: the checkout change is ready for review.', 'Open Git to inspect the branch, or choose the landing walkthrough.'],
+  [dt("demo.6de1fc1498"), dt("demo.cf4e1e5278"), dt("demo.beb93e4f28")],
+  [dt("demo.53472eb63f"), dt("demo.8b13d283f4")],
 ]
 
-const BUSY_REPLIES: string[][] = [['This example session is still working.', 'Queue a follow-up to send it after the turn ends.']]
+const BUSY_REPLIES: string[][] = [[dt("demo.eaa557dbc1"), dt("demo.ee64b32e44")]]
 
 const SHELL_CANNED: Record<string, string[]> = {
   'git status': [
-    `On branch ${GREEN}feature/faster-cart${RESET}`,
-    `nothing to commit, working tree clean ${DIM}(example)${RESET}`,
+    dt("demo.f38f6a8c0a", { value1: GREEN, value2: RESET }),
+    dt("demo.6d6e51eec6", { value1: DIM, value2: RESET }),
   ],
   ls: ['README.md   package.json   src/   tests/   coupons-since-2019.json'],
   dir: ['README.md   package.json   src/   tests/   coupons-since-2019.json'],
   'npm test': [
     `${DIM}> rocket-shop@1.0.0 test${RESET}`,
     '',
-    `  checkout ${GREEN}✓${RESET} adds to cart ${DIM}(12ms)${RESET}`,
-    `  checkout ${GREEN}✓${RESET} applies coupon ${DIM}(9ms)${RESET}`,
-    `  checkout ${GREEN}✓${RESET} no longer flaky ${DIM}(30 runs)${RESET}`,
+    dt("demo.e9ad59d838", { value1: GREEN, value2: RESET, value3: DIM, value4: RESET }),
+    dt("demo.792af1b604", { value1: GREEN, value2: RESET, value3: DIM, value4: RESET }),
+    dt("demo.e609db8500", { value1: GREEN, value2: RESET, value3: DIM, value4: RESET }),
     '',
     `${GREEN}12 passing${RESET}`,
   ],
@@ -375,13 +377,13 @@ const SHELL_CANNED: Record<string, string[]> = {
     `  ${GREEN}ready${RESET} in 412 ms`,
     '',
     `  ${BOLD}local${RESET}   http://127.0.0.1:5173/`,
-    `  ${DIM}press h to show help${RESET}`,
+    dt("demo.5fef7ea6e4", { value1: DIM, value2: RESET }),
   ],
   whoami: ['demo-user'],
   pwd: ['/code/rocket-shop'],
-  uptime: ['simulated shell; no real process uptime'],
-  sudo: ['This demo does not execute commands.'],
-  vim: ['The installed app can run your editor in this pane.'],
+  uptime: [dt("demo.64d99b49fc")],
+  sudo: [dt("demo.e112d55fb4")],
+  vim: [dt("demo.6e9fceaac1")],
 }
 
 function shellReply(command: string): string[] {
@@ -389,7 +391,7 @@ function shellReply(command: string): string[] {
   if (!trimmed) return []
   const canned = SHELL_CANNED[trimmed] ?? SHELL_CANNED[trimmed.split(/\s+/)[0]]
   if (canned) return canned
-  return [`demo-shell: ${trimmed.split(/\s+/)[0]}: command not found ${DIM}(this shell only pretends to work)${RESET}`]
+  return [dt("demo.f62cd76c05", { value1: trimmed.split(/\s+/)[0], value2: DIM, value3: RESET })]
 }
 
 /**
@@ -483,7 +485,7 @@ export function consumeInput(stateRef: LineState, data: string): InputResult {
     cursor += text.length
     echo += text
   }
-  const back = (): number => Math.max(0, cursor - ([...stateRef.buffer.slice(0, cursor)].at(-1)?.length ?? 1))
+  const back = (): number => Math.max(0, cursor - (graphemes(stateRef.buffer.slice(0, cursor)).at(-1)?.length ?? 1))
   const eraseWord = (): void => {
     const prefix = stateRef.buffer.slice(0, cursor)
     const start = prefix.replace(/\S+\s*$/, '').length
@@ -505,10 +507,10 @@ export function consumeInput(stateRef: LineState, data: string): InputResult {
         else if (key === 'u' && /^13;(2|5)$/.test(parameters)) insert('\n')
         else if (key === 'u' && parameters === '127;5') eraseWord()
         else if (key === 'D') { cursor = back(); echo += raw }
-        else if (key === 'C') { cursor = Math.min(stateRef.buffer.length, cursor + (String.fromCodePoint(stateRef.buffer.codePointAt(cursor) ?? 32).length)); echo += raw }
+        else if (key === 'C') { cursor = Math.min(stateRef.buffer.length, cursor + (graphemes(stateRef.buffer.slice(cursor))[0]?.length ?? 0)); echo += raw }
         else if (key === 'H') { cursor = 0; echo += raw }
         else if (key === 'F') { cursor = stateRef.buffer.length; echo += raw }
-        else if (raw === '\x1b[3~') { stateRef.buffer = stateRef.buffer.slice(0, cursor) + stateRef.buffer.slice(cursor + 1); echo += raw }
+        else if (raw === '\x1b[3~') { stateRef.buffer = stateRef.buffer.slice(0, cursor) + stateRef.buffer.slice(cursor + (graphemes(stateRef.buffer.slice(cursor))[0]?.length ?? 0)); echo += raw }
         i += raw.length; continue
       }
       if (rest.startsWith('\x1b\r')) insert('\n')

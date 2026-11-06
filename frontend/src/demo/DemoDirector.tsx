@@ -1,3 +1,4 @@
+import { dt } from './messages.ts'
 /**
  * Everything the director draws: a caption, a spotlight ring, a ghost cursor, a ripple,
  * and the two controls a visitor needs (advance, stop).
@@ -88,9 +89,9 @@ export function DemoDirector() {
         class="demo-director-next"
         title={view.paused.label}
         onClick={() => void resume()}
-      >resume</button>
+      >{dt("demo.a83a31320d")}</button>
       <span class="demo-director-count">{view.paused.index} / {view.paused.total}</span>
-      <button aria-label="Dismiss the demo walkthrough" onClick={dismissResume}>×</button>
+      <button aria-label={dt("demo.1f5f29308e")} onClick={dismissResume}>×</button>
     </div>
   }
 
@@ -143,7 +144,7 @@ export function DemoDirector() {
       ? { top: narrow() ? 128 : TOP_DODGE, bottom: 'auto' as const }
       : { bottom: 18, top: 'auto' as const }
 
-  return <div class={`demo-director ${rect ? 'targeted' : 'centered'}`} role="dialog" aria-label="Demo walkthrough">
+  return <div class={`demo-director ${rect ? 'targeted' : 'centered'}`} role="dialog" aria-label={dt("demo.3b2ed97c7c")}>
     {/* The beat's own show layer. Keyed by the sequence number so a new beat mounts a
         fresh one rather than reusing the previous beat's elements, which would inherit
         their finished animations and draw nothing. */}
@@ -184,7 +185,7 @@ export function DemoDirector() {
         <span>{view.eyebrow || view.blurb}</span>
         {/* The explicit stop. Present for every run, gated or not: something driving the
             screen must always be dismissible by the person watching it. */}
-        <button onClick={() => stop('dismissed')} aria-label="Stop the demo walkthrough">stop ×</button>
+        <button onClick={() => stop('dismissed')} aria-label={dt("demo.40a3d51d78")}>{dt("demo.c7e8ba1506")}</button>
       </header>
       <div class="demo-director-copy">
         {view.say && <h2>{view.say}</h2>}
@@ -200,10 +201,10 @@ export function DemoDirector() {
             for a gated beat ("skip step", beside the instruction it was waiting on); the
             walkthrough drives itself now, so there is one button and it always means the
             same thing. */}
-        <button onClick={togglePlayback} aria-label={view.held ? "Play walkthrough" : "Pause walkthrough"}>{view.held ? "Play" : "Pause"}</button>
-        <button onClick={() => void start(view.scenarioId)} aria-label="Replay walkthrough">Replay</button>
+        <button onClick={togglePlayback} aria-label={view.held ? dt("demo.c09de7c1ff") : dt("demo.4ace6a681c")}>{view.held ? dt('demo.play') : dt('demo.pause')}</button>
+        <button onClick={() => void start(view.scenarioId)} aria-label={dt("demo.aed3efb1ce")}>{dt("demo.c8dae6371b")}</button>
         <button class="demo-director-next" onClick={() => (last ? stop('dismissed') : advanceBeat())}>
-          {last ? 'Start playing' : 'Next'}
+          {last ? dt("demo.3b10394baa") : dt('demo.next')}
         </button>
       </footer>
     </section>

@@ -165,6 +165,7 @@ if(new URLSearchParams(location.search).has('localization')){
 }
 const RESPONSES: Record<string, unknown> = {
   '/api/settings/bundle': BUNDLE,
+  '/api/keybindings': KEYBINDINGS,
   '/api/projects': [
     {id:'p3',name:'Zulu'},
     {id:'p1',name:'Alpha'},

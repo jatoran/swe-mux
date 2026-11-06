@@ -15,6 +15,21 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-05
+
+### Added
+
+- The website demo now supports English and Simplified Chinese, including walkthroughs, sample conversations and desktop/phone controls.
+  Language switching preserves sessions and keymaps.
+  The website links directly to the Chinese README and demo.
+
+### Fixed
+
+- Chinese input-method candidate keys no longer trigger application shortcuts, dismiss dialogs or get recorded as shortcut bindings.
+  Starting composition cancels an unfinished shortcut sequence.
+- Command names, keymap descriptions and keyboard conflict warnings now follow the selected UI language.
+- Chinese text and emoji in the simulated demo terminal use their correct cell widths and preserve character boundaries during editing.
+
 ## [0.4.0] - 2026-11-05
 
 ### Added
@@ -1168,7 +1183,8 @@ macOS is implemented and typechecked but has never been executed.
   resolved dependency closure that runs in the test suite, and a payload check over the built
   desktop bundle. No GPL or AGPL code ships; the two LGPL libraries ship as replaceable source.
 
-[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/jatoran/swe-mux/releases/tag/v0.4.1
 [0.4.0]: https://github.com/jatoran/swe-mux/releases/tag/v0.4.0
 [0.3.0]: https://github.com/jatoran/swe-mux/releases/tag/v0.3.0
 [0.2.9]: https://github.com/jatoran/swe-mux/releases/tag/v0.2.9

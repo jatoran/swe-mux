@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
@@ -292,7 +293,7 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
       role="button"
       title={t("RailEditor.f3c9b51a58", { label: label, value2: item ? ` — ${itemMeta(item)}` : '', value3: mine ? t("RailEditor.ed58f6e7e2", { value1: projectName }) : '', value4: filtered ? t("RailEditor.0f194aef29", { value1: previewBackend }) : '' })}
       onPointerDown={event => startDrag(event, { kind: 'chip', ref }, label)}
-      onKeyDown={event => onChipKey(event, ref)}
+      onKeyDown={event => { if (isComposingKey(event)) return; return onChipKey(event, ref) }}
     >
       <span class="rail-chip-label">{item ? renderItemPreview(item, label) : label}</span>
       {/* Hiding is the subtractive half of a splice, and it is a *separate* control
@@ -412,7 +413,9 @@ export function RailEditor({ initialScope = '', contextProjectId }: { initialSco
         title={t("RailEditor.3f50ae96a4", { value1: chipLabel(item) || item.id, meta: meta })}
         onPointerDown={event => startDrag(event, { kind: 'catalog', itemId: item.id }, chipLabel(item) || item.id)}
         onClick={() => { if (!justDragged()) setExpandedItem(expanded ? null : item.id) }}
-        onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setExpandedItem(expanded ? null : item.id) } }}
+        onKeyDown={event => {
+      if (isComposingKey(event)) return
+ if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setExpandedItem(expanded ? null : item.id) } }}
       >
         <div class="rail-id">
           <span class="rail-name">{renderItemPreview(item, chipLabel(item) || item.id)}{projectItem && <i class="rail-origin project" title={t("RailEditor.4b564ae7de", { projectName: projectName })}>{t("RailEditor.11453073e0")}</i>}</span>

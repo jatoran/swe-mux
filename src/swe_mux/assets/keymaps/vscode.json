@@ -1,11 +1,11 @@
 {
   "id": "vscode",
   "title": "VS Code",
-  "description": "VS Code's chords where swe-mux has the same idea: the palette, the explorer/git/extensions panels, split and terminal, and the Ctrl+K chord prefix. Panes here are VS Code's editor groups and tabs are its editor tabs, which is the closest honest mapping.",
   "leader": "ctrl+shift+space",
   "prefix": "ctrl+k",
-  "warning": "Ctrl+K is a shell's kill-to-end-of-line and Ctrl+B is tmux's prefix. Both are taken from whatever runs inside a pane while this preset is active.",
-  "include": ["leader-tree"],
+  "include": [
+    "leader-tree"
+  ],
   "bindings": {
     "ctrl+shift+p": "palette.open",
     "f1": "palette.open",
@@ -49,15 +49,57 @@
     "alt+9": "tab.activate(9)"
   },
   "rules": [
-    { "keys": "ctrl+pageup", "command": "tab.previous", "host": "desktop" },
-    { "keys": "ctrl+pagedown", "command": "tab.next", "host": "desktop" },
-    { "keys": "meta+shift+p", "command": "palette.open", "platform": "mac" },
-    { "keys": "meta+p", "command": "palette.files", "platform": "mac" },
-    { "keys": "meta+shift+e", "command": "drawer.files", "platform": "mac" },
-    { "keys": "meta+shift+g", "command": "drawer.git", "platform": "mac" },
-    { "keys": "meta+b", "command": "sidebar.toggle", "platform": "mac" },
-    { "keys": "meta+j", "command": "drawer.toggle", "platform": "mac" },
-    { "keys": "meta+\\", "command": "pane.splitHorizontal", "platform": "mac" },
-    { "keys": "meta+,", "command": "settings.open", "platform": "mac" }
-  ]
+    {
+      "keys": "ctrl+pageup",
+      "command": "tab.previous",
+      "host": "desktop"
+    },
+    {
+      "keys": "ctrl+pagedown",
+      "command": "tab.next",
+      "host": "desktop"
+    },
+    {
+      "keys": "meta+shift+p",
+      "command": "palette.open",
+      "platform": "mac"
+    },
+    {
+      "keys": "meta+p",
+      "command": "palette.files",
+      "platform": "mac"
+    },
+    {
+      "keys": "meta+shift+e",
+      "command": "drawer.files",
+      "platform": "mac"
+    },
+    {
+      "keys": "meta+shift+g",
+      "command": "drawer.git",
+      "platform": "mac"
+    },
+    {
+      "keys": "meta+b",
+      "command": "sidebar.toggle",
+      "platform": "mac"
+    },
+    {
+      "keys": "meta+j",
+      "command": "drawer.toggle",
+      "platform": "mac"
+    },
+    {
+      "keys": "meta+\\",
+      "command": "pane.splitHorizontal",
+      "platform": "mac"
+    },
+    {
+      "keys": "meta+,",
+      "command": "settings.open",
+      "platform": "mac"
+    }
+  ],
+  "description_message": "keybinding.preset.vscode.description",
+  "warning_message": "keybinding.preset.vscode.warning"
 }

@@ -86,18 +86,18 @@ type ViewState = {
  * and the section is mirrored by the generic tablist rule below.
  */
 const OVERLAY_COMMANDS: Record<string, string> = {
-  System: 'resources.open',
-  'Usage & activity': 'usage.open',
-  'Fleet queue': 'queue.fleet',
-  'Agent session history': 'history.open',
-  'Manage projects': 'project.create',
-  'Prompt library': 'prompts.open',
-  Help: 'help.open',
-  Automation: 'hooks.open',
+  resources: 'resources.open',
+  usage: 'usage.open',
+  fleet: 'queue.fleet',
+  history: 'history.open',
+  projects: 'project.create',
+  prompts: 'prompts.open',
+  help: 'help.open',
+  automation: 'hooks.open',
   // Configure Actions is not here because it is no longer a modal: it is a section of
   // Settings, so it mirrors as `Settings` plus the generic tablist rule below.
-  Settings: 'settings.open',
-  'Command palette': 'palette.open',
+  settings: 'settings.open',
+  palette: 'palette.open',
 }
 
 /**
@@ -155,11 +155,11 @@ function readView(): ViewState {
   for (const strip of document.querySelectorAll('[role="tablist"][aria-label]')) {
     if (!mirrorableTablist(strip) || !visible(strip)) continue
     const selected = strip.querySelector('[role="tab"][aria-selected="true"]')
-    if (selected) tabs[strip.getAttribute('aria-label') || ''] = text(selected.textContent)
+    if (selected) tabs[strip.getAttribute('data-tab-group') || strip.getAttribute('aria-label') || ''] = selected.getAttribute('data-tab-id') || selected.getAttribute('data-settings-tab') || text(selected.textContent)
   }
 
   return {
-    overlay: dialogs.length ? dialogs[dialogs.length - 1].getAttribute('aria-label') || '' : '',
+    overlay: dialogs.length ? dialogs[dialogs.length - 1].getAttribute('data-dialog-id') || '' : '',
     menuOpen: Boolean(document.querySelector('[data-tutorial="main-menu"]')),
     narrow: narrow(),
     // Two readings for two presentations of one control: the phone slides the sidebar in
@@ -332,7 +332,7 @@ export function installViewMirror(): void {
       converging = false
       // Whatever this frame actually reached is now its own reading, and must not be
       // re-broadcast as though the visitor had done it.
-      published = document.querySelector('.workspace') ? readView() : published
+      if (desired) published = document.querySelector('.workspace') ? readView() : published
     }
   }
 
@@ -355,6 +355,18 @@ export function installViewMirror(): void {
     desired = payload.view
     void converge()
   })
+
+  // A visitor acting during the echo-suppression window owns the next view.
+  // Otherwise opening a menu just after a language switch can be swallowed as
+  // part of the remote convergence, and the other frame never sees the action.
+  const takeControl = (event: Event) => {
+    if (!event.isTrusted) return
+    desired = null
+    quietUntil = 0
+    published = null
+  }
+  window.addEventListener('pointerdown', takeControl, true)
+  window.addEventListener('keydown', takeControl, true)
 
   // The DOM is the source, so the DOM is what is watched. A coarse interval underneath
   // it catches the readings no mutation announces - the URL rewrite behind a focus

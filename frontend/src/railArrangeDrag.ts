@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 // The pointer half of in-place rail arrangement. Rules: `railArrange.ts`.
 //
 // It is a sibling of the Actions editor's driver (`railDrag.ts`) rather than a reuse of it,
@@ -330,6 +331,8 @@ export function beginRailArrangeDrag(
   }
   function onBlur() { finish(false) }
   function onKey(keyEvent: KeyboardEvent) {
+      if (isComposingKey(keyEvent)) return
+
     if (keyEvent.key !== 'Escape') return
     // Escape abandons the drag without leaving arrange mode, so the two escapes are ordered
     // the way a hand expects: put the chip back first, close the mode on a second press.

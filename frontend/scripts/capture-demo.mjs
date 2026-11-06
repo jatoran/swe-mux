@@ -67,6 +67,7 @@ const SURFACES = {
 function parseArgs(argv) {
   const options = {
     scenario: 'queue',
+    language: 'en',
     surface: 'desktop',
     out: DEFAULT_OUT,
     seed: '',
@@ -79,6 +80,7 @@ function parseArgs(argv) {
     const flag = argv[index]
     const value = () => argv[(index += 1)]
     if (flag === '--scenario') options.scenario = value()
+    else if (flag === '--language') { options.language = value(); if (!['en', 'zh-Hans'].includes(options.language)) throw new Error('language must be en or zh-Hans') }
     else if (flag === '--surface') options.surface = value()
     else if (flag === '--out') options.out = resolve(value())
     else if (flag === '--seed') options.seed = value()
@@ -181,9 +183,12 @@ async function playOnce({ browser, origin, options, outDir, video }) {
     await context.addInitScript(() => localStorage.setItem('mux.drawer.width.v1', '680'))
   }
   const page = await context.newPage()
+  const recordingStart = Date.now()
+  const cues = []
   const query = new URLSearchParams({
     deterministic: '1',
     scenario: options.scenario,
+    lang: options.language,
     // Only the rig sets this: it draws a marker where a *real* press landed, which is
     // what makes a recorded interaction legible as one rather than as the UI twitching.
     capture: '1',
@@ -215,6 +220,7 @@ async function playOnce({ browser, origin, options, outDir, video }) {
     if (!view) break
     if (view.index !== lastIndex && view.index > 0) {
       lastIndex = view.index
+      cues.push({ start: Date.now() - recordingStart, text: view.say })
       const name = `beat-${String(view.index).padStart(2, '0')}.png`
       // A beat's act is performed after its caption is published, and the ghost cursor
       // takes ~0.6s to travel and press, so a still shot the instant the counter moves
@@ -230,6 +236,10 @@ async function playOnce({ browser, origin, options, outDir, video }) {
     await page.waitForTimeout(120)
   }
 
+  const recordingEnd = Date.now() - recordingStart
+  const timestamp = value => new Date(value).toISOString().slice(11, 23).replace('.', ',')
+  const subtitles = cues.map((cue, index) => `${index + 1}\n${timestamp(cue.start)} --> ${timestamp(cues[index + 1]?.start ?? recordingEnd)}\n${cue.text}\n`).join('\n')
+  await writeFile(join(outDir, 'captions.srt'), subtitles + '\n')
   const diagnostics = await page.evaluate(() => window.__demoDirector.diagnostics())
   await assertCleanFrame()
   await writeFile(join(outDir, 'diagnostics.json'), JSON.stringify(diagnostics, null, 2))
@@ -266,7 +276,7 @@ async function main() {
   const options = parseArgs(process.argv.slice(2))
   const { server, port } = await serveSite(options.port)
   const origin = `http://127.0.0.1:${port}`
-  const outDir = join(options.out, `${options.scenario}-${options.surface}`)
+  const outDir = join(options.out, `${options.scenario}-${options.surface}${options.language === 'en' ? '' : '-' + options.language}`)
   await archiveOutput(outDir)
   await mkdir(outDir, { recursive: true })
 
@@ -301,10 +311,12 @@ async function main() {
 
     await writeFile(join(outDir, 'manifest.json'), `${JSON.stringify({
       scenario: options.scenario,
+      language: options.language,
       surface: options.surface,
       seed: options.seed || 'default',
       deterministic: true,
       video: first.videoFile || null,
+      captions: 'captions.srt',
       stills: first.stills,
       determinismChecked: identical,
       // The fingerprint is the artifact's provenance: it says exactly which fixture

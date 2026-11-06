@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { locale as uiLocale } from './localization/index.ts'
 import { rich, t } from './localization/index.ts'
 import { deviceMode, mobileLayout, touchInput, watchDeviceMode } from './deviceMode'
@@ -954,12 +955,16 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       if (!(target instanceof Element) || !target.closest('.terminal-menu')) setMenu(null)
     }
     const dismissEscape = (event: KeyboardEvent) => {
+      if (isComposingKey(event)) return
+
       if (event.key !== 'Escape') return
       event.preventDefault()
       event.stopPropagation()
       setMenu(null)
     }
     const navigate = (event: KeyboardEvent) => {
+      if (isComposingKey(event)) return
+
       if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
       const buttons = [...document.querySelectorAll<HTMLButtonElement>('.terminal-menu button:not(:disabled)')]
       if (!buttons.length) return
@@ -1163,6 +1168,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     }
     window.addEventListener('mux:theme', onTheme)
     term.attachCustomKeyEventHandler(event => {
+      // Let xterm's composition engine own IME keys, even while a leader was armed.
+      if (isComposingKey(event)) return true
       // The pane no longer resolves commands itself: with multi-chord sequences it
       // cannot, because `p` alone says nothing about whether a leader is armed. It
       // asks the one owner of that state (`keymapDispatch`) whether swe-mux is
@@ -2920,6 +2927,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       else requestAnimationFrame(keepMobileCaretAtEnd)
     }
     const mobileKeyDown=(event:KeyboardEvent)=>{
+      if (isComposingKey(event)) return
+
       notePhysicalInput(event, 'keydown')
       const sequence:Record<string,string>={
         ArrowUp:'\x1b[A',ArrowDown:'\x1b[B',ArrowRight:'\x1b[C',ArrowLeft:'\x1b[D',
@@ -4487,6 +4496,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   } as Record<string,string>
     return <div class={`terminal-surface${utilityPane?' plugin-utility-surface':''}${peekOffset>0?' keyboard-peek':''}${peekAnimated?' keyboard-peek-animated':''}${keyboardReserved?' keyboard-reserved':''}`} style={surfaceStyle}><div class={`terminal-host${letterboxActive?' letterboxed':''}`} style={claudeHostStyle} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label={t("TerminalPane.2aa93c2f61")} onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label={t("TerminalPane.c6b7117c60")} autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/>{mobileDraftOpen && <MobileTerminalDraft sessionName={sessionDisplayName(session)||session.id} text={mobileDraftText} busy={mobileDraftInserting} error={mobileDraftError} onInput={setMobileDraftText} onInsert={()=>void insertMobileDraft()} onClear={()=>setMobileDraftText('')}/>} {!utilityPane&&railOn && <div ref={railRef} class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}${arrange.arranging?' rail-arranging':''}${railHoverOn?' rail-hover':''}${railHoverOn&&railShown?' rail-hover-shown':''}`} role="toolbar" aria-label={t("TerminalPane.c9df2f3989")} onClick={event=>{if(arrange.arranging)return;pulseRail(event.currentTarget,event.target)}}>{arrange.arranging && <RailArrangePanel device={railDevice} rows={arrangeRows} catalog={arrangeCatalog} catalogOpen={arrange.catalogOpen} onToggleCatalog={arrange.toggleCatalog} scopeLabel={railArrangeScopeLabel(arrangeScope)} scopeDetail={railArrangeScopeDetail(arrangeScope)} preview={arrange.preview} canUndo={arrange.canUndo} onUndo={arrange.undo} onDone={arrange.exit} onChipPointerDown={arrange.beginChipDrag} onCatalogPointerDown={arrange.beginCatalogDrag}/>}<div class="terminal-action-rows" data-rail-arrange-surface={arrange.arranging?'rail':undefined} onPointerDown={event=>arrange.beginChipDrag(event as unknown as PointerEvent)}>{renderedRailRows.map((row,index)=><RailStrip key={row.id} chips={row.nodes} label={renderedRailRows.length>1 ? t("TerminalPane.946cba5963", { value1: index+1 }) : t("TerminalPane.ff8059dc67")} onConfigure={()=>onConfigureRail?.()} device={railDevice} rowId={row.id} arranging={arrange.arranging} caretAt={arrange.caretFor(row.id)} onArrange={arrange.enter} openRequest={railPopoverRequest?.rowId===row.id?railPopoverRequest.seq:0}/>)}</div>{mobilePinnedSend && <button class="terminal-mobile-send" title={t("TerminalPane.2d9187118c")} aria-label={t("TerminalPane.cc46c03a42")} onClick={()=>sendKey('\r')}><SendIcon/></button>}</div>}{peekToggleVisible(effectiveKeyboardInset,peekOffset>0,offTail,appOffTail) && <button class={`terminal-peek-top${peekOffset>0?' active':''}`} aria-pressed={peekOffset>0} title={peekOffset>0 ? t("TerminalPane.de7eee2dfa") : t("TerminalPane.9c82c13443")} aria-label={peekOffset>0 ? t("TerminalPane.de7eee2dfa") : t("TerminalPane.9d50f35db1")} onMouseDown={holdSoftKeyboard} onClick={()=>applyPeekRef.current('toggle')}>{peekOffset>0 ? '↓' : '↑'}</button>}{clipboardStatus && <div class="terminal-clip-toast" role="status">{clipboardStatus}</div>}{(offTail||appOffTail) && <button class="terminal-jump-latest" title={t("TerminalPane.54e9d8f727")} aria-label={t("TerminalPane.41608597bf")} onMouseDown={holdSoftKeyboard} onClick={jumpToLatest}>↓</button>}{fileDropActive && <div class="terminal-image-drop" role="status">{rich("TerminalPane.df939cadfc", { backend: session.backend })}</div>}{findOpen && <div class="terminal-find" role="search">
     <input value={findQuery} onInput={event => { setFindQuery(event.currentTarget.value); setFindResult('') }} onKeyDown={event => {
+      if (isComposingKey(event)) return
+
       // Stopped here so the keypress is one pop, on this bar's own level.
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); dismissStack.pop() }
       if (event.key === 'Enter') { event.preventDefault(); search(event.shiftKey) }

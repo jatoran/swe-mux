@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import type { ComponentChildren, JSX } from 'preact'
 
 export type DrawerViewTab = {
@@ -38,7 +39,7 @@ export function DrawerViewTabs({ active, ariaLabel, items, onSelect, className, 
     aria-label={ariaLabel}
     style={{ '--drawer-view-count': String(items.length) } as JSX.CSSProperties}
   >
-    {items.map((item, index) => <button
+    {items.map((item, index) => <button data-tab-id={item.id}
       key={item.id}
       type="button"
       role="tab"
@@ -48,6 +49,8 @@ export function DrawerViewTabs({ active, ariaLabel, items, onSelect, className, 
       tabIndex={item.id === active ? 0 : -1}
       onClick={() => onSelect(item.id)}
       onKeyDown={event => {
+      if (isComposingKey(event)) return
+
         if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
         event.preventDefault()
         const offset = event.key === 'ArrowLeft' ? -1 : 1

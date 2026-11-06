@@ -1,0 +1,160 @@
+{
+  "en": {
+    "title": "TRY THE INTERACTIVE DEMO",
+    "desktop": "desktop",
+    "phone": "phone",
+    "both": "both",
+    "scenariosLabel": "scenarios",
+    "chooseScenario": "Choose a walkthrough",
+    "scenarioTitle": "Play a scripted run, or replay the walkthrough",
+    "open": "open demo ⤢",
+    "openTitle": "Open the demo as its own page. Use this view to try the terminal keyboard on a phone.",
+    "reset": "reset",
+    "resetTitle": "Discard everything you changed and start fresh",
+    "tryKeys": "Try your keys",
+    "keyboardHint": "Click a pane to try the keyboard. Browser shortcuts still apply.",
+    "keymapTitle": "Try a keyboard preset",
+    "keymapFailure": "Could not change the keymap. Reload the demo and try again.",
+    "disclosure": "The real interface with simulated agent activity. No install, account or provider connection.",
+    "phoneKeyboard": "Open demo to try the terminal keyboard on a phone.",
+    "desktopFrame": "Interactive swe-mux demo, desktop layout. Simulated sessions; nothing connects to a real daemon.",
+    "phoneFrame": "Interactive swe-mux demo, phone layout. The same simulated fleet as the desktop frame.",
+    "scenarios": [
+      {
+        "id": "tour",
+        "label": "Take a tour of the workspace"
+      },
+      {
+        "id": "status",
+        "label": "See which agent needs you"
+      },
+      {
+        "id": "input",
+        "label": "See familiar editing keys in an agent prompt"
+      },
+      {
+        "id": "attachment",
+        "label": "See an image pasted into an agent prompt"
+      },
+      {
+        "id": "clipboard",
+        "label": "Open your shared clipboard history"
+      },
+      {
+        "id": "history",
+        "label": "Find earlier sessions and inspect their work"
+      },
+      {
+        "id": "queue",
+        "label": "Queue a prompt behind a running turn"
+      },
+      {
+        "id": "orchestrate",
+        "label": "Let agents request help and report back"
+      },
+      {
+        "id": "preview",
+        "label": "Open your dev server as a pane"
+      },
+      {
+        "id": "land",
+        "label": "Land a branch behind your approved checks"
+      },
+      {
+        "id": "landfailure",
+        "label": "See what happens when a check fails"
+      },
+      {
+        "id": "palette",
+        "label": "Find any command or session by name"
+      },
+      {
+        "id": "keymap",
+        "label": "Switch to familiar keyboard shortcuts"
+      },
+      {
+        "id": "voice",
+        "label": "Ask the assistant what needs you"
+      }
+    ]
+  },
+  "zh-Hans": {
+    "title": "试用交互演示",
+    "desktop": "桌面",
+    "phone": "手机",
+    "both": "同时显示",
+    "scenariosLabel": "场景",
+    "chooseScenario": "选择导览",
+    "scenarioTitle": "播放预设场景，或重新观看导览",
+    "open": "打开演示 ⤢",
+    "openTitle": "单独打开演示页面，即可在手机上试用终端键盘。",
+    "reset": "重置",
+    "resetTitle": "清除所有演示修改，重新开始",
+    "tryKeys": "试用快捷键",
+    "keyboardHint": "点击窗格试用键盘。浏览器自身的快捷键限制仍然适用。",
+    "keymapTitle": "试用快捷键预设",
+    "keymapFailure": "无法切换快捷键预设。请重新加载演示后重试。",
+    "disclosure": "真实界面配合模拟智能体活动，无需安装、账号或连接服务提供商。",
+    "phoneKeyboard": "单独打开演示，即可在手机上试用终端键盘。",
+    "desktopFrame": "swe-mux 交互演示，桌面布局。会话均为模拟，不连接真实守护进程。",
+    "phoneFrame": "swe-mux 交互演示，手机布局。与桌面预览共享同一组模拟会话。",
+    "scenarios": [
+      {
+        "id": "tour",
+        "label": "浏览工作区导览"
+      },
+      {
+        "id": "status",
+        "label": "查看哪个智能体需要你"
+      },
+      {
+        "id": "input",
+        "label": "在智能体提示词中试用编辑快捷键"
+      },
+      {
+        "id": "attachment",
+        "label": "将图片粘贴到智能体提示词"
+      },
+      {
+        "id": "clipboard",
+        "label": "打开共享剪贴板历史"
+      },
+      {
+        "id": "history",
+        "label": "查找以前的会话并检查工作"
+      },
+      {
+        "id": "queue",
+        "label": "在运行中的轮次之后排入提示词"
+      },
+      {
+        "id": "orchestrate",
+        "label": "让智能体请求协助并汇报"
+      },
+      {
+        "id": "preview",
+        "label": "将开发服务器打开为窗格"
+      },
+      {
+        "id": "land",
+        "label": "经过已批准的检查后合入分支"
+      },
+      {
+        "id": "landfailure",
+        "label": "查看检查失败时如何处理"
+      },
+      {
+        "id": "palette",
+        "label": "按名称查找命令或会话"
+      },
+      {
+        "id": "keymap",
+        "label": "切换到熟悉的快捷键"
+      },
+      {
+        "id": "voice",
+        "label": "询问助手哪些事需要你"
+      }
+    ]
+  }
+}

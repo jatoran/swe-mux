@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { dateTimeFormatter } from './localization/index.ts'
 import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { mobileLayout } from './deviceMode'
@@ -180,6 +181,8 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
     const frame = requestAnimationFrame(() => sourceMenuPanel.current?.querySelector<HTMLButtonElement>('button')?.focus())
     const dismiss = () => setSourceMenu(null)
     const key = (event: KeyboardEvent) => {
+      if (isComposingKey(event)) return
+
       if (event.key !== 'Escape') return
       event.preventDefault()
       event.stopImmediatePropagation()

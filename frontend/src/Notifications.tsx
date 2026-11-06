@@ -134,7 +134,7 @@ export function NotificationsTab({data,onOpenSession,onChanged,project}:{
       confirmLabel={t("Notifications.3671c54cf8")}
       applyDevice={unmuteAlerts}
       onGranted={()=>setAlertsMuted(!alertPreferences().enabled)}/>}
-    <div class="alerts-view-tabs" role="tablist" aria-label={t("Notifications.87b908c1bd")}>
+    <div data-tab-group="Notifications.87b908c1bd" class="alerts-view-tabs" role="tablist" aria-label={t("Notifications.87b908c1bd")}>
       <button role="tab" aria-selected={view==='now'} class={view==='now'?'active':''}
         title={t("Notifications.748d5d97d4")}
         onClick={()=>setView('now')}>{t("Notifications.fe18013d93")}</button>

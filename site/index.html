@@ -62,7 +62,7 @@
 
   /* Mono carries identity: headings, labels, commands, anything terminal-shaped.
      Sans carries prose, because monospace paragraphs are what made this page tiring. */
-  --mono: ui-monospace, "SF Mono", SFMono-Regular, "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, "Microsoft YaHei UI", "Noto Sans CJK SC", "PingFang SC", monospace;
   --sans: "Inter var", Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI Variable Text",
           "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --pad: clamp(18px, 4vw, 40px);
@@ -664,6 +664,9 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 .hero .sub { max-width: 850px; }
 .hero-facts { color: var(--fg-2); margin: 0 0 20px; }
 .demo-disclosure { padding: 8px 12px; margin: 0; color: var(--fg-2); font: 13px/1.5 var(--sans); border-top: 1px solid var(--line); }
+.demo-language { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.demo-language select { max-width: 120px; background: var(--panel); color: var(--fg); border: 1px solid var(--line-2); padding: 5px; font: inherit; }
+.demo-head { flex-wrap: wrap; }
 .demo-keymap-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--line); font-size: 12px; }
 .demo-keymap-bar[hidden] { display: none; }
 .demo-keymap-buttons { display: inline-flex; flex-wrap: wrap; gap: 4px; }
@@ -749,6 +752,7 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
     machine. Every session says whether it is working or waiting on you, and why. The whole workspace
     opens on your <b>phone</b>: the terminal, approvals, diffs and your running dev server.</p>
     <p class="hero-facts">Open source. No account, relay or telemetry. Your own Tailscale network.</p>
+    <p class="hero-languages">Available in English and 简体中文. <a lang="zh-Hans" href="https://github.com/jatoran/swe-mux/blob/master/README.zh-CN.md">中文安装说明</a> · <a lang="zh-Hans" href="demo/?lang=zh-Hans">试用中文演示</a></p>
     <div class="ic">
       <div class="ic-head">
         <div class="ic-tabs" role="tablist" aria-label="Install method">
@@ -788,6 +792,7 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
           <button class="demo-tab" type="button" role="tab" data-view="phone" aria-selected="false">phone</button>
           <button class="demo-tab" type="button" role="tab" data-view="both" aria-selected="false">both</button>
         </div>
+        <label class="demo-language" for="demolanguage"><span>Language / 语言</span><select id="demolanguage" aria-label="Demo language / 演示语言"><option value="en">English</option><option value="zh-Hans">简体中文</option></select></label>
         <label class="demo-pick" for="demoscenario"><span class="demo-pick-label">scenarios</span>
           <select id="demoscenario" title="Play a scripted run inside the demo. It drives itself; touch anything to take over."><option value="">Choose a walkthrough</option>
 <option value="tour">Take a tour of the workspace</option>
@@ -811,8 +816,7 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
         <span>Try your keys</span><span class="demo-keymap-buttons"></span>
         <span id="demokeymaphint" role="status">Click a pane to try the keyboard. Browser shortcuts still apply.</span>
       </div>
-      <p class="demo-disclosure">The real interface with simulated agent activity. No install, account or provider connection.
-      <a href="demo/">Open demo</a> to try the terminal keyboard on a phone.</p>
+      <p class="demo-disclosure"><span class="demo-disclosure-copy">The real interface with simulated agent activity. No install, account or provider connection. </span><a href="demo/">Open demo to try the terminal keyboard on a phone.</a></p>
       <div class="demo-stage" id="demostage" data-view="desktop">
         <div class="demo-frame demo-desktop"><iframe title="Interactive swe-mux demo, desktop layout. Simulated sessions; nothing connects to a real daemon." data-src="demo/" loading="lazy"></iframe></div>
         <div class="demo-frame demo-phone"><div class="demo-phone-screen"><iframe title="Interactive swe-mux demo, phone layout. The same simulated fleet as the desktop frame." data-src="demo/" loading="lazy"></iframe></div></div>
@@ -1408,9 +1412,73 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
      themselves, which is the part that has to keep working. */
   var PEER = Math.random().toString(36).slice(2, 10);
   var restarts = 0;
+  var languagePicker = document.getElementById('demolanguage');
+  var demoLanguage = new URLSearchParams(location.search).get('lang');
+  if (demoLanguage !== 'en' && demoLanguage !== 'zh-Hans') {
+    try { demoLanguage = localStorage.getItem('swemux-demo-language'); } catch (_) {}
+  }
+  if (demoLanguage !== 'en' && demoLanguage !== 'zh-Hans') {
+    demoLanguage = /^(zh(?:-CN|-SG|-Hans)?)(?:$|-)/i.test(navigator.language || '') ? 'zh-Hans' : 'en';
+  }
+  var demoCopy = null;
+  function applyDemoLanguage(language, forward) {
+    if (language !== 'en' && language !== 'zh-Hans') return;
+    demoLanguage = language;
+    languagePicker.value = language;
+    document.getElementById('demo').lang = language;
+    try { localStorage.setItem('swemux-demo-language', language); } catch (_) {}
+    document.querySelectorAll('.demo a[href^="demo/"]').forEach(function (link) {
+      link.href = 'demo/?lang=' + encodeURIComponent(language);
+    });
+    var copy = demoCopy && demoCopy[language];
+    if (copy) {
+      document.querySelector('.demo-title').textContent = copy.title;
+      document.querySelectorAll('.demo-tab').forEach(function (button) { button.textContent = copy[button.dataset.view]; });
+      document.querySelector('.demo-pick-label').textContent = copy.scenariosLabel;
+      var scenario = document.getElementById('demoscenario');
+      scenario.title = copy.scenarioTitle;
+      scenario.replaceChildren();
+      var first = document.createElement('option'); first.value = ''; first.textContent = copy.chooseScenario; scenario.appendChild(first);
+      copy.scenarios.forEach(function (entry) {
+        var option = document.createElement('option'); option.value = entry.id; option.textContent = entry.label; scenario.appendChild(option);
+      });
+      var full = document.querySelector('.demo-full'); full.textContent = copy.open; full.title = copy.openTitle;
+      var reset = document.getElementById('demoreset'); reset.textContent = copy.reset; reset.title = copy.resetTitle;
+      document.querySelector('#demokeymaps > span').textContent = copy.tryKeys;
+      document.getElementById('demokeymaps').setAttribute('aria-label', copy.keymapTitle);
+      document.getElementById('demokeymaphint').textContent = copy.keyboardHint;
+      document.querySelector('.demo-disclosure-copy').textContent = copy.disclosure + ' ';
+      document.querySelector('.demo-disclosure a').textContent = copy.phoneKeyboard;
+      stage.querySelector('.demo-desktop iframe').title = copy.desktopFrame;
+      stage.querySelector('.demo-phone iframe').title = copy.phoneFrame;
+    }
+    if (forward) stage.querySelectorAll('iframe').forEach(function (frame) {
+      if (!frame.src) return;
+      try {
+        frame.contentWindow.dispatchEvent(new frame.contentWindow.CustomEvent('swemux-demo:select-language', { detail: language }));
+      } catch (error) { console.warn('demo language', error); }
+    });
+  }
+  languagePicker.addEventListener('change', function () { applyDemoLanguage(languagePicker.value, true); });
+  fetch('demo-language.json').then(function (response) {
+    if (!response.ok) throw new Error('Demo language catalog: ' + response.status);
+    return response.json();
+  }).then(function (catalog) { demoCopy = catalog; applyDemoLanguage(demoLanguage, false); })
+    .catch(function (error) { console.warn('demo language catalog', error); });
+  applyDemoLanguage(demoLanguage, false);
+  stage.querySelectorAll('iframe').forEach(function (frame) {
+    frame.addEventListener('load', function () {
+      try {
+        var win = frame.contentWindow;
+        win.addEventListener('swemux-demo:language-changed', function (event) { applyDemoLanguage(event.detail, false); });
+        win.dispatchEvent(new win.CustomEvent('swemux-demo:select-language', { detail: demoLanguage }));
+      } catch (error) { console.warn('demo language listener', error); }
+    });
+  });
+
   function frameSrc(frame, scenario) {
     var src = frame.getAttribute('data-src');
-    var query = 'peer=' + PEER;
+    var query = 'peer=' + PEER + '&lang=' + encodeURIComponent(demoLanguage);
     /* A distinct URL every time, so asking for the same scenario twice really reloads
        rather than being treated as a navigation to where the frame already is. */
     if (scenario) query += '&scenario=' + encodeURIComponent(scenario) + '&run=' + (restarts += 1);
@@ -1541,13 +1609,13 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
         button.addEventListener('click', async function () {
           Array.from(keysButtons.children).forEach(function (b) { b.disabled = true; });
           try { await frame.contentWindow.__demoControls.selectKeymap(preset.id); }
-          catch (error) { keysHint.textContent = 'Could not change the keymap. Reload the demo and try again.'; console.warn('demo keymap', error); }
+          catch (error) { keysHint.textContent = demoCopy ? demoCopy[demoLanguage].keymapFailure : 'Could not change the keymap. Reload the demo and try again.'; console.warn('demo keymap', error); }
           finally { Array.from(keysButtons.children).forEach(function (b) { b.disabled = false; }); }
         });
         keysButtons.appendChild(button);
       });
       Array.from(keysButtons.children).forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.preset === current.preset)); });
-      keysHint.textContent = current.hint || 'Click a pane to try the keyboard. Browser shortcuts still apply.';
+      keysHint.textContent = current.hint || (demoCopy ? demoCopy[demoLanguage].keyboardHint : 'Click a pane to try the keyboard. Browser shortcuts still apply.');
     }
     drawKeys(); win.addEventListener('swemux-demo:keymap-changed', drawKeys);
   }

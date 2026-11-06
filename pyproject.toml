@@ -1,6 +1,6 @@
 [project]
 name = "swe-mux"
-version = "0.4.0"
+version = "0.4.1"
 description = "A terminal multiplexer for coding agents: live status for every session, and the whole workspace on your phone"
 readme = "README.md"
 requires-python = ">=3.12"

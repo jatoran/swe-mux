@@ -1,11 +1,11 @@
 {
   "id": "emacs",
   "title": "Emacs",
-  "description": "The C-x prefix and M-x, mapped onto swe-mux's windows and buffers: C-x 2 and C-x 3 split, C-x o walks them, C-x 0 and C-x 1 close and zoom, C-x b lists 'buffers' (sessions) and C-x g opens Git.",
   "leader": "ctrl+shift+space",
   "prefix": "ctrl+x",
-  "warning": "C-x is a prefix inside Emacs and inside a readline shell too, so an Emacs running in a pane loses it while this preset is active. C-c, C-a, C-e and C-k are deliberately left alone here: those are the shell bindings people actually feel.",
-  "include": ["leader-tree"],
+  "include": [
+    "leader-tree"
+  ],
   "bindings": {
     "ctrl+x 2": "pane.splitVertical",
     "ctrl+x 3": "pane.splitHorizontal",
@@ -35,6 +35,12 @@
     "f1": "palette.open"
   },
   "rules": [
-    { "keys": "meta+x", "command": "palette.commands", "platform": "mac" }
-  ]
+    {
+      "keys": "meta+x",
+      "command": "palette.commands",
+      "platform": "mac"
+    }
+  ],
+  "description_message": "keybinding.preset.emacs.description",
+  "warning_message": "keybinding.preset.emacs.warning"
 }

@@ -944,8 +944,10 @@ def test_the_transcript_tab_reads_and_only_reads() -> None:
     mount = re.search(r"<TranscriptTab ([^>]*)/>", drawer)
     assert mount is not None, "the drawer must mount the transcript tab"
     assert set(re.findall(r"(\w+)=", mount.group(1))) == {"session", "readAloud"}
-    for injection in ("onInsert", "onDone", "onSend", "/input"):
+    for injection in ("onInsert", "onDone", "onSend"):
         assert injection not in tab, injection
+    # Match a session-input endpoint, not a module such as ./inputComposition.ts.
+    assert not re.search(r"/api/sessions/[^\s\"\x27`]+/input", tab)
     # The one request this tab makes that is not a read asks for audio for a message it
     # is already showing. It cannot reach the conversation, and it names the message
     # rather than "the latest reply" — which is what lets the daemon answer with an

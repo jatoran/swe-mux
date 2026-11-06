@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { applyLanguagePreference } from './localization/index.ts'
 import { mobileLayout, watchDeviceMode } from './deviceMode'
@@ -1604,7 +1605,9 @@ export function App() {
     }
     const blurCancel=()=>finish(false)
     const cancel=()=>finish(false)
-    const key=(keyboard:KeyboardEvent)=>{if(keyboard.key==='Escape'){keyboard.preventDefault();finish(false)}}
+    const key=(keyboard:KeyboardEvent)=>{
+      if (isComposingKey(keyboard)) return
+if(keyboard.key==='Escape'){keyboard.preventDefault();finish(false)}}
     window.addEventListener('pointermove',move,{passive:false})
     window.addEventListener('pointerup',up)
     window.addEventListener('pointercancel',cancelPointer)
@@ -2306,6 +2309,8 @@ export function App() {
       if(next!==current&&!settingsOpen)scheduleUiScalePersist(next)
     }
     const onKey=(event:KeyboardEvent)=>{
+      if (isComposingKey(event)) return
+
       const intent=uiScaleKeyboardIntent(event)
       if(!intent)return
       consume(event)
@@ -3794,6 +3799,8 @@ export function App() {
     menuDismissedByPointer.current = false
     const frame = requestAnimationFrame(() => document.querySelector<HTMLElement>('.context-menu button:not(:disabled)')?.focus())
     const navigate = (event: KeyboardEvent) => {
+      if (isComposingKey(event)) return
+
       if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
       const buttons = [...document.querySelectorAll<HTMLButtonElement>('.context-menu button:not(:disabled)')]
       if (!buttons.length) return
@@ -6958,7 +6965,14 @@ export function App() {
       else runNamedCommand(command)
     }
     const onError = (event: Event) => setError(String((event as CustomEvent<string>).detail))
+    const cancelComposingSequence = () => {
+      cancelKeymap()
+      setPendingChords(current => current.length ? [] : current)
+      setPendingOptions(current => current.length ? [] : current)
+    }
     const onKey = (event: KeyboardEvent) => {
+      if (isComposingKey(event)) { cancelComposingSequence(); return }
+
       // Escape cancels an armed sequence before it means anything else. Without
       // this the only way out of a mistyped leader would be to press a key that
       // is not in the tree, which is exactly the state a user cannot reason about.
@@ -7034,11 +7048,13 @@ export function App() {
     window.addEventListener('mux:command', onCommand)
     window.addEventListener('mux:error', onError)
     window.addEventListener('keydown', onKey)
+    window.addEventListener('compositionstart', cancelComposingSequence, true)
     document.addEventListener('pointerdown', onPointerDown)
     return () => {
       window.removeEventListener('mux:command', onCommand)
       window.removeEventListener('mux:error', onError)
       window.removeEventListener('keydown', onKey)
+      window.removeEventListener('compositionstart', cancelComposingSequence, true)
       document.removeEventListener('pointerdown', onPointerDown)
     }
   })
@@ -8169,7 +8185,7 @@ export function App() {
       else if(leaf.kind!=='terminal')openTabMenu(leaf,label,x,y,'mobile')
     }
     return <div key={`${leaf.kind}:${leaf.id}`} data-reorder-id={leaf.id} class="stack-tab-shell mobile-unified-tab">
-      <button role="tab" aria-label={t("App.6b9a6ad42f", { label: label, kind: leaf.kind })} title={label} aria-selected={selected} class={`tab-main ${selected?'active':''} ${session?.state||''}`} onClick={()=>{if(suppressDragClickRef.current===`mobiletab:${leaf.id}`){suppressDragClickRef.current=null;return}if(mobileTabHeldRef.current){mobileTabHeldRef.current=false;return}activateMobileTab(leaf)}} onPointerDown={event=>{mobileTabHeldRef.current=false;beginMobileTabDrag(event,leaf,label,openMobileTabMenu)}} onContextMenu={event=>{event.preventDefault();event.stopPropagation()}}>{glyph}{visibleLabel}</button>
+      <button role="tab" data-pane-kind={leaf.kind} aria-label={t("App.6b9a6ad42f", { label: label, kind: leaf.kind })} title={label} aria-selected={selected} class={`tab-main ${selected?'active':''} ${session?.state||''}`} onClick={()=>{if(suppressDragClickRef.current===`mobiletab:${leaf.id}`){suppressDragClickRef.current=null;return}if(mobileTabHeldRef.current){mobileTabHeldRef.current=false;return}activateMobileTab(leaf)}} onPointerDown={event=>{mobileTabHeldRef.current=false;beginMobileTabDrag(event,leaf,label,openMobileTabMenu)}} onContextMenu={event=>{event.preventDefault();event.stopPropagation()}}>{glyph}{visibleLabel}</button>
     </div>
   }
   // The empty stage, shared by the desktop pane tree and the mobile projection. It names
@@ -8386,6 +8402,8 @@ export function App() {
               // because the ranking it was steering over has just been recomputed.
               onInput={event=>{touchSidebarSearch();setSidebarSearchInput(event.currentTarget.value);setSidebarSearchCursor(NO_SEARCH_CURSOR)}}
               onKeyDown={event=>{
+      if (isComposingKey(event)) return
+
                 touchSidebarSearch()
                 if(event.key==='ArrowDown'){event.preventDefault();moveSidebarSearchCursor(1);return}
                 if(event.key==='ArrowUp'){event.preventDefault();moveSidebarSearchCursor(-1);return}
@@ -8584,7 +8602,9 @@ export function App() {
         <button class="rail-button" aria-label={t("App.afe2a15062")} title={t("App.99af6606ff")} onClick={()=>setMainMenuOpen(value=>!value)}>:</button>
         <button class="rail-button" aria-label={t("App.7e01880f87")} title={t("App.04e2a9728a")} onClick={()=>openProjectsManager()}>◇</button>
       </nav>}
-      <div class="sidebar-resizer" role="separator" tabindex={0} aria-label={t("App.243854b4d0")} aria-orientation="vertical" aria-valuemin={SIDEBAR_MIN_WIDTH} aria-valuemax={SIDEBAR_MAX_WIDTH} aria-valuenow={Math.round(sidebarWidth)} title={t("App.301fb4a40a")} onPointerDown={beginSidebarResize} onDblClick={()=>persistSidebarWidth(SIDEBAR_DEFAULT_WIDTH)} onKeyDown={event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();persistSidebarWidth(event.key==='Home'?SIDEBAR_MIN_WIDTH:event.key==='End'?SIDEBAR_MAX_WIDTH:sidebarWidth+(event.key==='ArrowLeft'?-10:10))}} />
+      <div class="sidebar-resizer" role="separator" tabindex={0} aria-label={t("App.243854b4d0")} aria-orientation="vertical" aria-valuemin={SIDEBAR_MIN_WIDTH} aria-valuemax={SIDEBAR_MAX_WIDTH} aria-valuenow={Math.round(sidebarWidth)} title={t("App.301fb4a40a")} onPointerDown={beginSidebarResize} onDblClick={()=>persistSidebarWidth(SIDEBAR_DEFAULT_WIDTH)} onKeyDown={event=>{
+      if (isComposingKey(event)) return
+if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();persistSidebarWidth(event.key==='Home'?SIDEBAR_MIN_WIDTH:event.key==='End'?SIDEBAR_MAX_WIDTH:sidebarWidth+(event.key==='ArrowLeft'?-10:10))}} />
 
       {/* The utility drawer is a workspace grid child so the desktop rendering can
           be an in-flow column: the pane tree shrinks rather than being covered.
@@ -8800,7 +8820,9 @@ export function App() {
       labelFor={id => commandRegistryRef.current.find(command => command.id === id)?.label || id}
     />
     {paletteOpen && <div class="palette-layer" onMouseDown={event => event.target === event.currentTarget && setPaletteOpen(false)}>
-      <div class="palette" role="dialog" aria-modal="true" aria-label={t("App.0347f794d6")}><input ref={paletteInput} role="combobox" aria-controls="command-results" aria-expanded="true" aria-activedescendant={shownCommands[paletteIndex]?`command-${shownCommands[paletteIndex].id.replaceAll(/[^a-zA-Z0-9_-]/g,'-')}`:undefined} value={paletteQuery} onInput={event => setPaletteQuery(event.currentTarget.value)} onKeyDown={event => {
+      <div data-dialog-id="palette" class="palette" role="dialog" aria-modal="true" aria-label={t("App.0347f794d6")}><input ref={paletteInput} role="combobox" aria-controls="command-results" aria-expanded="true" aria-activedescendant={shownCommands[paletteIndex]?`command-${shownCommands[paletteIndex].id.replaceAll(/[^a-zA-Z0-9_-]/g,'-')}`:undefined} value={paletteQuery} onInput={event => setPaletteQuery(event.currentTarget.value)} onKeyDown={event => {
+      if (isComposingKey(event)) return
+
         // Stops here rather than also reaching the window handler, so one keypress is one pop.
         if (event.key === 'Escape') { event.stopPropagation(); dismissStack.pop() }
         if (event.key === 'ArrowDown') { event.preventDefault(); setPaletteIndex(index => Math.min(index + 1, Math.max(0, shownCommands.length - 1))) }
@@ -8814,9 +8836,9 @@ export function App() {
         {/* Named rather than implied: nobody discovers a prefix syntax by accident,
             and a palette that silently means four things is worse than one that
             means one. The active scope is highlighted so the row list is explicable. */}
-        <div class="palette-scopes" role="tablist" aria-label={t("App.39a9db3c8f")}>
+        <div data-tab-group="App.39a9db3c8f" class="palette-scopes" role="tablist" aria-label={t("App.39a9db3c8f")}>
           {(Object.entries(PALETTE_PREFIXES) as Array<[string, typeof paletteScopeName]>).map(([prefix, name]) =>
-            <button key={name} type="button" role="tab" aria-selected={paletteScopeName === name}
+            <button data-tab-id={name} key={name} type="button" role="tab" aria-selected={paletteScopeName === name}
               class={paletteScopeName === name ? 'active' : ''}
               onClick={() => { setPaletteQuery(name === 'commands' ? paletteTerm : `${prefix}${paletteTerm}`); paletteInput.current?.focus() }}
             ><kbd>{prefix}</kbd>{name}</button>)}

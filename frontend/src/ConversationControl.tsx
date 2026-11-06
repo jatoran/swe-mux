@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { codeLabel } from './localization/codeLabels.ts'
 import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
@@ -375,6 +376,8 @@ export function useConversation(
       captureRef.current?.endPushToTalk()
     }
     const down=(event:KeyboardEvent)=>{
+      if (isComposingKey(event)) return
+
       // Alt+Shift, not Ctrl+Alt: AltGr synthesises Ctrl+Alt on most non-US layouts,
       // so the old chord began capture whenever such a user typed AltGr+Space. This
       // is a *hold* rather than a command, so it cannot be an ordinary binding - the
@@ -1412,7 +1415,7 @@ export function VoiceDock({
         title={captureConfigured ? (talkActive ? t("ConversationControl.af77c7a343") : t("ConversationControl.4c15103c80")) : t("ConversationControl.17bf58fa76")}
         onClick={captureConfigured?()=>conversation.toggle():()=>requestSetting('voice.stt')}
       ><MicIcon slashed={!talkActive}/></button>
-      <div class="voice-mode-toggle" role="tablist" aria-label={t("ConversationControl.e691c6e100")}>
+      <div data-tab-group="ConversationControl.e691c6e100" class="voice-mode-toggle" role="tablist" aria-label={t("ConversationControl.e691c6e100")}>
         <button role="tab" aria-selected={effectiveMode==='dictation'} class={effectiveMode==='dictation'?'active':''} disabled={!talkActive} title={talkActive ? t("ConversationControl.aa577272fc") : t("ConversationControl.c390f2ccb2")} onClick={()=>onMode('dictation')}>{t("ConversationControl.ce7611e748")}</button>
         <button role="tab" aria-selected={chat} class={chat?'active':''} title={t("ConversationControl.1106781580")} onClick={()=>onMode('chat')}>{t("ConversationControl.31e06f7d89")}</button>
         <button role="tab" aria-selected={read} class={read?'active':''} title={t("ConversationControl.c3c27a8f39")} onClick={()=>onMode('read')}>{t("ConversationControl.317e938a48")}</button>
@@ -1495,6 +1498,8 @@ export function VoiceDock({
             placeholder={t("ConversationControl.c32e93309d", { wake: conversation.wake })}
             onInput={event=>conversation.edit(event.currentTarget.value)}
             onKeyDown={event=>{
+      if (isComposingKey(event)) return
+
               if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();send();return}
               // Escape hands the keyboard back to the terminal rather than bubbling into
               // the app's global shortcuts, which would close an unrelated overlay.

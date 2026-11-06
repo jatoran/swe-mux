@@ -160,10 +160,10 @@ export function AutomationDashboard({onClose,onOpenSession,projects=[],initialVi
     return revealSetting(panel.current,initialSetting)
   },[view,initialSetting,revealToken,matrix?matrixProject?.project_id:''])
 
-  return <div class="usage-layer automation-layer" role="dialog" aria-modal="true" aria-label={t("AutomationDashboard.d909750b1b")} onMouseDown={event=>event.target===event.currentTarget&&onClose()}>
+  return <div data-dialog-id="automation" class="usage-layer automation-layer" role="dialog" aria-modal="true" aria-label={t("AutomationDashboard.d909750b1b")} onMouseDown={event=>event.target===event.currentTarget&&onClose()}>
     <section class="usage-panel automation-panel" ref={panel}>
       <header><div><span>{t("AutomationDashboard.9273c57846")}</span><strong>{t("AutomationDashboard.01638fabbd")}</strong></div><div class="usage-header-actions"><button class="automation-help-btn" aria-label={t("AutomationDashboard.8955a0cfed")} title={t("AutomationDashboard.9c870aa6e5")} onClick={()=>setShowHelp(true)}>?</button><button aria-label={t("AutomationDashboard.98055375da")} onClick={onClose}>×</button></div></header>
-      <div class="segmented-tabs automation-tabs" role="tablist" aria-label={t("AutomationDashboard.716a965260")}>{VIEWS.map(item=><button key={item.id} role="tab" aria-selected={view===item.id} class={view===item.id?'active':''} onClick={()=>setView(item.id)}>{item.label}{item.id==='activity'&&unread ? <span class="automation-tab-badge">{unread}</span> : null}</button>)}</div>
+      <div data-tab-group="AutomationDashboard.716a965260" class="segmented-tabs automation-tabs" role="tablist" aria-label={t("AutomationDashboard.716a965260")}>{VIEWS.map(item=><button data-tab-id={item.id} key={item.id} role="tab" aria-selected={view===item.id} class={view===item.id?'active':''} onClick={()=>setView(item.id)}>{item.label}{item.id==='activity'&&unread ? <span class="automation-tab-badge">{unread}</span> : null}</button>)}</div>
       <div class={`usage-progress ${!data&&!error?'running':''}`} role="status" aria-live="polite"><span>{error ? '!' : data ? '·' : '◌'}</span><strong>{error || message}</strong></div>
       <main>
         {view==='policy' && <div class="usage-tables automation-policy-tab">

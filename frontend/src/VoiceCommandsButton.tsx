@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { catalogRevision, t, locale as uiLocale } from './localization/index.ts'
 import { createPortal } from 'preact/compat'
 import { useEffect, useMemo, useState } from 'preact/hooks'
@@ -18,7 +19,9 @@ export function VoiceCommandsButton({
   const catalog=useMemo(()=>completeVoiceReference(commands,configuredCommands||[]), [commands, configuredCommands, uiLocale.value, catalogRevision.value])
   useEffect(() => {
     if (!open) return
-    const close = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false) }
+    const close = (event: KeyboardEvent) => {
+      if (isComposingKey(event)) return
+ if (event.key === 'Escape') setOpen(false) }
     window.addEventListener('keydown', close, true)
     return () => window.removeEventListener('keydown', close, true)
   }, [open])

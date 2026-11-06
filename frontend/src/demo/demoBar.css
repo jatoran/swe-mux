@@ -99,3 +99,10 @@ body.demo-framed .app-shell {
 .demo-keymaps button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
 .demo-keymap-hint { overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
 :where(:root[data-workspace-layout="mobile"]) .demo-keymaps { display: none; }
+
+.demo-language { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+.demo-language select { max-width: 105px; background: var(--panel, #0d0f12); }
+.demo-language > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+:where(:root[data-workspace-layout="mobile"]) .demo-bar-exit { max-width: 72px; overflow: hidden; text-overflow: ellipsis; }
+:where(:root[data-workspace-layout="mobile"]) .demo-bar-pick select { max-width: 26vw; }
+:where(:root[data-workspace-layout="mobile"]) .demo-language select { max-width: 85px; }

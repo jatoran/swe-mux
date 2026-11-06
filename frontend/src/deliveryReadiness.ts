@@ -198,7 +198,7 @@ export function describeReadiness(
   return {
     state,
     headline:
-      state === 'safe' ? 'deliverable' : state === 'blocked' ? t("deliveryReadiness.38e847b485") : t("deliveryReadiness.766f768353"),
+      state === 'safe' ? t('deliveryReadiness.deliverable') : state === 'blocked' ? t("deliveryReadiness.38e847b485") : t("deliveryReadiness.766f768353"),
     summary: state === 'safe' ? '' : leading.summary,
     clears: state === 'safe' ? '' : leading.clears ?? '',
     protected: isProtected(readiness),

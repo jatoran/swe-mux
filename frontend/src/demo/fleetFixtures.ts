@@ -1,3 +1,4 @@
+import { dt } from './messages.ts'
 /**
  * The demo's machine: processes, bandwidth, disk, and the durable telemetry the
  * Resources dialog and the Processes drawer tab read.
@@ -189,7 +190,7 @@ export function processesPayload(sessionId?: string): FleetSnapshot {
     ownership_diagnostics: [
       {
         ts: nowSeconds() - 640, kind: 'reattributed', pid: 41880,
-        session_id: state.sessions[0]?.id, reason: 'job membership confirmed after a parent walk lost the trail',
+        session_id: state.sessions[0]?.id, reason: dt("demo.289e476e6f"),
       },
     ],
     totals: {
@@ -231,7 +232,7 @@ export function workloadsPayload(): unknown {
   }
   return {
     since: nowSeconds() - 7 * 86400,
-    interpretation: 'Seven days of invented runs, shown so the shape of this table is legible.',
+    interpretation: dt("demo.8ae4f96a1f"),
     dimensions: [...dimensions.values()].map(row => ({
       backend: row.backend,
       model: row.model,
@@ -257,7 +258,7 @@ export function operationalPayload(): unknown {
   const tools = ['Read', 'Update', 'Bash', 'Grep']
   return {
     schema_version: 4,
-    interpretation: 'Invented evidence for the demo. Descriptive only; nothing here ranks an agent.',
+    interpretation: dt("demo.4511b6e4a1"),
     quota: { samples: [], resets: [], attributions: [], rollups: [] },
     tools: {
       metrics: agents.flatMap((session, index) => tools.slice(0, 2 + (index % 3)).map((tool, position) => ({
@@ -357,7 +358,7 @@ export function networkPayload(): unknown {
   return {
     started_at: nowSeconds() - uptime,
     uptime_seconds: uptime,
-    measurement: { http: 'after compression', websocket: 'before per-message compression' },
+    measurement: { http: dt("demo.ac883578df"), websocket: dt("demo.d2ca451ebd") },
     totals: { http: totalHttp, websocket: totalSocket },
     peers: [
       { peer: '127.0.0.1', http: http(6900, 84_000, 52 * MEGABYTE, 6900), websocket: socket(12, 5, 8_100, 1_050_000, 92_000, 112 * MEGABYTE) },

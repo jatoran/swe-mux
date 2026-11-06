@@ -311,58 +311,58 @@ BROWSER_UNREACHABLE = frozenset(
 #: `preventDefault` suppresses the browser's own reaction. Bindable, and worth
 #: saying out loud because the browser's meaning is the one the user knows.
 BROWSER_CONTESTED = {
-    "ctrl+f": "browser find",
-    "ctrl+s": "save page",
-    "ctrl+d": "bookmark",
-    "ctrl+p": "print",
-    "ctrl+h": "history",
-    "ctrl+j": "downloads",
-    "ctrl+o": "open file",
-    "ctrl+u": "view source",
-    "ctrl+g": "find next",
-    "ctrl+r": "reload",
-    "ctrl+k": "search bar (Firefox)",
-    "ctrl+shift+p": "private window (Firefox)",
-    "f1": "browser help",
-    "f3": "find next",
-    "f5": "reload",
-    "f6": "focus address bar",
+    "ctrl+f": ui_message("keybinding.policy.5d377b4f3e"),
+    "ctrl+s": ui_message("keybinding.policy.476f96291b"),
+    "ctrl+d": ui_message("keybinding.policy.ffe7fcd2c9"),
+    "ctrl+p": ui_message("keybinding.policy.ce953a0eb0"),
+    "ctrl+h": ui_message("keybinding.policy.259aa8ef98"),
+    "ctrl+j": ui_message("keybinding.policy.4eed41d911"),
+    "ctrl+o": ui_message("keybinding.policy.97e9c6a77e"),
+    "ctrl+u": ui_message("keybinding.policy.336352db18"),
+    "ctrl+g": ui_message("keybinding.policy.8ca14d5464"),
+    "ctrl+r": ui_message("keybinding.policy.4027f51541"),
+    "ctrl+k": ui_message("keybinding.policy.41e5fc2bf5"),
+    "ctrl+shift+p": ui_message("keybinding.policy.3c23151a50"),
+    "f1": ui_message("keybinding.policy.bf71938abf"),
+    "f3": ui_message("keybinding.policy.8ca14d5464"),
+    "f5": ui_message("keybinding.policy.4027f51541"),
+    "f6": ui_message("keybinding.policy.2ad4439974"),
 }
 
 #: Window-manager and desktop-environment grabs, per platform. An application
 #: never sees these: the compositor takes them first.
 WM_RESERVED: dict[str, dict[str, str]] = {
     "linux": {
-        "ctrl+alt+t": "opens a terminal on GNOME and most KDE setups",
-        "ctrl+alt+arrowleft": "switches workspace on GNOME and KDE",
-        "ctrl+alt+arrowright": "switches workspace on GNOME and KDE",
-        "ctrl+alt+arrowup": "switches workspace on GNOME and KDE",
-        "ctrl+alt+arrowdown": "switches workspace on GNOME and KDE",
-        "ctrl+alt+delete": "log out",
-        "alt+f2": "run a command",
-        "alt+f4": "close window",
-        "alt+tab": "switch window",
-        **{f"meta+{letter}": "Super is the desktop's own modifier" for letter in _LETTERS},
+        "ctrl+alt+t": ui_message("keybinding.policy.d41a0dc94e"),
+        "ctrl+alt+arrowleft": ui_message("keybinding.policy.e768a1ff98"),
+        "ctrl+alt+arrowright": ui_message("keybinding.policy.e768a1ff98"),
+        "ctrl+alt+arrowup": ui_message("keybinding.policy.e768a1ff98"),
+        "ctrl+alt+arrowdown": ui_message("keybinding.policy.e768a1ff98"),
+        "ctrl+alt+delete": ui_message("keybinding.policy.6a832af49d"),
+        "alt+f2": ui_message("keybinding.policy.4cc4fa0b5d"),
+        "alt+f4": ui_message("keybinding.policy.58cb5abbde"),
+        "alt+tab": ui_message("keybinding.policy.31027b07d2"),
+        **{f"meta+{letter}": ui_message("keybinding.policy.f0dec7e44c") for letter in _LETTERS},
     },
     "win": {
-        "ctrl+alt+delete": "secure attention sequence",
-        "ctrl+shift+escape": "Task Manager",
-        "alt+tab": "switch window",
-        "alt+f4": "close window",
-        "alt+space": "window menu",
-        **{f"meta+{letter}": "the Windows key belongs to the shell" for letter in _LETTERS},
+        "ctrl+alt+delete": ui_message("keybinding.policy.6cd08ea496"),
+        "ctrl+shift+escape": ui_message("keybinding.policy.58d65c201f"),
+        "alt+tab": ui_message("keybinding.policy.31027b07d2"),
+        "alt+f4": ui_message("keybinding.policy.58cb5abbde"),
+        "alt+space": ui_message("keybinding.policy.af42ebc805"),
+        **{f"meta+{letter}": ui_message("keybinding.policy.a9c866adbe") for letter in _LETTERS},
     },
     "mac": {
-        "meta+space": "Spotlight",
-        "meta+tab": "switch application",
-        "ctrl+space": "switch input source",
-        "ctrl+arrowleft": "Mission Control spaces",
-        "ctrl+arrowright": "Mission Control spaces",
-        "ctrl+arrowup": "Mission Control",
-        "ctrl+arrowdown": "Application windows",
-        "meta+shift+3": "screenshot",
-        "meta+shift+4": "screenshot",
-        "meta+shift+5": "screen recording",
+        "meta+space": ui_message("keybinding.policy.fca7aa83d2"),
+        "meta+tab": ui_message("keybinding.policy.6e24481ee6"),
+        "ctrl+space": ui_message("keybinding.policy.b62ee851d4"),
+        "ctrl+arrowleft": ui_message("keybinding.policy.4dfc3aa238"),
+        "ctrl+arrowright": ui_message("keybinding.policy.4dfc3aa238"),
+        "ctrl+arrowup": ui_message("keybinding.policy.1a9a658b5d"),
+        "ctrl+arrowdown": ui_message("keybinding.policy.ecb41339c7"),
+        "meta+shift+3": ui_message("keybinding.policy.4441146b0f"),
+        "meta+shift+4": ui_message("keybinding.policy.4441146b0f"),
+        "meta+shift+5": ui_message("keybinding.policy.fac7b601d1"),
     },
 }
 
@@ -375,18 +375,18 @@ APPLICATION_RESERVED = frozenset({"ctrl+0", "ctrl+-", "ctrl+=", "ctrl+shift+="})
 #: scoped away from the terminal (`when: !terminalFocused`) is perfectly sound -
 #: but always reported, because taking one costs the user something real.
 TERMINAL_RESERVED = {
-    "ctrl+a": "start of line",
-    "ctrl+c": "interrupt",
-    "ctrl+d": "end of file",
-    "ctrl+e": "end of line",
-    "ctrl+k": "kill to end of line",
-    "ctrl+l": "clear",
-    "ctrl+r": "reverse search",
-    "ctrl+u": "kill line",
-    "ctrl+v": "literal next",
-    "ctrl+w": "delete word",
-    "ctrl+z": "suspend",
-    "ctrl+enter": "the agent newline chord",
+    "ctrl+a": ui_message("keybinding.policy.6e2b24aa6c"),
+    "ctrl+c": ui_message("keybinding.policy.a2090fd637"),
+    "ctrl+d": ui_message("keybinding.policy.1ebe21806a"),
+    "ctrl+e": ui_message("keybinding.policy.7655a5b47b"),
+    "ctrl+k": ui_message("keybinding.policy.af43c4f636"),
+    "ctrl+l": ui_message("keybinding.policy.913a4cb91b"),
+    "ctrl+r": ui_message("keybinding.policy.ee27fa7193"),
+    "ctrl+u": ui_message("keybinding.policy.2df77f7a46"),
+    "ctrl+v": ui_message("keybinding.policy.d48c790e04"),
+    "ctrl+w": ui_message("keybinding.policy.c691dde883"),
+    "ctrl+z": ui_message("keybinding.policy.f516e6c264"),
+    "ctrl+enter": ui_message("keybinding.policy.433c3da935"),
 }
 
 
@@ -434,32 +434,36 @@ def chord_warnings(
     found: list[ChordWarning] = []
     blocked_in_browser = BROWSER_UNREACHABLE if unreachable is None else unreachable
     if chord in APPLICATION_RESERVED:
-        found.append(
-            ChordWarning("blocked", "application", "a fixed UI-scale control uses this chord")
-        )
+        found.append(ChordWarning("blocked", "application", ui_message("keybinding.warning.scale")))
     if host == "browser" and chord in blocked_in_browser:
         found.append(
             ChordWarning(
                 "blocked",
                 "browser",
-                "the browser handles this itself and never passes it to the page; "
-                "it works in the desktop app",
+                ui_message("keybinding.warning.browser"),
             )
         )
     wm = WM_RESERVED.get(platform, {})
     if chord in wm:
-        found.append(ChordWarning("blocked", "platform", f"the desktop takes this: {wm[chord]}"))
+        found.append(
+            ChordWarning(
+                "blocked", "platform", ui_message("keybinding.warning.desktop", action=wm[chord])
+            )
+        )
     if host == "browser" and chord in BROWSER_CONTESTED:
         found.append(
-            ChordWarning("contested", "browser", f"also the browser's {BROWSER_CONTESTED[chord]}")
+            ChordWarning(
+                "contested",
+                "browser",
+                ui_message("keybinding.warning.contested", action=BROWSER_CONTESTED[chord]),
+            )
         )
     if chord in TERMINAL_RESERVED:
         found.append(
             ChordWarning(
                 "contested",
                 "terminal",
-                f"a shell reads this as {TERMINAL_RESERVED[chord]}; "
-                "scope the binding away from the terminal to keep both",
+                ui_message("keybinding.warning.terminal", action=TERMINAL_RESERVED[chord]),
             )
         )
     if altgr_hazard(chord):
@@ -467,7 +471,7 @@ def chord_warnings(
             ChordWarning(
                 "contested",
                 "layout",
-                "AltGr emits Ctrl+Alt on most non-US layouts, so this fires while typing",
+                ui_message("keybinding.warning.altgr"),
             )
         )
     return found

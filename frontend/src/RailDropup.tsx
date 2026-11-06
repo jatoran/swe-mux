@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import type { ComponentChildren } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
 
@@ -86,7 +87,9 @@ export function RailDropup({ label, anchor, onClose, sticky, children }: Props) 
       const target = event.target as Node
       if (!root.current?.contains(target) && !anchor.contains(target)) close.current()
     }
-    const key = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.stopPropagation(); close.current() } }
+    const key = (event: KeyboardEvent) => {
+      if (isComposingKey(event)) return
+ if (event.key === 'Escape') { event.stopPropagation(); close.current() } }
     const unwatch = watchRailOverlayPlacement(position)
     window.addEventListener('pointerdown', dismiss)
     window.addEventListener('keydown', key)
@@ -100,6 +103,8 @@ export function RailDropup({ label, anchor, onClose, sticky, children }: Props) 
   // Arrow keys walk the rows in document order, which puts the sticky link first
   // — the same order a reader sees, and the same walk the context menus use.
   const walk = (event: KeyboardEvent) => {
+      if (isComposingKey(event)) return
+
     if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
     const buttons = Array.from(root.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') || [])
     if (!buttons.length) return

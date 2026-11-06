@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { codeLabel } from './localization/codeLabels.ts'
 import { rich, t } from './localization/index.ts'
 import { useEffect, useRef, useState } from 'preact/hooks'
@@ -135,7 +136,9 @@ export function Observations(
       <div class="observations-compose">
         <textarea ref={input} rows={2} placeholder={t("Observations.9d19cc7d47")} value={draft}
           onInput={e => setDraft(e.currentTarget.value)}
-          onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void add() } }} />
+          onKeyDown={e => {
+      if (isComposingKey(e)) return
+ if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void add() } }} />
         <button class="primary" disabled={busy || !draft.trim()} onClick={() => void add()}>{rich("Observations.d5aceea6b8", { value1: <kbd>{t("Observations.019df2c402")}</kbd> })}</button>
       </div>
       <div class="usage-progress" role="status" aria-live="polite"><span>·</span><strong>{note || t("Observations.f09d93adbb", { length: open.length, value2: state.observations.length - open.length })}</strong></div>

@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { t } from './localization/index.ts'
 // The command rail's pad chip: the element, its pointer listeners, the dial it draws while
 // pressed, and the haptics. The rules it obeys live in `railPadGesture.ts`.
@@ -274,7 +275,9 @@ export function RailPad({ controller, item, slots, className, content, modifierP
   // the dial is pinned to a press that has already ended: there is no live anchor to follow.
   useEffect(() => {
     if (!dial?.standing) return
-    const key = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.stopPropagation(); dismiss() } }
+    const key = (event: KeyboardEvent) => {
+      if (isComposingKey(event)) return
+ if (event.key === 'Escape') { event.stopPropagation(); dismiss() } }
     window.addEventListener('keydown', key)
     window.addEventListener('resize', dismiss)
     window.visualViewport?.addEventListener('resize', dismiss)
@@ -509,6 +512,8 @@ export function RailPad({ controller, item, slots, className, content, modifierP
     onPointerCancel={closeUnlessStanding}
     onLostPointerCapture={closeUnlessStanding}
     onKeyDown={event => {
+      if (isComposingKey(event)) return
+
       // Escape closes a standing dial before anything else looks at the key, the same
       // precedence every other rail overlay takes.
       if (event.key === 'Escape' && dial?.standing) { event.preventDefault(); dismiss(); return }

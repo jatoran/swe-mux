@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { t } from './localization/index.ts'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { themeOptions, themePreviewColors, type CustomTheme, type ThemeName } from './theme'
@@ -67,6 +68,8 @@ export function ThemePicker({value,customTheme,open,onOpenChange,onChange,onPrev
   }
   const move=(offset:number)=>setActiveIndex(current=>(current+offset+themeOptions.length)%themeOptions.length)
   const onListKeyDown=(event:KeyboardEvent)=>{
+      if (isComposingKey(event)) return
+
     if(event.key==='ArrowDown'){event.preventDefault();move(1)}
     else if(event.key==='ArrowUp'){event.preventDefault();move(-1)}
     else if(event.key==='Home'){event.preventDefault();setActiveIndex(0)}
@@ -74,6 +77,8 @@ export function ThemePicker({value,customTheme,open,onOpenChange,onChange,onPrev
     else if(event.key==='Enter'||event.key===' '){event.preventDefault();choose(activeIndex)}
   }
   const onTriggerKeyDown=(event:KeyboardEvent)=>{
+      if (isComposingKey(event)) return
+
     if(event.key!=='ArrowDown'&&event.key!=='ArrowUp')return
     event.preventDefault()
     setActiveIndex(event.key==='ArrowDown'?selectedIndex:(selectedIndex-1+themeOptions.length)%themeOptions.length)

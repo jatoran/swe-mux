@@ -1,11 +1,10 @@
 {
   "id": "vim",
-  "title": "Vim-flavoured",
-  "description": "hjkl everywhere, Ctrl+W for window movement, and Alt as the browser-safe mirror of it. Deliberately NOT a modal layer: a terminal is already modal and the agent TUIs inside it are too, so a normal/insert mode over the top produces keystrokes nobody can attribute. What you get is vim's directional vocabulary, not vim's state machine.",
   "leader": "ctrl+shift+space",
   "prefix": "ctrl+w",
-  "warning": "Ctrl+W is a shell's delete-word, and a browser tab closes on it before the page ever sees it - so every Ctrl+W binding here is desktop-app only, and the Alt+hjkl set beside it is the one that works in a browser.",
-  "include": ["leader-tree"],
+  "include": [
+    "leader-tree"
+  ],
   "bindings": {
     "alt+h": "pane.focusLeft",
     "alt+j": "pane.focusDown",
@@ -40,31 +39,138 @@
     "alt+9": "tab.activate(9)"
   },
   "rules": [
-    { "keys": "ctrl+w h", "command": "pane.focusLeft", "host": "desktop" },
-    { "keys": "ctrl+w j", "command": "pane.focusDown", "host": "desktop" },
-    { "keys": "ctrl+w k", "command": "pane.focusUp", "host": "desktop" },
-    { "keys": "ctrl+w l", "command": "pane.focusRight", "host": "desktop" },
-    { "keys": "ctrl+w arrowleft", "command": "pane.focusLeft", "host": "desktop" },
-    { "keys": "ctrl+w arrowdown", "command": "pane.focusDown", "host": "desktop" },
-    { "keys": "ctrl+w arrowup", "command": "pane.focusUp", "host": "desktop" },
-    { "keys": "ctrl+w arrowright", "command": "pane.focusRight", "host": "desktop" },
-    { "keys": "ctrl+w shift+h", "command": "pane.swapLeft", "host": "desktop" },
-    { "keys": "ctrl+w shift+j", "command": "pane.swapDown", "host": "desktop" },
-    { "keys": "ctrl+w shift+k", "command": "pane.swapUp", "host": "desktop" },
-    { "keys": "ctrl+w shift+l", "command": "pane.swapRight", "host": "desktop" },
-    { "keys": "ctrl+w s", "command": "pane.splitVertical", "host": "desktop" },
-    { "keys": "ctrl+w v", "command": "pane.splitHorizontal", "host": "desktop" },
-    { "keys": "ctrl+w c", "command": "pane.close", "host": "desktop" },
-    { "keys": "ctrl+w q", "command": "pane.close", "host": "desktop" },
-    { "keys": "ctrl+w o", "command": "pane.zoom", "host": "desktop" },
-    { "keys": "ctrl+w w", "command": "pane.next", "host": "desktop" },
-    { "keys": "ctrl+w shift+w", "command": "pane.previous", "host": "desktop" },
-    { "keys": "ctrl+w x", "command": "pane.swapNext", "host": "desktop" },
-    { "keys": "ctrl+w t", "command": "pane.stackNew", "host": "desktop" },
-    { "keys": "ctrl+w shift+,", "command": "pane.resizeLeft", "host": "desktop" },
-    { "keys": "ctrl+w shift+.", "command": "pane.resizeRight", "host": "desktop" },
-    { "keys": "ctrl+w shift+=", "command": "pane.resizeUp", "host": "desktop" },
-    { "keys": "ctrl+w -", "command": "pane.resizeDown", "host": "desktop" },
-    { "keys": "meta+shift+;", "command": "palette.commands", "platform": "mac" }
-  ]
+    {
+      "keys": "ctrl+w h",
+      "command": "pane.focusLeft",
+      "host": "desktop"
+    },
+    {
+      "keys": "ctrl+w j",
+      "command": "pane.focusDown",
+      "host": "desktop"
+    },
+    {
+      "keys": "ctrl+w k",
+      "command": "pane.focusUp",
+      "host": "desktop"
+    },
+    {
+      "keys": "ctrl+w l",
+      "command": "pane.focusRight",
+      "host": "desktop"
+    },
+    {
+      "keys": "ctrl+w arrowleft",
+      "command": "pane.focusLeft",
+      "host": "desktop"
+    },
+    {
+      "keys": "ctrl+w arrowdown",
+      "command": "pane.focusDown",
+      "host": "desktop"
+    },
+    {
+      "keys": "ctrl+w arrowup",
+      "command": "pane.focusUp",
+      "host": "desktop"
+    },
+    {
+      "keys": "ctrl+w arrowright",
+      "command": "pane.focusRight",
+      "host": "desktop"
+    },
+    {
+      "keys": "ctrl+w shift+h",
+      "command": "pane.swapLeft",
+      "host": "desktop"
+    },
+    {
+      "keys": "ctrl+w shift+j",
+      "command": "pane.swapDown",
+      "host": "desktop"
+    },
+    {
+      "keys": "ctrl+w shift+k",
+      "command": "pane.swapUp",
+      "host": "desktop"
+    },
+    {
+      "keys": "ctrl+w shift+l",
+      "command": "pane.swapRight",
+      "host": "desktop"
+    },
+    {
+      "keys": "ctrl+w s",
+      "command": "pane.splitVertical",
+      "host": "desktop"
+    },
+    {
+      "keys": "ctrl+w v",
+      "command": "pane.splitHorizontal",
+      "host": "desktop"
+    },
+    {
+      "keys": "ctrl+w c",
+      "command": "pane.close",
+      "host": "desktop"
+    },
+    {
+      "keys": "ctrl+w q",
+      "command": "pane.close",
+      "host": "desktop"
+    },
+    {
+      "keys": "ctrl+w o",
+      "command": "pane.zoom",
+      "host": "desktop"
+    },
+    {
+      "keys": "ctrl+w w",
+      "command": "pane.next",
+      "host": "desktop"
+    },
+    {
+      "keys": "ctrl+w shift+w",
+      "command": "pane.previous",
+      "host": "desktop"
+    },
+    {
+      "keys": "ctrl+w x",
+      "command": "pane.swapNext",
+      "host": "desktop"
+    },
+    {
+      "keys": "ctrl+w t",
+      "command": "pane.stackNew",
+      "host": "desktop"
+    },
+    {
+      "keys": "ctrl+w shift+,",
+      "command": "pane.resizeLeft",
+      "host": "desktop"
+    },
+    {
+      "keys": "ctrl+w shift+.",
+      "command": "pane.resizeRight",
+      "host": "desktop"
+    },
+    {
+      "keys": "ctrl+w shift+=",
+      "command": "pane.resizeUp",
+      "host": "desktop"
+    },
+    {
+      "keys": "ctrl+w -",
+      "command": "pane.resizeDown",
+      "host": "desktop"
+    },
+    {
+      "keys": "meta+shift+;",
+      "command": "palette.commands",
+      "platform": "mac"
+    }
+  ],
+  "description_message": "keybinding.preset.vim.description",
+  "warning_message": "keybinding.preset.vim.warning",
+  "title_message": "keybinding.preset.vim.title"
 }

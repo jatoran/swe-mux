@@ -1,3 +1,5 @@
+import { dt } from './messages.ts'
+import { localizedKeymapFixture } from './keymapPresentation.ts'
 /**
  * The demo's `window.fetch`: every `/api/...` request the real UI makes is
  * answered here, from the shared demo store, without touching any network.
@@ -82,11 +84,11 @@ function harnessPayload(): unknown {
 function voicePayload(): unknown {
   return {
     enabled: false, engine: 'kokoro', engine_available: false,
-    diagnostic: 'Voice is switched off in the demo.',
+    diagnostic: dt("demo.0a6f66ca75"),
     content: 'summary', default_mode: 'off', voice: 'af_heart', summary_model: 'demo',
     spend_today: { tokens: 0, cost_usd: 0 }, daily_budget: { tokens: null, usd: null, mode: 'either' },
     cache_bytes: 0, cache_limit_bytes: 0, clip_count: 0, stt_enabled: false,
-    stt_engine: 'sapi', stt_available: false, stt_diagnostic: 'Demo build.',
+    stt_engine: 'sapi', stt_available: false, stt_diagnostic: dt("demo.f6822320ca"),
     stt_language: 'en-US', stt_whisper_model: 'base',
   }
 }
@@ -96,7 +98,7 @@ function profilesPayload(): unknown {
     default_profile_id: 'default',
     profiles: [
       {
-        id: 'default', label: 'Demo shell', executable: 'bash', args: [], env: {},
+        id: 'default', get label() { return dt("demo.11a62ac9b7") }, executable: 'bash', args: [], env: {},
         platforms: [], cwd_strategy: 'native', marker: 'demo',
         capabilities: ['interactive'], cwd_integration: false, enabled: true, backend: 'shell',
       },
@@ -124,32 +126,33 @@ function profilesPayload(): unknown {
  * the demo's Settings panel say that instead of drawing a dead chord as live.
  */
 function keybindingsPayload(): unknown {
+  const fixture = localizedKeymapFixture()
   const preset = state.keymapPreset || 'swemux'
-  const known = (id: string): id is keyof typeof KEYMAP_FIXTURE.rules =>
-    id in KEYMAP_FIXTURE.rules
+  const known = (id: string): id is keyof typeof fixture.rules =>
+    id in fixture.rules
   const id = known(preset) ? preset : 'swemux'
-  const rules = KEYMAP_FIXTURE.rules[id]
-  const resolution = KEYMAP_FIXTURE.resolution[id]
-  const summary = KEYMAP_FIXTURE.presets.find(item => item.id === id)
+  const rules = fixture.rules[id]
+  const resolution = fixture.resolution[id]
+  const summary = fixture.presets.find(item => item.id === id)
   return {
     preset: id,
-    presets: KEYMAP_FIXTURE.presets,
-    host: KEYMAP_FIXTURE.host,
-    platform: KEYMAP_FIXTURE.platform,
+    presets: fixture.presets,
+    host: fixture.host,
+    platform: fixture.platform,
     rules,
     resolved: resolution.bindings,
     prefixes: summary?.prefix ? [summary.prefix, ...summary.prefix_alternates] : [],
     labels: {},
     undeliverable: resolution.undeliverable,
     contested: resolution.contested,
-    commands: KEYMAP_FIXTURE.commands,
+    commands: fixture.commands,
     groups: [],
     when_flags: [
       'terminalFocused', 'editorFocused', 'inputFocused', 'overlayOpen', 'paletteOpen',
       'drawerFocused', 'sidebarFocused', 'settingsOpen', 'mobile', 'desktop', 'zoomed',
       'multiplePanes', 'multipleTabs', 'hasSelection', 'agentFocused',
     ],
-    policy: KEYMAP_FIXTURE.policy,
+    policy: fixture.policy,
     rejected: {},
   }
 }
@@ -208,7 +211,7 @@ export function spawnSession(body: Record<string, unknown>): unknown {
   const backend = String(body.backend ?? 'shell')
   const projectId = String(body.project_id ?? state.projects[0]?.id ?? '')
   const target = project(projectId)
-  if (!target) return error(404, 'Unknown project.')
+  if (!target) return error(404, dt("demo.94a69a9800"))
   const id = demoId('s')
   const created = DETERMINISTIC ? fixtureSeconds(id) : nowSeconds()
   const newSession: Session = {
@@ -248,7 +251,7 @@ export function spawnSession(body: Record<string, unknown>): unknown {
 export function createPreview(body: Record<string, unknown>): unknown {
   const sessionId = String(body.session_id ?? '')
   const owner = session(sessionId) ?? state.sessions[0]
-  if (!owner) return error(404, 'No session to attach the preview to.')
+  if (!owner) return error(404, dt("demo.41a8ee30e5"))
   const used = new Set(state.previews.map(item => item.id))
   const pageId = PREVIEW_PAGE_IDS.find(candidate => !used.has(candidate)) ?? PREVIEW_PAGE_IDS[0]
   const preview: Preview = {
@@ -383,11 +386,11 @@ function scanTimelinePayload(sessionId: string): unknown {
     run_spend: { tokens: 1_140, cost_usd: 0.004 },
     metrics: { record_reads: records.length, rehydrations: 0, rehydration_rate: 0 },
     gates: [
-      { id: 'run', label: 'this run', unit: 'usd', used: 0.004, limit: 0.25 },
-      { id: 'daily', label: 'today', unit: 'usd', used: 0.02, limit: 1 },
-      { id: 'calls', label: 'hourly calls', unit: 'calls', used: records.length, limit: 1_200 },
+      { id: 'run', get label() { return dt("demo.c35c81578e") }, unit: 'usd', used: 0.004, limit: 0.25 },
+      { id: 'daily', get label() { return dt("demo.e0f4f767ac") }, unit: 'usd', used: 0.02, limit: 1 },
+      { id: 'calls', get label() { return dt("demo.cef1dac972") }, unit: 'calls', used: records.length, limit: 1_200 },
     ],
-    skip_reason: agent ? null : 'this is a shell session, so there is no conversation to scan',
+    skip_reason: agent ? null : dt("demo.a14db1de46"),
     last_scan_at: records.length ? records[records.length - 1].t1 : null,
     scanning: false,
     records,
@@ -445,7 +448,7 @@ const ROUTES: Route[] = [
     method: 'GET', pattern: /^\/api\/projects\/([^/]+)\/notes\/([^/]+)$/,
     handler: match => {
       const note = state.notes.find(item => item.note_id === decodeURIComponent(match[2]))
-      if (!note) return error(404, 'Note not found.')
+      if (!note) return error(404, dt("demo.42b509c9f8"))
       // The editor's NotePayload: {revision, markdown, status, path, title}.
       return { revision: String(note.revision), markdown: note.content, status: 'ready', path: '', title: note.title }
     },
@@ -455,7 +458,7 @@ const ROUTES: Route[] = [
     handler: (match, body) => {
       const noteId = decodeURIComponent(match[2])
       const note = state.notes.find(item => item.note_id === noteId)
-      if (!note) return error(404, 'Note not found.')
+      if (!note) return error(404, dt("demo.42b509c9f8"))
       const markdown = String((body as Record<string, unknown>)?.markdown ?? '')
       apply({ kind: 'note-patch', noteId, patch: { content: markdown, revision: note.revision + 1, updated_at: nowSeconds() } })
       return { revision: String(note.revision + 1), status: 'ready' }
@@ -468,7 +471,7 @@ const ROUTES: Route[] = [
       let note = state.notes.find(item => item.note_id === noteId)
       if (!note) {
         note = {
-          note_id: noteId, project_id: '', title: 'Scratchpad', revision: 1,
+          note_id: noteId, project_id: '', get title() { return dt("demo.17bd998ee0") }, revision: 1,
           updated_at: nowSeconds(), content: '# Scratchpad\n\nShared across every Project. Type here - it even persists (locally).\n',
         }
         apply({ kind: 'note-add', note })
@@ -481,7 +484,7 @@ const ROUTES: Route[] = [
     handler: (match, body) => {
       const noteId = `global:${decodeURIComponent(match[1])}`
       const note = state.notes.find(item => item.note_id === noteId)
-      if (!note) return error(404, 'Note not found.')
+      if (!note) return error(404, dt("demo.42b509c9f8"))
       const markdown = String((body as Record<string, unknown>)?.markdown ?? '')
       apply({ kind: 'note-patch', noteId, patch: { content: markdown, revision: note.revision + 1, updated_at: nowSeconds() } })
       return { revision: String(note.revision + 1), status: 'ready' }
@@ -505,7 +508,7 @@ const ROUTES: Route[] = [
     handler: (match, body) => {
       const noteId = decodeURIComponent(match[2])
       const note = state.notes.find(item => item.note_id === noteId)
-      if (!note) return error(404, 'Note not found.')
+      if (!note) return error(404, dt("demo.42b509c9f8"))
       const patch = body as Record<string, unknown>
       apply({
         kind: 'note-patch', noteId,
@@ -537,7 +540,7 @@ const ROUTES: Route[] = [
   // unmatched-GET fallback would answer `{}`, which is not a row.
   {
     method: 'GET', pattern: /^\/api\/sessions\/([^/]+)$/,
-    handler: match => session(decodeURIComponent(match[1])) ?? error(404, 'Unknown demo session.'),
+    handler: match => session(decodeURIComponent(match[1])) ?? error(404, dt("demo.853f73c7f3")),
   },
   {
     method: 'DELETE', pattern: /^\/api\/sessions\/([^/]+)$/,
@@ -565,14 +568,14 @@ const ROUTES: Route[] = [
     handler: (match, body) => {
       const id = decodeURIComponent(match[1])
       apply({ kind: 'session-patch', id, patch: { broadcast: (body as Record<string, unknown>)?.include === true } })
-      return session(id) ?? error(404, 'Unknown session.')
+      return session(id) ?? error(404, dt("demo.69f308f773"))
     },
   },
   {
     method: 'GET', pattern: /^\/api\/sessions\/([^/]+)\/approvals$/,
     handler: () => ({
       supported: false, enabled: false, ceiling: 'wait', rules: [], rules_source: 'default',
-      unavailable: 'Approvals are not part of the demo.', ttl_seconds: 0, max_auto: 0,
+      unavailable: dt("demo.ee84e17ea7"), ttl_seconds: 0, max_auto: 0,
       policy: {
         mode: 'wait', run_id: null, expires_at: null, granted_at: null, set_by: 'demo',
         rules: [], auto_approved: 0, max_auto: 0, last_decision_at: null, last_request: null,
@@ -586,7 +589,7 @@ const ROUTES: Route[] = [
     handler: (match, body) => {
       const id = decodeURIComponent(match[1])
       const target = project(id)
-      if (!target) return error(404, 'Unknown project.')
+      if (!target) return error(404, dt("demo.94a69a9800"))
       const patch = { ...(body as Record<string, unknown>) }
       if ('layout' in patch) {
         patch.layout_revision = target.layout_revision + 1
@@ -631,7 +634,7 @@ const ROUTES: Route[] = [
     method: 'GET', pattern: /^\/api\/processes$/,
     handler: (_match, _body, url) => processesPayload(url.searchParams.get('session') || undefined),
   },
-  { method: 'POST', pattern: /^\/api\/processes\/action$/, handler: () => ({ ok: true, applied: false, diagnostic: 'The demo does not stop invented processes.' }) },
+  { method: 'POST', pattern: /^\/api\/processes\/action$/, handler: () => ({ ok: true, applied: false, diagnostic: dt("demo.2594a6a21e") }) },
   { method: 'GET', pattern: /^\/api\/telemetry\/workloads$/, handler: () => workloadsPayload() },
   { method: 'GET', pattern: /^\/api\/telemetry\/operational$/, handler: () => operationalPayload() },
   { method: 'GET', pattern: /^\/api\/diagnostics\/network$/, handler: () => networkPayload() },
@@ -663,9 +666,9 @@ const ROUTES: Route[] = [
         kind: 'assistant-say',
         turnId: turn,
         messageId: `msg-${turn}`,
-        display: 'There is no model behind me in this demo - I am a fixture. Play the'
-          + ' voice scenario above the frame to see a whole turn, including the'
-          + ' confirmation card.',
+        display: dt("demo.bd2992a5ca")
+          + dt("demo.e1d73dbfea")
+          + dt("demo.5ee71daa24"),
       })
       apply({ kind: 'assistant-done', turnId: turn, messageId: `msg-${turn}` })
       return { turn_id: turn }
@@ -679,9 +682,9 @@ const ROUTES: Route[] = [
     method: 'POST', pattern: /^\/api\/assistant\/actions\/([^/]+)\/confirm$/,
     handler: match => {
       const id = decodeURIComponent(match[1])
-      apply({ kind: 'assistant-resolved', actionId: id, display: 'Done.', status: 'executed' })
+      apply({ kind: 'assistant-resolved', actionId: id, display: dt("demo.ed25186498"), status: 'executed' })
       const action = state.assistant.actions.find(item => item.id === id)
-      return action ? { result: null, action } : error(404, 'Unknown action.')
+      return action ? { result: null, action } : error(404, dt("demo.6fe9679f6d"))
     },
   },
   {
@@ -690,17 +693,17 @@ const ROUTES: Route[] = [
       const id = decodeURIComponent(match[1])
       apply({
         kind: 'assistant-resolved', actionId: id, status: 'cancelled',
-        display: 'Cancelled, and nothing ran.',
+        display: dt("demo.ba9ae9fe0b"),
       })
       const action = state.assistant.actions.find(item => item.id === id)
-      return action ? { action } : error(404, 'Unknown action.')
+      return action ? { action } : error(404, dt("demo.6fe9679f6d"))
     },
   },
   {
     method: 'POST', pattern: /^\/api\/assistant\/actions\/([^/]+)\/announced$/,
     handler: match => {
       const action = state.assistant.actions.find(item => item.id === decodeURIComponent(match[1]))
-      return action ? { extended: true, action } : error(404, 'Unknown action.')
+      return action ? { extended: true, action } : error(404, dt("demo.6fe9679f6d"))
     },
   },
   {
@@ -717,7 +720,7 @@ const ROUTES: Route[] = [
     handler: (_match, body) => {
       const requested = String((body as Record<string, unknown>)?.preset ?? '')
       if (!KEYMAP_FIXTURE.presets.some(item => item.id === requested)) {
-        return error(400, `Unknown keymap preset: ${requested}`)
+        return error(400, dt("demo.5fefdb04bf", { value1: requested }))
       }
       apply({ kind: 'keymap-preset', preset: requested })
       return { keybindings: keybindingsPayload() }
@@ -735,7 +738,7 @@ const ROUTES: Route[] = [
     method: 'PUT', pattern: /^\/api\/settings\/([^/]+)$/,
     handler: (match, body) => {
       const profile = decodeURIComponent(match[1])
-      if (!(profile in state.deviceSettings)) return error(404, `Unknown settings profile: ${profile}`)
+      if (!(profile in state.deviceSettings)) return error(404, dt("demo.e33ad85c01", { value1: profile }))
       apply({ kind: 'settings-put', profile, domains: (body ?? {}) as Record<string, unknown> })
       return { profiles: state.deviceSettings }
     },
@@ -798,16 +801,16 @@ const ROUTES: Route[] = [
   },
   {
     method: 'POST', pattern: /^\/api\/configurator\/launch$/,
-    handler: () => error(501, 'This demo has no agent CLI to open a configurator session in.'),
+    handler: () => error(501, dt("demo.3d4809d202")),
   },
   { method: 'GET', pattern: /^\/api\/grants$/, handler: () => grantsPayload() },
   { method: 'GET', pattern: /^\/api\/clipboard$/, handler: () => clipboardPayload() },
   { method: 'GET', pattern: /^\/api\/clipboard\/([^/]+)$/, handler: match => {
     const payload = clipboardPayload() as { entries: Array<{ id: string; preview: string }> }
     const item = payload.entries.find(entry => entry.id === decodeURIComponent(match[1]))
-    return item ? { ...item, text: item.preview } : error(404, 'No such demo clipboard entry')
+    return item ? { ...item, text: item.preview } : error(404, dt("demo.9c1f85bf1d"))
   } },
-  { method: 'POST', pattern: /^\/api\/clipboard$/, handler: () => ({ stored: false, reason: 'The demo uses example clipboard entries.', entry: null }) },
+  { method: 'POST', pattern: /^\/api\/clipboard$/, handler: () => ({ stored: false, reason: dt("demo.d04b5a9cb7"), entry: null }) },
 
   { method: 'GET', pattern: /^\/api\/prompts$/, handler: () => promptsPayload() },
   // Three routes the app asks for on its own schedule rather than on a visitor's press,
@@ -840,7 +843,7 @@ const ROUTES: Route[] = [
     handler: (_match, body) => {
       const request = (body ?? {}) as Record<string, unknown>
       const targetSessionId = String(request.target_session_id ?? '')
-      if (!session(targetSessionId)) return error(404, 'Unknown session.')
+      if (!session(targetSessionId)) return error(404, dt("demo.69f308f773"))
       const message = makeQueueMessage({
         targetSessionId,
         body: String(request.body ?? ''),
@@ -855,13 +858,13 @@ const ROUTES: Route[] = [
     handler: (match, body) => {
       const id = decodeURIComponent(match[1])
       const existing = state.queue.find(item => item.id === id)
-      if (!existing) return error(404, 'Unknown message.')
+      if (!existing) return error(404, dt("demo.2db7582166"))
       const request = (body ?? {}) as Record<string, unknown>
       // The revision check is the one thing about the real queue worth reproducing
       // exactly: two devices editing one row is the case it exists for, and a demo that
       // accepted any revision would be showing a field that means nothing.
       if (typeof request.revision === 'number' && request.revision !== existing.revision) {
-        return { __status: 409, error: 'That message changed since you read it.', code: 'revision_conflict', revision: existing.revision }
+        return { __status: 409, error: dt("demo.5d35a43033"), code: 'revision_conflict', revision: existing.revision }
       }
       const patch: Record<string, unknown> = {}
       if (typeof request.body === 'string') { patch.body = request.body; patch.edited_at = nowSeconds() }
@@ -882,7 +885,7 @@ const ROUTES: Route[] = [
     method: 'POST', pattern: /^\/api\/queue\/messages\/([^/]+)\/cancel$/,
     handler: (match, body) => {
       const id = decodeURIComponent(match[1])
-      if (!state.queue.some(item => item.id === id)) return error(404, 'Unknown message.')
+      if (!state.queue.some(item => item.id === id)) return error(404, dt("demo.2db7582166"))
       const kind = String((body as Record<string, unknown>)?.kind ?? 'cancelled')
       apply({
         kind: 'queue-patch', id,
@@ -906,13 +909,13 @@ const ROUTES: Route[] = [
       const request = (body ?? {}) as Record<string, unknown>
       const id = String(request.message_id ?? '')
       const message = state.queue.find(item => item.id === id)
-      if (!message) return error(404, 'Unknown message.')
+      if (!message) return error(404, dt("demo.2db7582166"))
       if (typeof request.revision === 'number' && request.revision !== message.revision) {
-        return { __status: 409, error: 'That message changed since you read it.', code: 'revision_conflict', revision: message.revision }
+        return { __status: 409, error: dt("demo.5d35a43033"), code: 'revision_conflict', revision: message.revision }
       }
       return deliverQueuedMessage(id)
         ? { status: 'sent', confirmed: true }
-        : error(409, 'That message is no longer deliverable.')
+        : error(409, dt("demo.e26ab00417"))
     },
   },
   {
@@ -960,7 +963,7 @@ const ROUTES: Route[] = [
       const record = records.find(item => item.id === decodeURIComponent(match[2]))
       return {
         source: record
-          ? [{ note: 'The demo stores no source messages; this record is a fixture.', record_id: record.id }]
+          ? [{ note: dt("demo.60f5c643a5"), record_id: record.id }]
           : [],
         metrics: { record_reads: records.length, rehydrations: 1, rehydration_rate: 1 / Math.max(1, records.length) },
       }
@@ -976,10 +979,10 @@ const ROUTES: Route[] = [
     handler: () => ({
       server: 'mux', backend: '', evidence: 'swe_mux_owned', status: 'ok',
       tools: [
-        { name: 'list_sessions', description: 'Sibling sessions and their live status', read_only: true },
-        { name: 'read_transcript', description: 'A pageable read of another session’s conversation', read_only: true },
+        { name: 'list_sessions', get description() { return dt("demo.701edb5592") }, read_only: true },
+        { name: 'read_transcript', get description() { return dt("demo.9148ebc4a8") }, read_only: true },
       ],
-      total: 2, truncated: false, note: 'Invented for the demo.', diagnostic: '',
+      total: 2, truncated: false, note: dt("demo.07bf20750d"), diagnostic: '',
       observed_at: nowSeconds(), ttl_ms: 60_000, cache_scope: 'public',
       server_version: '0.0.0-demo', fingerprint: 'demo', cached: false,
     }),
@@ -1019,7 +1022,7 @@ const ROUTES: Route[] = [
     handler: (match, _body, url) => commitChangesPayload(
       url.searchParams.get('project_id') || '',
       decodeURIComponent(match[1]),
-    ) ?? error(404, 'Unknown commit.'),
+    ) ?? error(404, dt("demo.d7c42ef91a")),
   },
   { method: 'GET', pattern: /^\/api\/git\/swe-mux-setup$/, handler: () => sweMuxSetupPayload() },
   {
@@ -1041,7 +1044,7 @@ const ROUTES: Route[] = [
       // also how the daemon knows: a landing is about a worktree, and the session in it
       // is the thing that can say what branch it is on.
       const standing = state.sessions.find(item => item.runtime_cwd === worktreeRoot || item.cwd === worktreeRoot)
-      if (!standing) return error(400, 'No session is standing in that checkout.')
+      if (!standing) return error(400, dt("demo.1d0014eaf2"))
       apply({
         kind: 'land-add',
         request: makeLandRequest({
@@ -1069,7 +1072,7 @@ const ROUTES: Route[] = [
     handler: (match, body) => {
       const requestId = decodeURIComponent(match[2])
       const request = state.spawnRequests.find(item => item.id === requestId)
-      if (!request) return error(404, 'Unknown request.')
+      if (!request) return error(404, dt("demo.982bb93a7f"))
       const approve = String((body as Record<string, unknown>)?.decision ?? '') === 'approve'
       if (!approve) {
         apply({ kind: 'spawn-request-patch', id: requestId, patch: { done: true, status: 'dismissed', decided_by: 'you' } })
@@ -1115,7 +1118,7 @@ const ROUTES: Route[] = [
   { method: 'POST', pattern: /^\/api\/provider-accounts\/([^/]+)\/verify$/, handler: () => providerAccountsPayload() },
   {
     method: 'POST', pattern: /^\/api\/provider-accounts\/([^/]+)\/login$/,
-    handler: () => error(400, 'Signing in reaches a real provider, so the demo does not offer it.'),
+    handler: () => error(400, dt("demo.64fcff5035")),
   },
   { method: 'GET', pattern: /^\/api\/experiences$/, handler: () => ({ items: [] }) },
 
@@ -1144,14 +1147,14 @@ const ROUTES: Route[] = [
     method: 'GET', pattern: /^\/api\/projects\/([^/]+)\/files$/,
     handler: (match, _body, url) => {
       const listing = demoDirectory(decodeURIComponent(match[1]), url.searchParams.get('path') ?? '')
-      return listing ?? error(404, 'No such directory in this Project.')
+      return listing ?? error(404, dt("demo.c92f32346b"))
     },
   },
   {
     method: 'GET', pattern: /^\/api\/projects\/([^/]+)\/file$/,
     handler: (match, _body, url) => {
       const found = demoFile(decodeURIComponent(match[1]), url.searchParams.get('path') ?? '')
-      return found ?? error(404, 'No such file in this Project.')
+      return found ?? error(404, dt("demo.5870f04c9b"))
     },
   },
   {
@@ -1161,7 +1164,7 @@ const ROUTES: Route[] = [
       const saved = demoFileSave(
         decodeURIComponent(match[1]), String(input.path ?? ''), String(input.text ?? ''),
       )
-      return saved ?? error(404, 'No such file in this Project.')
+      return saved ?? error(404, dt("demo.5870f04c9b"))
     },
   },
   {
@@ -1176,7 +1179,7 @@ const ROUTES: Route[] = [
   // content for would open empty, which reads as a file somebody truncated.
   {
     method: 'POST', pattern: /^\/api\/projects\/([^/]+)\/resources$/,
-    handler: () => error(501, 'This demo has a read-only checkout.'),
+    handler: () => error(501, dt("demo.23c4959827")),
   },
   { method: 'GET', pattern: /^\/api\/projects\/([^/]+)\/observations$/, handler: () => ({ items: [] }) },
   // The stall banner probes this every few seconds for the life of the page; the
@@ -1184,10 +1187,10 @@ const ROUTES: Route[] = [
   {
     method: 'POST', pattern: /^\/api\/sessions\/([^/]+)\/attachments$/,
     handler: (match, body) => {
-      if (!session(match[1])) return error(404, 'Unknown demo session.')
+      if (!session(match[1])) return error(404, dt("demo.853f73c7f3"))
       const file = body instanceof FormData ? body.get('file') : null
-      if (!(file instanceof File) || !file.size) return error(400, 'Choose a file to attach.')
-      if (file.size > 16 * 1024 * 1024) return error(413, 'The demo accepts files up to 16 MiB.')
+      if (!(file instanceof File) || !file.size) return error(400, dt("demo.681dac472e"))
+      if (file.size > 16 * 1024 * 1024) return error(413, dt("demo.9e1080c591"))
       const name = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 128) || 'attachment'
       return { id: demoId('attachment'), name, path: `/demo/attachments/${name}`,
         relative_path: `attachments/${name}`, reference: `[image: ${name}]`,

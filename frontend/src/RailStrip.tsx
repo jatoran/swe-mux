@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { t } from './localization/index.ts'
 import { cloneElement, type VNode } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
@@ -106,7 +107,9 @@ export function RailStrip({ chips, onConfigure, label, device, rowId, arranging,
         disabled={arranging}
         onPointerDown={event => press.begin(event, arrange)}
         onContextMenu={event => press.contextMenu(event, arrange)}
-        onKeyDown={event => { press.keyboardMenu(event, arrange) }}
+        onKeyDown={event => {
+      if (isComposingKey(event)) return
+ press.keyboardMenu(event, arrange) }}
         onClickCapture={press.suppressClick}
         onClick={() => setOpen(value => !value)}
       ><RailDrawerIcon /><span class="rail-more-count">{chips.length}</span></button>

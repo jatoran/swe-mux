@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 // The control that measures which chords this browser actually hands the page, and
 // the opt-in that lets a fullscreen tab take the ones it does not.
@@ -60,6 +61,8 @@ export function KeyboardProbe({ policy, platform }: Props) {
   useEffect(() => {
     if (!running) return
     const onKey = (event: KeyboardEvent) => {
+      if (isComposingKey(event)) return
+
       event.preventDefault()
       event.stopImmediatePropagation()
       if (event.key === 'Escape') { setRunning(false); return }

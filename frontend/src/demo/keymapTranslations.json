@@ -1,0 +1,3222 @@
+[
+ {
+  "path": [
+   "presets",
+   "0",
+   "description"
+  ],
+  "value": "将 C-x 前缀和 M-x 映射到 swe-mux 的窗口与缓冲区：C-x 2、C-x 3 拆分窗格，C-x o 切换窗格，C-x 0、C-x 1 关闭或最大化窗格，C-x b 列出“缓冲区”（会话），C-x g 打开 Git。"
+ },
+ {
+  "path": [
+   "presets",
+   "0",
+   "warning"
+  ],
+  "value": "C-x 也是 Emacs 和 readline Shell 的前缀。启用此预设后，窗格中的 Emacs 将无法收到它。这里保留 C-c、C-a、C-e、C-k 的原有用途，以免影响常用 Shell 操作。"
+ },
+ {
+  "path": [
+   "presets",
+   "1",
+   "description"
+  ],
+  "value": "默认方案。常用操作使用少量 Ctrl+Shift 组合键，其余操作通过 Ctrl+Shift+Space 前缀访问。终端通常将 Ctrl+Shift 留给自身，因为 Ctrl+字母 属于内部 Shell；它也避免了 AltGr 和常见窗口管理器快捷键的冲突。"
+ },
+ {
+  "path": [
+   "presets",
+   "2",
+   "description"
+  ],
+  "value": "将 tmux 前缀及其字母命令映射到 swe-mux 的窗格、标签页和会话。选择之前请阅读警告：swe-mux 位于外层，在这里接管 Ctrl+B 后，窗格内的 tmux 就无法收到它。如果你还在窗格里使用 tmux，请将其中一方的前缀改为 Ctrl+A 或其他按键，避免冲突。"
+ },
+ {
+  "path": [
+   "presets",
+   "2",
+   "warning"
+  ],
+  "value": "Ctrl+B 是 tmux 自身的前缀。如果你在 swe-mux 窗格中运行 tmux，swe-mux 会先接管该按键。通常可将其中一方改用 Ctrl+A，在设置中即可修改。"
+ },
+ {
+  "path": [
+   "presets",
+   "3",
+   "title"
+  ],
+  "value": "Vim 风格"
+ },
+ {
+  "path": [
+   "presets",
+   "3",
+   "description"
+  ],
+  "value": "使用 hjkl 方向键习惯，以 Ctrl+W 控制窗格，并提供可用于浏览器的 Alt 组合键。不额外增加普通/插入模式，因为终端和其中的智能体界面已有自己的模式。此预设提供 Vim 的方向操作习惯。"
+ },
+ {
+  "path": [
+   "presets",
+   "3",
+   "warning"
+  ],
+  "value": "Ctrl+W 在 Shell 中用于删除单词，浏览器也会先用它关闭标签页。因此这里的 Ctrl+W 绑定仅限桌面应用；浏览器请使用对应的 Alt+hjkl 组合键。"
+ },
+ {
+  "path": [
+   "presets",
+   "4",
+   "description"
+  ],
+  "value": "将 VS Code 中对应的操作映射到 swe-mux：命令面板、资源管理器、Git、扩展、拆分、终端和 Ctrl+K 前缀。这里的窗格对应 VS Code 编辑器组，标签页对应编辑器标签。"
+ },
+ {
+  "path": [
+   "presets",
+   "4",
+   "warning"
+  ],
+  "value": "Ctrl+K 在 Shell 中用于删除至行尾，Ctrl+B 是 tmux 的前缀。启用此预设后，这两个按键会被 swe-mux 接管，窗格内的程序将无法收到它们。"
+ },
+ {
+  "path": [
+   "resolution",
+   "emacs",
+   "contested",
+   "0",
+   "warnings",
+   "0",
+   "message"
+  ],
+  "value": "同时也是浏览器的“隐私窗口（Firefox）”快捷键"
+ },
+ {
+  "path": [
+   "resolution",
+   "emacs",
+   "contested",
+   "1",
+   "warnings",
+   "0",
+   "message"
+  ],
+  "value": "同时也是浏览器的“浏览器帮助”快捷键"
+ },
+ {
+  "path": [
+   "resolution",
+   "swemux",
+   "contested",
+   "0",
+   "warnings",
+   "0",
+   "message"
+  ],
+  "value": "同时也是浏览器的“隐私窗口（Firefox）”快捷键"
+ },
+ {
+  "path": [
+   "resolution",
+   "swemux",
+   "contested",
+   "1",
+   "warnings",
+   "0",
+   "message"
+  ],
+  "value": "同时也是浏览器的“浏览器帮助”快捷键"
+ },
+ {
+  "path": [
+   "resolution",
+   "tmux",
+   "contested",
+   "0",
+   "warnings",
+   "0",
+   "message"
+  ],
+  "value": "同时也是浏览器的“隐私窗口（Firefox）”快捷键"
+ },
+ {
+  "path": [
+   "resolution",
+   "tmux",
+   "contested",
+   "1",
+   "warnings",
+   "0",
+   "message"
+  ],
+  "value": "同时也是浏览器的“浏览器帮助”快捷键"
+ },
+ {
+  "path": [
+   "resolution",
+   "vim",
+   "contested",
+   "0",
+   "warnings",
+   "0",
+   "message"
+  ],
+  "value": "同时也是浏览器的“隐私窗口（Firefox）”快捷键"
+ },
+ {
+  "path": [
+   "resolution",
+   "vim",
+   "contested",
+   "1",
+   "warnings",
+   "0",
+   "message"
+  ],
+  "value": "同时也是浏览器的“浏览器帮助”快捷键"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "0",
+   "warnings",
+   "0",
+   "message"
+  ],
+  "value": "同时也是浏览器的“隐私窗口（Firefox）”快捷键"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "1",
+   "warnings",
+   "0",
+   "message"
+  ],
+  "value": "同时也是浏览器的“浏览器帮助”快捷键"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "2",
+   "warnings",
+   "0",
+   "message"
+  ],
+  "value": "同时也是浏览器的“打印”快捷键"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "3",
+   "warnings",
+   "0",
+   "message"
+  ],
+  "value": "同时也是浏览器的“下载”快捷键"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "4",
+   "warnings",
+   "0",
+   "message"
+  ],
+  "value": "同时也是浏览器的“搜索栏（Firefox）”快捷键"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "4",
+   "warnings",
+   "1",
+   "message"
+  ],
+  "value": "Shell 将此按键视为“删除至行尾”；可将绑定限定在终端之外，以保留两种用途"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "5",
+   "warnings",
+   "0",
+   "message"
+  ],
+  "value": "同时也是浏览器的“搜索栏（Firefox）”快捷键"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "5",
+   "warnings",
+   "1",
+   "message"
+  ],
+  "value": "Shell 将此按键视为“删除至行尾”；可将绑定限定在终端之外，以保留两种用途"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "6",
+   "warnings",
+   "0",
+   "message"
+  ],
+  "value": "同时也是浏览器的“搜索栏（Firefox）”快捷键"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "6",
+   "warnings",
+   "1",
+   "message"
+  ],
+  "value": "Shell 将此按键视为“删除至行尾”；可将绑定限定在终端之外，以保留两种用途"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "7",
+   "warnings",
+   "0",
+   "message"
+  ],
+  "value": "同时也是浏览器的“搜索栏（Firefox）”快捷键"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "7",
+   "warnings",
+   "1",
+   "message"
+  ],
+  "value": "Shell 将此按键视为“删除至行尾”；可将绑定限定在终端之外，以保留两种用途"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "8",
+   "warnings",
+   "0",
+   "message"
+  ],
+  "value": "同时也是浏览器的“搜索栏（Firefox）”快捷键"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "8",
+   "warnings",
+   "1",
+   "message"
+  ],
+  "value": "Shell 将此按键视为“删除至行尾”；可将绑定限定在终端之外，以保留两种用途"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "9",
+   "warnings",
+   "0",
+   "message"
+  ],
+  "value": "同时也是浏览器的“搜索栏（Firefox）”快捷键"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "9",
+   "warnings",
+   "1",
+   "message"
+  ],
+  "value": "Shell 将此按键视为“删除至行尾”；可将绑定限定在终端之外，以保留两种用途"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "10",
+   "warnings",
+   "0",
+   "message"
+  ],
+  "value": "同时也是浏览器的“搜索栏（Firefox）”快捷键"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "10",
+   "warnings",
+   "1",
+   "message"
+  ],
+  "value": "Shell 将此按键视为“删除至行尾”；可将绑定限定在终端之外，以保留两种用途"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "11",
+   "warnings",
+   "0",
+   "message"
+  ],
+  "value": "同时也是浏览器的“搜索栏（Firefox）”快捷键"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "11",
+   "warnings",
+   "1",
+   "message"
+  ],
+  "value": "Shell 将此按键视为“删除至行尾”；可将绑定限定在终端之外，以保留两种用途"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "12",
+   "warnings",
+   "0",
+   "message"
+  ],
+  "value": "同时也是浏览器的“搜索栏（Firefox）”快捷键"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "12",
+   "warnings",
+   "1",
+   "message"
+  ],
+  "value": "Shell 将此按键视为“删除至行尾”；可将绑定限定在终端之外，以保留两种用途"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "13",
+   "warnings",
+   "0",
+   "message"
+  ],
+  "value": "同时也是浏览器的“搜索栏（Firefox）”快捷键"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "13",
+   "warnings",
+   "1",
+   "message"
+  ],
+  "value": "Shell 将此按键视为“删除至行尾”；可将绑定限定在终端之外，以保留两种用途"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "14",
+   "warnings",
+   "0",
+   "message"
+  ],
+  "value": "同时也是浏览器的“搜索栏（Firefox）”快捷键"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "14",
+   "warnings",
+   "1",
+   "message"
+  ],
+  "value": "Shell 将此按键视为“删除至行尾”；可将绑定限定在终端之外，以保留两种用途"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "15",
+   "warnings",
+   "0",
+   "message"
+  ],
+  "value": "同时也是浏览器的“搜索栏（Firefox）”快捷键"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "15",
+   "warnings",
+   "1",
+   "message"
+  ],
+  "value": "Shell 将此按键视为“删除至行尾”；可将绑定限定在终端之外，以保留两种用途"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "16",
+   "warnings",
+   "0",
+   "message"
+  ],
+  "value": "同时也是浏览器的“搜索栏（Firefox）”快捷键"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "16",
+   "warnings",
+   "1",
+   "message"
+  ],
+  "value": "Shell 将此按键视为“删除至行尾”；可将绑定限定在终端之外，以保留两种用途"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "17",
+   "warnings",
+   "0",
+   "message"
+  ],
+  "value": "同时也是浏览器的“搜索栏（Firefox）”快捷键"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "17",
+   "warnings",
+   "1",
+   "message"
+  ],
+  "value": "Shell 将此按键视为“删除至行尾”；可将绑定限定在终端之外，以保留两种用途"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "18",
+   "warnings",
+   "0",
+   "message"
+  ],
+  "value": "同时也是浏览器的“搜索栏（Firefox）”快捷键"
+ },
+ {
+  "path": [
+   "resolution",
+   "vscode",
+   "contested",
+   "18",
+   "warnings",
+   "1",
+   "message"
+  ],
+  "value": "Shell 将此按键视为“删除至行尾”；可将绑定限定在终端之外，以保留两种用途"
+ },
+ {
+  "path": [
+   "policy",
+   "browser_contested",
+   "ctrl+d"
+  ],
+  "value": "添加书签"
+ },
+ {
+  "path": [
+   "policy",
+   "browser_contested",
+   "ctrl+f"
+  ],
+  "value": "浏览器查找"
+ },
+ {
+  "path": [
+   "policy",
+   "browser_contested",
+   "ctrl+g"
+  ],
+  "value": "查找下一个"
+ },
+ {
+  "path": [
+   "policy",
+   "browser_contested",
+   "ctrl+h"
+  ],
+  "value": "历史记录"
+ },
+ {
+  "path": [
+   "policy",
+   "browser_contested",
+   "ctrl+j"
+  ],
+  "value": "下载"
+ },
+ {
+  "path": [
+   "policy",
+   "browser_contested",
+   "ctrl+k"
+  ],
+  "value": "搜索栏（Firefox）"
+ },
+ {
+  "path": [
+   "policy",
+   "browser_contested",
+   "ctrl+o"
+  ],
+  "value": "打开文件"
+ },
+ {
+  "path": [
+   "policy",
+   "browser_contested",
+   "ctrl+p"
+  ],
+  "value": "打印"
+ },
+ {
+  "path": [
+   "policy",
+   "browser_contested",
+   "ctrl+r"
+  ],
+  "value": "重新加载"
+ },
+ {
+  "path": [
+   "policy",
+   "browser_contested",
+   "ctrl+s"
+  ],
+  "value": "保存页面"
+ },
+ {
+  "path": [
+   "policy",
+   "browser_contested",
+   "ctrl+shift+p"
+  ],
+  "value": "隐私窗口（Firefox）"
+ },
+ {
+  "path": [
+   "policy",
+   "browser_contested",
+   "ctrl+u"
+  ],
+  "value": "查看源代码"
+ },
+ {
+  "path": [
+   "policy",
+   "browser_contested",
+   "f1"
+  ],
+  "value": "浏览器帮助"
+ },
+ {
+  "path": [
+   "policy",
+   "browser_contested",
+   "f3"
+  ],
+  "value": "查找下一个"
+ },
+ {
+  "path": [
+   "policy",
+   "browser_contested",
+   "f5"
+  ],
+  "value": "重新加载"
+ },
+ {
+  "path": [
+   "policy",
+   "browser_contested",
+   "f6"
+  ],
+  "value": "聚焦地址栏"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "alt+f2"
+  ],
+  "value": "运行命令"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "alt+f4"
+  ],
+  "value": "关闭窗口"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "alt+tab"
+  ],
+  "value": "切换窗口"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "ctrl+alt+arrowdown"
+  ],
+  "value": "在 GNOME 和 KDE 中切换工作区"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "ctrl+alt+arrowleft"
+  ],
+  "value": "在 GNOME 和 KDE 中切换工作区"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "ctrl+alt+arrowright"
+  ],
+  "value": "在 GNOME 和 KDE 中切换工作区"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "ctrl+alt+arrowup"
+  ],
+  "value": "在 GNOME 和 KDE 中切换工作区"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "ctrl+alt+delete"
+  ],
+  "value": "退出登录"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "ctrl+alt+t"
+  ],
+  "value": "在 GNOME 和大多数 KDE 配置中打开终端"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "meta+a"
+  ],
+  "value": "Super 是桌面环境自身的修饰键"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "meta+b"
+  ],
+  "value": "Super 是桌面环境自身的修饰键"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "meta+c"
+  ],
+  "value": "Super 是桌面环境自身的修饰键"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "meta+d"
+  ],
+  "value": "Super 是桌面环境自身的修饰键"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "meta+e"
+  ],
+  "value": "Super 是桌面环境自身的修饰键"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "meta+f"
+  ],
+  "value": "Super 是桌面环境自身的修饰键"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "meta+g"
+  ],
+  "value": "Super 是桌面环境自身的修饰键"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "meta+h"
+  ],
+  "value": "Super 是桌面环境自身的修饰键"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "meta+i"
+  ],
+  "value": "Super 是桌面环境自身的修饰键"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "meta+j"
+  ],
+  "value": "Super 是桌面环境自身的修饰键"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "meta+k"
+  ],
+  "value": "Super 是桌面环境自身的修饰键"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "meta+l"
+  ],
+  "value": "Super 是桌面环境自身的修饰键"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "meta+m"
+  ],
+  "value": "Super 是桌面环境自身的修饰键"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "meta+n"
+  ],
+  "value": "Super 是桌面环境自身的修饰键"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "meta+o"
+  ],
+  "value": "Super 是桌面环境自身的修饰键"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "meta+p"
+  ],
+  "value": "Super 是桌面环境自身的修饰键"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "meta+q"
+  ],
+  "value": "Super 是桌面环境自身的修饰键"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "meta+r"
+  ],
+  "value": "Super 是桌面环境自身的修饰键"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "meta+s"
+  ],
+  "value": "Super 是桌面环境自身的修饰键"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "meta+t"
+  ],
+  "value": "Super 是桌面环境自身的修饰键"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "meta+u"
+  ],
+  "value": "Super 是桌面环境自身的修饰键"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "meta+v"
+  ],
+  "value": "Super 是桌面环境自身的修饰键"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "meta+w"
+  ],
+  "value": "Super 是桌面环境自身的修饰键"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "meta+x"
+  ],
+  "value": "Super 是桌面环境自身的修饰键"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "meta+y"
+  ],
+  "value": "Super 是桌面环境自身的修饰键"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "linux",
+   "meta+z"
+  ],
+  "value": "Super 是桌面环境自身的修饰键"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "alt+f4"
+  ],
+  "value": "关闭窗口"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "alt+space"
+  ],
+  "value": "窗口菜单"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "alt+tab"
+  ],
+  "value": "切换窗口"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "ctrl+alt+delete"
+  ],
+  "value": "安全注意序列"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "ctrl+shift+escape"
+  ],
+  "value": "任务管理器"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "meta+a"
+  ],
+  "value": "Windows 键由系统 Shell 接管"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "meta+b"
+  ],
+  "value": "Windows 键由系统 Shell 接管"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "meta+c"
+  ],
+  "value": "Windows 键由系统 Shell 接管"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "meta+d"
+  ],
+  "value": "Windows 键由系统 Shell 接管"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "meta+e"
+  ],
+  "value": "Windows 键由系统 Shell 接管"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "meta+f"
+  ],
+  "value": "Windows 键由系统 Shell 接管"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "meta+g"
+  ],
+  "value": "Windows 键由系统 Shell 接管"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "meta+h"
+  ],
+  "value": "Windows 键由系统 Shell 接管"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "meta+i"
+  ],
+  "value": "Windows 键由系统 Shell 接管"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "meta+j"
+  ],
+  "value": "Windows 键由系统 Shell 接管"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "meta+k"
+  ],
+  "value": "Windows 键由系统 Shell 接管"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "meta+l"
+  ],
+  "value": "Windows 键由系统 Shell 接管"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "meta+m"
+  ],
+  "value": "Windows 键由系统 Shell 接管"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "meta+n"
+  ],
+  "value": "Windows 键由系统 Shell 接管"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "meta+o"
+  ],
+  "value": "Windows 键由系统 Shell 接管"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "meta+p"
+  ],
+  "value": "Windows 键由系统 Shell 接管"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "meta+q"
+  ],
+  "value": "Windows 键由系统 Shell 接管"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "meta+r"
+  ],
+  "value": "Windows 键由系统 Shell 接管"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "meta+s"
+  ],
+  "value": "Windows 键由系统 Shell 接管"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "meta+t"
+  ],
+  "value": "Windows 键由系统 Shell 接管"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "meta+u"
+  ],
+  "value": "Windows 键由系统 Shell 接管"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "meta+v"
+  ],
+  "value": "Windows 键由系统 Shell 接管"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "meta+w"
+  ],
+  "value": "Windows 键由系统 Shell 接管"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "meta+x"
+  ],
+  "value": "Windows 键由系统 Shell 接管"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "meta+y"
+  ],
+  "value": "Windows 键由系统 Shell 接管"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "win",
+   "meta+z"
+  ],
+  "value": "Windows 键由系统 Shell 接管"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "mac",
+   "ctrl+arrowdown"
+  ],
+  "value": "应用窗口"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "mac",
+   "ctrl+arrowleft"
+  ],
+  "value": "调度中心空间"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "mac",
+   "ctrl+arrowright"
+  ],
+  "value": "调度中心空间"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "mac",
+   "ctrl+arrowup"
+  ],
+  "value": "调度中心"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "mac",
+   "ctrl+space"
+  ],
+  "value": "切换输入法"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "mac",
+   "meta+shift+3"
+  ],
+  "value": "截屏"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "mac",
+   "meta+shift+4"
+  ],
+  "value": "截屏"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "mac",
+   "meta+shift+5"
+  ],
+  "value": "屏幕录制"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "mac",
+   "meta+space"
+  ],
+  "value": "聚焦搜索"
+ },
+ {
+  "path": [
+   "policy",
+   "wm_reserved",
+   "mac",
+   "meta+tab"
+  ],
+  "value": "切换应用"
+ },
+ {
+  "path": [
+   "policy",
+   "terminal_reserved",
+   "ctrl+a"
+  ],
+  "value": "行首"
+ },
+ {
+  "path": [
+   "policy",
+   "terminal_reserved",
+   "ctrl+c"
+  ],
+  "value": "中断"
+ },
+ {
+  "path": [
+   "policy",
+   "terminal_reserved",
+   "ctrl+d"
+  ],
+  "value": "文件结束"
+ },
+ {
+  "path": [
+   "policy",
+   "terminal_reserved",
+   "ctrl+e"
+  ],
+  "value": "行尾"
+ },
+ {
+  "path": [
+   "policy",
+   "terminal_reserved",
+   "ctrl+enter"
+  ],
+  "value": "智能体的换行组合键"
+ },
+ {
+  "path": [
+   "policy",
+   "terminal_reserved",
+   "ctrl+k"
+  ],
+  "value": "删除至行尾"
+ },
+ {
+  "path": [
+   "policy",
+   "terminal_reserved",
+   "ctrl+l"
+  ],
+  "value": "清除"
+ },
+ {
+  "path": [
+   "policy",
+   "terminal_reserved",
+   "ctrl+r"
+  ],
+  "value": "反向搜索"
+ },
+ {
+  "path": [
+   "policy",
+   "terminal_reserved",
+   "ctrl+u"
+  ],
+  "value": "删除当前行"
+ },
+ {
+  "path": [
+   "policy",
+   "terminal_reserved",
+   "ctrl+v"
+  ],
+  "value": "按字面输入下一个字符"
+ },
+ {
+  "path": [
+   "policy",
+   "terminal_reserved",
+   "ctrl+w"
+  ],
+  "value": "删除单词"
+ },
+ {
+  "path": [
+   "policy",
+   "terminal_reserved",
+   "ctrl+z"
+  ],
+  "value": "挂起"
+ },
+ {
+  "path": [
+   "commands",
+   "0",
+   "label"
+  ],
+  "value": "打开命令面板"
+ },
+ {
+  "path": [
+   "commands",
+   "1",
+   "label"
+  ],
+  "value": "命令面板：命令"
+ },
+ {
+  "path": [
+   "commands",
+   "2",
+   "label"
+  ],
+  "value": "命令面板：跳转到会话"
+ },
+ {
+  "path": [
+   "commands",
+   "3",
+   "label"
+  ],
+  "value": "命令面板：跳转到项目"
+ },
+ {
+  "path": [
+   "commands",
+   "4",
+   "label"
+  ],
+  "value": "命令面板：打开当前项目中的文件"
+ },
+ {
+  "path": [
+   "commands",
+   "5",
+   "label"
+  ],
+  "value": "返回（关闭一层浮层，再返回上一个标签页）"
+ },
+ {
+  "path": [
+   "commands",
+   "6",
+   "label"
+  ],
+  "value": "聚焦终端网格"
+ },
+ {
+  "path": [
+   "commands",
+   "7",
+   "label"
+  ],
+  "value": "聚焦项目侧边栏"
+ },
+ {
+  "path": [
+   "commands",
+   "8",
+   "label"
+  ],
+  "value": "聚焦侧边面板"
+ },
+ {
+  "path": [
+   "commands",
+   "9",
+   "label"
+  ],
+  "value": "聚焦当前窗格的标签栏"
+ },
+ {
+  "path": [
+   "commands",
+   "10",
+   "label"
+  ],
+  "value": "聚焦消息输入区"
+ },
+ {
+  "path": [
+   "commands",
+   "11",
+   "label"
+  ],
+  "value": "聚焦下一个界面区域"
+ },
+ {
+  "path": [
+   "commands",
+   "12",
+   "label"
+  ],
+  "value": "聚焦上一个界面区域"
+ },
+ {
+  "path": [
+   "commands",
+   "13",
+   "label"
+  ],
+  "value": "浏览会话历史"
+ },
+ {
+  "path": [
+   "commands",
+   "14",
+   "label"
+  ],
+  "value": "浏览所选项目的会话历史"
+ },
+ {
+  "path": [
+   "commands",
+   "15",
+   "label"
+  ],
+  "value": "打开设置"
+ },
+ {
+  "path": [
+   "commands",
+   "16",
+   "label"
+  ],
+  "value": "管理插件"
+ },
+ {
+  "path": [
+   "commands",
+   "17",
+   "label"
+  ],
+  "value": "打开用量与活动"
+ },
+ {
+  "path": [
+   "commands",
+   "18",
+   "label"
+  ],
+  "value": "打开提供商配额窗口"
+ },
+ {
+  "path": [
+   "commands",
+   "19",
+   "label"
+  ],
+  "value": "打开带宽用量"
+ },
+ {
+  "path": [
+   "commands",
+   "20",
+   "label"
+  ],
+  "value": "打开存储用量"
+ },
+ {
+  "path": [
+   "commands",
+   "21",
+   "label"
+  ],
+  "value": "打开自动化控制台"
+ },
+ {
+  "path": [
+   "commands",
+   "22",
+   "label"
+  ],
+  "value": "打开通知"
+ },
+ {
+  "path": [
+   "commands",
+   "23",
+   "label"
+  ],
+  "value": "打开系统资源（进程、带宽、存储）"
+ },
+ {
+  "path": [
+   "commands",
+   "24",
+   "label"
+  ],
+  "value": "打开全部会话活动遥测"
+ },
+ {
+  "path": [
+   "commands",
+   "25",
+   "label"
+  ],
+  "value": "检查会话进程和预览"
+ },
+ {
+  "path": [
+   "commands",
+   "26",
+   "label"
+  ],
+  "value": "检查所选项目的进程"
+ },
+ {
+  "path": [
+   "commands",
+   "27",
+   "label"
+  ],
+  "value": "打开统一进程查看器"
+ },
+ {
+  "path": [
+   "commands",
+   "28",
+   "label"
+  ],
+  "value": "在窗格中预览聚焦的 HTML 文件"
+ },
+ {
+  "path": [
+   "commands",
+   "29",
+   "label"
+  ],
+  "value": "打开帮助（swe-mux 的工作原理）"
+ },
+ {
+  "path": [
+   "commands",
+   "30",
+   "label"
+  ],
+  "value": "开始使用导览"
+ },
+ {
+  "path": [
+   "commands",
+   "31",
+   "label"
+  ],
+  "value": "向智能体询问此安装实例"
+ },
+ {
+  "path": [
+   "commands",
+   "32",
+   "label"
+  ],
+  "value": "配置操作"
+ },
+ {
+  "path": [
+   "commands",
+   "33",
+   "label"
+  ],
+  "value": "切换设置分类面板（窄屏布局）"
+ },
+ {
+  "path": [
+   "commands",
+   "34",
+   "label"
+  ],
+  "value": "关闭设置分类面板（窄屏布局）"
+ },
+ {
+  "path": [
+   "commands",
+   "35",
+   "label"
+  ],
+  "value": "重新加载守护进程并保留会话"
+ },
+ {
+  "path": [
+   "commands",
+   "36",
+   "label"
+  ],
+  "value": "重新构建并部署应用，保留会话"
+ },
+ {
+  "path": [
+   "commands",
+   "37",
+   "label"
+  ],
+  "value": "重新加载界面"
+ },
+ {
+  "path": [
+   "commands",
+   "38",
+   "label"
+  ],
+  "value": "打开全局草稿本"
+ },
+ {
+  "path": [
+   "commands",
+   "39",
+   "label"
+  ],
+  "value": "打开当前项目的笔记"
+ },
+ {
+  "path": [
+   "commands",
+   "40",
+   "label"
+  ],
+  "value": "浏览全部笔记"
+ },
+ {
+  "path": [
+   "commands",
+   "41",
+   "label"
+  ],
+  "value": "浏览当前项目的笔记"
+ },
+ {
+  "path": [
+   "commands",
+   "42",
+   "label"
+  ],
+  "value": "在聚焦的笔记中查找"
+ },
+ {
+  "path": [
+   "commands",
+   "43",
+   "label"
+  ],
+  "value": "跳转到聚焦笔记中的标题"
+ },
+ {
+  "path": [
+   "commands",
+   "44",
+   "label"
+  ],
+  "value": "切换固定的标题大纲浮层"
+ },
+ {
+  "path": [
+   "commands",
+   "45",
+   "label"
+  ],
+  "value": "打开提示词库"
+ },
+ {
+  "path": [
+   "commands",
+   "46",
+   "label"
+  ],
+  "value": "打开所选项目的提示词库"
+ },
+ {
+  "path": [
+   "commands",
+   "47",
+   "label"
+  ],
+  "value": "新建提示词模板"
+ },
+ {
+  "path": [
+   "commands",
+   "48",
+   "label"
+  ],
+  "value": "打开聚焦会话的提示词队列"
+ },
+ {
+  "path": [
+   "commands",
+   "49",
+   "label"
+  ],
+  "value": "打开会话总队列"
+ },
+ {
+  "path": [
+   "commands",
+   "50",
+   "label"
+  ],
+  "value": "打开所选项目的会话总队列"
+ },
+ {
+  "path": [
+   "commands",
+   "51",
+   "label"
+  ],
+  "value": "暂停或恢复全部自动投递"
+ },
+ {
+  "path": [
+   "commands",
+   "52",
+   "label"
+  ],
+  "value": "切换广播输入"
+ },
+ {
+  "path": [
+   "commands",
+   "53",
+   "label"
+  ],
+  "value": "在当前项目中新建终端"
+ },
+ {
+  "path": [
+   "commands",
+   "54",
+   "label"
+  ],
+  "value": "自定义新终端"
+ },
+ {
+  "path": [
+   "commands",
+   "55",
+   "label"
+  ],
+  "value": "打开所选会话"
+ },
+ {
+  "path": [
+   "commands",
+   "56",
+   "label"
+  ],
+  "value": "重命名所选会话"
+ },
+ {
+  "path": [
+   "commands",
+   "57",
+   "label"
+  ],
+  "value": "确认后终止当前会话"
+ },
+ {
+  "path": [
+   "commands",
+   "58",
+   "label"
+  ],
+  "value": "立即终止所选会话"
+ },
+ {
+  "path": [
+   "commands",
+   "59",
+   "label"
+  ],
+  "value": "移除这里所有已结束的会话"
+ },
+ {
+  "path": [
+   "commands",
+   "60",
+   "label"
+  ],
+  "value": "切换当前智能体的关注固定状态"
+ },
+ {
+  "path": [
+   "commands",
+   "61",
+   "label"
+  ],
+  "value": "取消当前智能体的待关注状态"
+ },
+ {
+  "path": [
+   "commands",
+   "62",
+   "label"
+  ],
+  "value": "清除当前会话的持续活动状态"
+ },
+ {
+  "path": [
+   "commands",
+   "63",
+   "label"
+  ],
+  "value": "复制所选会话 ID"
+ },
+ {
+  "path": [
+   "commands",
+   "64",
+   "label"
+  ],
+  "value": "复制所选工作目录"
+ },
+ {
+  "path": [
+   "commands",
+   "65",
+   "label"
+  ],
+  "value": "显示所选会话的目录"
+ },
+ {
+  "path": [
+   "commands",
+   "66",
+   "label"
+  ],
+  "value": "恢复所选智能体会话"
+ },
+ {
+  "path": [
+   "commands",
+   "67",
+   "label"
+  ],
+  "value": "恢复非活动智能体会话"
+ },
+ {
+  "path": [
+   "commands",
+   "68",
+   "label"
+  ],
+  "value": "在新进程中重新启动所选智能体"
+ },
+ {
+  "path": [
+   "commands",
+   "69",
+   "label"
+  ],
+  "value": "安排稍后恢复所选智能体"
+ },
+ {
+  "path": [
+   "commands",
+   "70",
+   "label"
+  ],
+  "value": "重新启动所选会话"
+ },
+ {
+  "path": [
+   "commands",
+   "71",
+   "label"
+  ],
+  "value": "重新启动所选冷会话"
+ },
+ {
+  "path": [
+   "commands",
+   "72",
+   "label"
+  ],
+  "value": "重新生成所选会话的标题"
+ },
+ {
+  "path": [
+   "commands",
+   "73",
+   "label"
+  ],
+  "value": "将所选会话标为已读或未读"
+ },
+ {
+  "path": [
+   "commands",
+   "74",
+   "label"
+  ],
+  "value": "切换所选会话的广播参与状态"
+ },
+ {
+  "path": [
+   "commands",
+   "75",
+   "label"
+  ],
+  "value": "聚焦当前项目的下一个会话"
+ },
+ {
+  "path": [
+   "commands",
+   "76",
+   "label"
+  ],
+  "value": "聚焦当前项目的上一个会话"
+ },
+ {
+  "path": [
+   "commands",
+   "77",
+   "label"
+  ],
+  "value": "单次批准当前会话的待处理请求"
+ },
+ {
+  "path": [
+   "commands",
+   "78",
+   "label"
+  ],
+  "value": "审批：每次询问"
+ },
+ {
+  "path": [
+   "commands",
+   "79",
+   "label"
+  ],
+  "value": "审批：自动批准允许列表中的请求"
+ },
+ {
+  "path": [
+   "commands",
+   "80",
+   "label"
+  ],
+  "value": "审批：全部自动批准"
+ },
+ {
+  "path": [
+   "commands",
+   "81",
+   "label"
+  ],
+  "value": "添加项目"
+ },
+ {
+  "path": [
+   "commands",
+   "82",
+   "label"
+  ],
+  "value": "管理项目"
+ },
+ {
+  "path": [
+   "commands",
+   "83",
+   "label"
+  ],
+  "value": "在所选项目中新建终端"
+ },
+ {
+  "path": [
+   "commands",
+   "84",
+   "label"
+  ],
+  "value": "在所选项目中新建自定义终端"
+ },
+ {
+  "path": [
+   "commands",
+   "85",
+   "label"
+  ],
+  "value": "聚焦下一个项目（按侧边栏顺序）"
+ },
+ {
+  "path": [
+   "commands",
+   "86",
+   "label"
+  ],
+  "value": "聚焦上一个项目（按侧边栏顺序）"
+ },
+ {
+  "path": [
+   "commands",
+   "87",
+   "label"
+  ],
+  "value": "重命名所选项目"
+ },
+ {
+  "path": [
+   "commands",
+   "88",
+   "label"
+  ],
+  "value": "在文件管理器中显示所选项目"
+ },
+ {
+  "path": [
+   "commands",
+   "89",
+   "label"
+  ],
+  "value": "上移所选项目"
+ },
+ {
+  "path": [
+   "commands",
+   "90",
+   "label"
+  ],
+  "value": "下移所选项目"
+ },
+ {
+  "path": [
+   "commands",
+   "91",
+   "label"
+  ],
+  "value": "打开所选项目的设置"
+ },
+ {
+  "path": [
+   "commands",
+   "92",
+   "label"
+  ],
+  "value": "从 swe-mux 移除所选项目"
+ },
+ {
+  "path": [
+   "commands",
+   "93",
+   "label"
+  ],
+  "value": "浏览所选项目的文件"
+ },
+ {
+  "path": [
+   "commands",
+   "94",
+   "label"
+  ],
+  "value": "向右拆分聚焦的窗格"
+ },
+ {
+  "path": [
+   "commands",
+   "95",
+   "label"
+  ],
+  "value": "向下拆分聚焦的窗格"
+ },
+ {
+  "path": [
+   "commands",
+   "96",
+   "label"
+  ],
+  "value": "新建终端标签页"
+ },
+ {
+  "path": [
+   "commands",
+   "97",
+   "label"
+  ],
+  "value": "将聚焦的标签页分离到独立窗格"
+ },
+ {
+  "path": [
+   "commands",
+   "98",
+   "label"
+  ],
+  "value": "关闭聚焦的窗格"
+ },
+ {
+  "path": [
+   "commands",
+   "99",
+   "label"
+  ],
+  "value": "切换当前窗格的最大化状态"
+ },
+ {
+  "path": [
+   "commands",
+   "100",
+   "label"
+  ],
+  "value": "聚焦下一个窗格"
+ },
+ {
+  "path": [
+   "commands",
+   "101",
+   "label"
+  ],
+  "value": "聚焦上一个窗格"
+ },
+ {
+  "path": [
+   "commands",
+   "102",
+   "label"
+  ],
+  "value": "聚焦左侧窗格"
+ },
+ {
+  "path": [
+   "commands",
+   "103",
+   "label"
+  ],
+  "value": "聚焦右侧窗格"
+ },
+ {
+  "path": [
+   "commands",
+   "104",
+   "label"
+  ],
+  "value": "聚焦上方窗格"
+ },
+ {
+  "path": [
+   "commands",
+   "105",
+   "label"
+  ],
+  "value": "聚焦下方窗格"
+ },
+ {
+  "path": [
+   "commands",
+   "106",
+   "label"
+  ],
+  "value": "将当前窗格与左侧窗格交换"
+ },
+ {
+  "path": [
+   "commands",
+   "107",
+   "label"
+  ],
+  "value": "将当前窗格与右侧窗格交换"
+ },
+ {
+  "path": [
+   "commands",
+   "108",
+   "label"
+  ],
+  "value": "将当前窗格与上方窗格交换"
+ },
+ {
+  "path": [
+   "commands",
+   "109",
+   "label"
+  ],
+  "value": "将当前窗格与下方窗格交换"
+ },
+ {
+  "path": [
+   "commands",
+   "110",
+   "label"
+  ],
+  "value": "将当前窗格与下一个窗格交换"
+ },
+ {
+  "path": [
+   "commands",
+   "111",
+   "label"
+  ],
+  "value": "向左移动窗格分隔线"
+ },
+ {
+  "path": [
+   "commands",
+   "112",
+   "label"
+  ],
+  "value": "向右移动窗格分隔线"
+ },
+ {
+  "path": [
+   "commands",
+   "113",
+   "label"
+  ],
+  "value": "向上移动窗格分隔线"
+ },
+ {
+  "path": [
+   "commands",
+   "114",
+   "label"
+  ],
+  "value": "向下移动窗格分隔线"
+ },
+ {
+  "path": [
+   "commands",
+   "115",
+   "label"
+  ],
+  "value": "将当前标签页移到左侧窗格"
+ },
+ {
+  "path": [
+   "commands",
+   "116",
+   "label"
+  ],
+  "value": "将当前标签页移到右侧窗格"
+ },
+ {
+  "path": [
+   "commands",
+   "117",
+   "label"
+  ],
+  "value": "将当前标签页移到上方窗格"
+ },
+ {
+  "path": [
+   "commands",
+   "118",
+   "label"
+  ],
+  "value": "将当前标签页移到下方窗格"
+ },
+ {
+  "path": [
+   "commands",
+   "119",
+   "label"
+  ],
+  "value": "聚焦下一个工作区标签页"
+ },
+ {
+  "path": [
+   "commands",
+   "120",
+   "label"
+  ],
+  "value": "聚焦上一个工作区标签页"
+ },
+ {
+  "path": [
+   "commands",
+   "121",
+   "label"
+  ],
+  "value": "聚焦下一个标签页（移动端）"
+ },
+ {
+  "path": [
+   "commands",
+   "122",
+   "label"
+  ],
+  "value": "聚焦上一个标签页（移动端）"
+ },
+ {
+  "path": [
+   "commands",
+   "123",
+   "label"
+  ],
+  "value": "在窗格内左移当前标签页"
+ },
+ {
+  "path": [
+   "commands",
+   "124",
+   "label"
+  ],
+  "value": "在窗格内右移当前标签页"
+ },
+ {
+  "path": [
+   "commands",
+   "125",
+   "label"
+  ],
+  "value": "拆散当前标签组"
+ },
+ {
+  "path": [
+   "commands",
+   "126",
+   "label"
+  ],
+  "value": "将所选会话与当前会话合为标签组"
+ },
+ {
+  "path": [
+   "commands",
+   "127",
+   "label"
+  ],
+  "value": "在右侧拆分窗格中打开所选会话"
+ },
+ {
+  "path": [
+   "commands",
+   "128",
+   "label"
+  ],
+  "value": "在下方拆分窗格中打开所选会话"
+ },
+ {
+  "path": [
+   "commands",
+   "129",
+   "label"
+  ],
+  "value": "在拆分窗格中新建自定义终端"
+ },
+ {
+  "path": [
+   "commands",
+   "130",
+   "label"
+  ],
+  "value": "打开导航侧边栏"
+ },
+ {
+  "path": [
+   "commands",
+   "131",
+   "label"
+  ],
+  "value": "关闭导航侧边栏"
+ },
+ {
+  "path": [
+   "commands",
+   "132",
+   "label"
+  ],
+  "value": "切换导航侧边栏"
+ },
+ {
+  "path": [
+   "commands",
+   "133",
+   "label"
+  ],
+  "value": "筛选项目和会话"
+ },
+ {
+  "path": [
+   "commands",
+   "134",
+   "label"
+  ],
+  "value": "切换 swe-mux 菜单"
+ },
+ {
+  "path": [
+   "commands",
+   "135",
+   "label"
+  ],
+  "value": "在聚焦的终端中查找"
+ },
+ {
+  "path": [
+   "commands",
+   "136",
+   "label"
+  ],
+  "value": "从当前终端复制"
+ },
+ {
+  "path": [
+   "commands",
+   "137",
+   "label"
+  ],
+  "value": "粘贴到当前终端"
+ },
+ {
+  "path": [
+   "commands",
+   "138",
+   "label"
+  ],
+  "value": "全选当前终端内容"
+ },
+ {
+  "path": [
+   "commands",
+   "139",
+   "label"
+  ],
+  "value": "清空当前终端"
+ },
+ {
+  "path": [
+   "commands",
+   "140",
+   "label"
+  ],
+  "value": "隐藏屏幕键盘（聚焦终端的阅读/选择模式）"
+ },
+ {
+  "path": [
+   "commands",
+   "141",
+   "label"
+  ],
+  "value": "隐藏屏幕键盘"
+ },
+ {
+  "path": [
+   "commands",
+   "142",
+   "label"
+  ],
+  "value": "侧边面板：切换显示，恢复上次使用的标签页"
+ },
+ {
+  "path": [
+   "commands",
+   "143",
+   "label"
+  ],
+  "value": "侧边面板：打开"
+ },
+ {
+  "path": [
+   "commands",
+   "144",
+   "label"
+  ],
+  "value": "侧边面板：关闭"
+ },
+ {
+  "path": [
+   "commands",
+   "145",
+   "label"
+  ],
+  "value": "侧边面板：临时查看操作标签页"
+ },
+ {
+  "path": [
+   "commands",
+   "146",
+   "label"
+  ],
+  "value": "侧边面板：打开操作、技能、提示词和剪贴板"
+ },
+ {
+  "path": [
+   "commands",
+   "147",
+   "label"
+  ],
+  "value": "侧边面板：打开提示词队列"
+ },
+ {
+  "path": [
+   "commands",
+   "148",
+   "label"
+  ],
+  "value": "侧边面板：打开当前会话的对话记录"
+ },
+ {
+  "path": [
+   "commands",
+   "149",
+   "label"
+  ],
+  "value": "侧边面板：打开当前会话的活动"
+ },
+ {
+  "path": [
+   "commands",
+   "150",
+   "label"
+  ],
+  "value": "侧边面板：打开当前会话的智能体设置"
+ },
+ {
+  "path": [
+   "commands",
+   "151",
+   "label"
+  ],
+  "value": "侧边面板：打开项目文件"
+ },
+ {
+  "path": [
+   "commands",
+   "152",
+   "label"
+  ],
+  "value": "侧边面板：打开项目笔记"
+ },
+ {
+  "path": [
+   "commands",
+   "153",
+   "label"
+  ],
+  "value": "侧边面板：打开项目 Git 状态"
+ },
+ {
+  "path": [
+   "commands",
+   "154",
+   "label"
+  ],
+  "value": "侧边面板：打开项目进程"
+ },
+ {
+  "path": [
+   "commands",
+   "155",
+   "label"
+  ],
+  "value": "侧边面板：打开定时运行"
+ },
+ {
+  "path": [
+   "commands",
+   "156",
+   "label"
+  ],
+  "value": "侧边面板：打开通知"
+ },
+ {
+  "path": [
+   "commands",
+   "157",
+   "label"
+  ],
+  "value": "侧边面板：打开扫描时间线"
+ },
+ {
+  "path": [
+   "commands",
+   "158",
+   "label"
+  ],
+  "value": "侧边面板：打开发现项"
+ },
+ {
+  "path": [
+   "commands",
+   "159",
+   "label"
+  ],
+  "value": "侧边面板：打开改动图"
+ },
+ {
+  "path": [
+   "commands",
+   "160",
+   "label"
+  ],
+  "value": "侧边面板：打开智能体配置"
+ },
+ {
+  "path": [
+   "commands",
+   "161",
+   "label"
+  ],
+  "value": "侧边面板：打开智能体工具和扩展"
+ },
+ {
+  "path": [
+   "commands",
+   "162",
+   "label"
+  ],
+  "value": "侧边面板：打开智能体指令和记忆"
+ },
+ {
+  "path": [
+   "commands",
+   "163",
+   "label"
+  ],
+  "value": "侧边面板：打开快捷操作"
+ },
+ {
+  "path": [
+   "commands",
+   "164",
+   "label"
+  ],
+  "value": "侧边面板：打开技能"
+ },
+ {
+  "path": [
+   "commands",
+   "165",
+   "label"
+  ],
+  "value": "侧边面板：打开提示词模板"
+ },
+ {
+  "path": [
+   "commands",
+   "166",
+   "label"
+  ],
+  "value": "侧边面板：打开剪贴板历史"
+ },
+ {
+  "path": [
+   "commands",
+   "167",
+   "label"
+  ],
+  "value": "侧边面板：打开 Git 工作树图"
+ },
+ {
+  "path": [
+   "commands",
+   "168",
+   "label"
+  ],
+  "value": "侧边面板：打开 Git 提交日志"
+ },
+ {
+  "path": [
+   "commands",
+   "169",
+   "label"
+  ],
+  "value": "侧边面板：打开 Git 提交来源"
+ },
+ {
+  "path": [
+   "commands",
+   "170",
+   "label"
+  ],
+  "value": "重置侧边面板布局"
+ },
+ {
+  "path": [
+   "commands",
+   "171",
+   "label"
+  ],
+  "value": "侧边面板：聚焦窗格内的下一个标签页"
+ },
+ {
+  "path": [
+   "commands",
+   "172",
+   "label"
+  ],
+  "value": "侧边面板：聚焦窗格内的上一个标签页"
+ },
+ {
+  "path": [
+   "commands",
+   "173",
+   "label"
+  ],
+  "value": "侧边面板：左移当前标签页"
+ },
+ {
+  "path": [
+   "commands",
+   "174",
+   "label"
+  ],
+  "value": "侧边面板：右移当前标签页"
+ },
+ {
+  "path": [
+   "commands",
+   "175",
+   "label"
+  ],
+  "value": "侧边面板：上移当前标签页"
+ },
+ {
+  "path": [
+   "commands",
+   "176",
+   "label"
+  ],
+  "value": "侧边面板：下移当前标签页"
+ },
+ {
+  "path": [
+   "commands",
+   "177",
+   "label"
+  ],
+  "value": "侧边面板：打开剪贴板历史（命令栏剪贴板按钮）"
+ },
+ {
+  "path": [
+   "commands",
+   "178",
+   "label"
+  ],
+  "value": "清除未固定的剪贴板历史"
+ },
+ {
+  "path": [
+   "commands",
+   "179",
+   "label"
+  ],
+  "value": "切换免手动对话"
+ },
+ {
+  "path": [
+   "commands",
+   "180",
+   "label"
+  ],
+  "value": "切换语音听写目标固定状态"
+ },
+ {
+  "path": [
+   "commands",
+   "181",
+   "label"
+  ],
+  "value": "配置语音（向导）"
+ },
+ {
+  "path": [
+   "commands",
+   "182",
+   "label"
+  ],
+  "value": "循环切换语音面板模式"
+ },
+ {
+  "path": [
+   "commands",
+   "183",
+   "label"
+  ],
+  "value": "下一个语音面板模式"
+ },
+ {
+  "path": [
+   "commands",
+   "184",
+   "label"
+  ],
+  "value": "上一个语音面板模式"
+ },
+ {
+  "path": [
+   "commands",
+   "185",
+   "label"
+  ],
+  "value": "展开语音栏"
+ },
+ {
+  "path": [
+   "commands",
+   "186",
+   "label"
+  ],
+  "value": "收起语音栏"
+ },
+ {
+  "path": [
+   "commands",
+   "187",
+   "label"
+  ],
+  "value": "播放暂存的语音回复"
+ },
+ {
+  "path": [
+   "commands",
+   "188",
+   "label"
+  ],
+  "value": "朗读当前会话的最新回复"
+ },
+ {
+  "path": [
+   "commands",
+   "189",
+   "label"
+  ],
+  "value": "提出语音问题"
+ },
+ {
+  "path": [
+   "commands",
+   "190",
+   "label"
+  ],
+  "value": "播报全部会话状态"
+ },
+ {
+  "path": [
+   "commands",
+   "191",
+   "label"
+  ],
+  "value": "播报全部会话的详细状态"
+ },
+ {
+  "path": [
+   "commands",
+   "192",
+   "label"
+  ],
+  "value": "由此设备接收语音回复"
+ },
+ {
+  "path": [
+   "commands",
+   "193",
+   "label"
+  ],
+  "value": "准备语音审批"
+ },
+ {
+  "path": [
+   "commands",
+   "194",
+   "label"
+  ],
+  "value": "确认语音审批"
+ },
+ {
+  "path": [
+   "commands",
+   "195",
+   "label"
+  ],
+  "value": "取消语音审批"
+ },
+ {
+  "path": [
+   "commands",
+   "196",
+   "label"
+  ],
+  "value": "切换助手面板"
+ },
+ {
+  "path": [
+   "commands",
+   "197",
+   "label"
+  ],
+  "value": "开始新的助手对话"
+ },
+ {
+  "path": [
+   "commands",
+   "198",
+   "label"
+  ],
+  "value": "切换到项目 1"
+ },
+ {
+  "path": [
+   "commands",
+   "199",
+   "label"
+  ],
+  "value": "切换到项目 2"
+ },
+ {
+  "path": [
+   "commands",
+   "200",
+   "label"
+  ],
+  "value": "切换到项目 3"
+ },
+ {
+  "path": [
+   "commands",
+   "201",
+   "label"
+  ],
+  "value": "切换到项目 4"
+ },
+ {
+  "path": [
+   "commands",
+   "202",
+   "label"
+  ],
+  "value": "切换到项目 5"
+ },
+ {
+  "path": [
+   "commands",
+   "203",
+   "label"
+  ],
+  "value": "切换到项目 6"
+ },
+ {
+  "path": [
+   "commands",
+   "204",
+   "label"
+  ],
+  "value": "切换到项目 7"
+ },
+ {
+  "path": [
+   "commands",
+   "205",
+   "label"
+  ],
+  "value": "切换到项目 8"
+ },
+ {
+  "path": [
+   "commands",
+   "206",
+   "label"
+  ],
+  "value": "切换到项目 9"
+ },
+ {
+  "path": [
+   "commands",
+   "207",
+   "label"
+  ],
+  "value": "聚焦工作区标签页 1"
+ },
+ {
+  "path": [
+   "commands",
+   "208",
+   "label"
+  ],
+  "value": "聚焦工作区标签页 2"
+ },
+ {
+  "path": [
+   "commands",
+   "209",
+   "label"
+  ],
+  "value": "聚焦工作区标签页 3"
+ },
+ {
+  "path": [
+   "commands",
+   "210",
+   "label"
+  ],
+  "value": "聚焦工作区标签页 4"
+ },
+ {
+  "path": [
+   "commands",
+   "211",
+   "label"
+  ],
+  "value": "聚焦工作区标签页 5"
+ },
+ {
+  "path": [
+   "commands",
+   "212",
+   "label"
+  ],
+  "value": "聚焦工作区标签页 6"
+ },
+ {
+  "path": [
+   "commands",
+   "213",
+   "label"
+  ],
+  "value": "聚焦工作区标签页 7"
+ },
+ {
+  "path": [
+   "commands",
+   "214",
+   "label"
+  ],
+  "value": "聚焦工作区标签页 8"
+ },
+ {
+  "path": [
+   "commands",
+   "215",
+   "label"
+  ],
+  "value": "聚焦工作区标签页 9"
+ }
+]

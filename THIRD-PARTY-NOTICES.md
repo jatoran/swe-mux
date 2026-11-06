@@ -176,7 +176,7 @@ by immutable revision and verified per-file by SHA-256 before it loads.
 | wrapt | 2.3.0 | BSD-2-Clause |
 | yarl | 1.24.2 | Apache-2.0 |
 
-## Frontend packages (102)
+## Frontend packages (106)
 
 | Package | Version | License |
 |---|---|---|
@@ -248,11 +248,13 @@ by immutable revision and verified per-file by SHA-256 before it loads.
 | @xterm/addon-web-links | 0.12.0 | MIT |
 | @xterm/addon-webgl | 0.19.0 | MIT |
 | @xterm/xterm | 6.0.0 | MIT |
+| ansi-regex | 6.5.0 | MIT |
 | classnames | 2.5.1 | MIT |
 | crelt | 1.0.7 | MIT |
 | diff-match-patch | 1.0.5 | Apache-2.0 |
 | events | 3.3.0 | MIT |
 | flatbuffers | 1.12.0 | SEE LICENSE IN LICENSE.txt |
+| get-east-asian-width | 1.7.0 | MIT |
 | gitdiff-parser | 0.3.1 | MIT |
 | graphology | 0.26.0 | MIT |
 | graphology-layout-forceatlas2 | 0.10.1 | MIT |
@@ -278,6 +280,8 @@ by immutable revision and verified per-file by SHA-256 before it loads.
 | react-diff-view | 3.3.3 | MIT |
 | shallow-equal | 3.1.0 | MIT |
 | sigma | 3.0.3 | MIT |
+| string-width | 8.3.0 | MIT |
+| strip-ansi | 7.2.0 | MIT |
 | style-mod | 4.1.3 | MIT |
 | undici-types | 8.3.0 | MIT |
 | w3c-keyname | 2.2.8 | MIT |

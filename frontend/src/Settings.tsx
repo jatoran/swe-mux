@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { codeLabel } from './localization/codeLabels.ts'
 import { sourceText, applyLanguagePreference } from './localization/index.ts'
 import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
@@ -565,9 +566,11 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
    * `undeliverable` describes exactly those rules on exactly this host, so adopting
    * one without the other draws warnings about a keymap that is no longer there.
    */
-  const adoptKeybindings = useCallback((data:KeybindingsResponse) => {
-    setBindingRules(data.rules||[])
-    setSavedBindings(data.rules||[])
+  const adoptKeybindings = useCallback((data:KeybindingsResponse, presentationOnly = false) => {
+    if (!presentationOnly) {
+      setBindingRules(data.rules||[])
+      setSavedBindings(data.rules||[])
+    }
     setBindingCommands(data.commands||[])
     // Field-by-field, not `data.policy||null`: the Input tab maps over every one
     // of these collections unconditionally, so a payload that carries a `policy`
@@ -586,7 +589,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       rules:data.policy.rules||[],
     }:null)
     setKeymapPresets(data.presets||[])
-    setKeymapPreset(data.preset||'')
+    if (!presentationOnly) setKeymapPreset(data.preset||'')
     setKeymapHost({host:data.host||'browser',platform:data.platform||'win'})
     setKeymapWarnings(data.undeliverable||[])
     setBindingError(Object.keys(data.rejected||{}).length
@@ -752,6 +755,17 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       if(bundle.projects)setProjectParentHint(commonestParent(bundle.projects.map(row=>row.root||'')))
     }).catch(error => setStatus(error.message))
   }, [])
+
+  const bindingLanguage = useRef(uiLocale.value)
+  useEffect(() => {
+    if (bindingLanguage.current === uiLocale.value) return
+    bindingLanguage.current = uiLocale.value
+    let active = true
+    void api<KeybindingsResponse>('GET', `/api/keybindings?${hostQuery()}`).then(data => {
+      if (active) adoptKeybindings(data, true)
+    }).catch(error => { if (active) setBindingError(error.message) })
+    return () => { active = false }
+  }, [uiLocale.value, adoptKeybindings])
 
   // Everything a *specific* tab reads, fetched when that tab is first opened and
   // never again while the panel stays open. Each entry is one tab's whole data
@@ -1282,6 +1296,8 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   useEffect(() => {
     if (!capturingCommand) return
     const capture = (event:KeyboardEvent) => {
+      if (isComposingKey(event)) { setCaptureSequence([]); return }
+
       // Fixed scale keys are application-reserved, including while the shortcut
       // recorder is open. Leave them untouched for App's scale capture listener.
       if(uiScaleKeyboardIntent(event))return
@@ -1296,6 +1312,8 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
 
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
+      if (isComposingKey(event)) return
+
       // A field with an unsaved edit that Escape reverts (a saved account's name) marks
       // itself, because this capture-phase listener would otherwise close the panel
       // before the field saw the key. It stops the key's propagation itself.
@@ -1788,7 +1806,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   // closed it is `visibility:hidden` rather than `aria-hidden`, which is what keeps its
   // buttons out of the focus order without hiding elements that are still focusable.
   const renderTabNav = (previews:Map<SettingsTab,SettingsRailSection[]>) => <Fragment>
-    <nav ref={tabNavRef} id="settings-tab-nav" class={`settings-tabs${narrow?' settings-tabs-drawer':''}${narrow&&navOpen?' open':''}`} role="tablist" aria-label={t("Settings.e26d51d367")}>
+    <nav data-tab-group="Settings.e26d51d367" ref={tabNavRef} id="settings-tab-nav" class={`settings-tabs${narrow?' settings-tabs-drawer':''}${narrow&&navOpen?' open':''}`} role="tablist" aria-label={t("Settings.e26d51d367")}>
       {settingsTabGroups().map(group=><div class="settings-tab-group" role="presentation" key={group.group}>
         <span aria-hidden="true">{group.group}</span>
         {group.tabs.map(tab=>{
@@ -1833,7 +1851,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       that appears late would shift the chrome out from under a tap. Narrow it lives in
       the header; wide it sits above the section list, at the top of the nav column. */}
   const loadingSearch = <div class="settings-search"><input type="search" disabled placeholder={t("Settings.57054c5a04")} aria-label={t("Settings.9c927bd29c")} /></div>
-  if (!draft) return <div class="settings-layer" onMouseDown={event=>event.target===event.currentTarget&&requestClose()}><section class="settings-panel" ref={panel} role="dialog" aria-modal="true" aria-label={t("Settings.74a883a037")}>
+  if (!draft) return <div class="settings-layer" onMouseDown={event=>event.target===event.currentTarget&&requestClose()}><section data-dialog-id="settings" class="settings-panel" ref={panel} role="dialog" aria-modal="true" aria-label={t("Settings.74a883a037")}>
     <header>{navTrigger}{heading}
       {narrow && loadingSearch}
       <button class="settings-close" aria-label={t("Settings.2da15e4dad")} onClick={()=>requestClose()}>×</button></header>
@@ -2969,6 +2987,8 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     else if(shortcutHits)openShortcuts()
   }
   const onSearchKey=(event:{key:string;preventDefault:()=>void})=>{
+      if (isComposingKey(event)) return
+
     if(!resultCount)return
     if(event.key==='ArrowDown'){event.preventDefault();setHighlight((activeResult+1)%resultCount)}
     else if(event.key==='ArrowUp'){event.preventDefault();setHighlight((activeResult-1+resultCount)%resultCount)}
@@ -2984,7 +3004,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       {!resultCount && <p>{rich("Settings.6422f95e3b", { value1: query.trim() })}</p>}
     </div>}
   </div>
-  return <div class="settings-layer" onMouseDown={event=>event.target===event.currentTarget&&requestClose()}><section class="settings-panel" ref={panel} role="dialog" aria-modal={!closeIntent&&!resetIntent} aria-hidden={Boolean(closeIntent||resetIntent)} aria-label={t("Settings.74a883a037")}>
+  return <div class="settings-layer" onMouseDown={event=>event.target===event.currentTarget&&requestClose()}><section data-dialog-id="settings" class="settings-panel" ref={panel} role="dialog" aria-modal={!closeIntent&&!resetIntent} aria-hidden={Boolean(closeIntent||resetIntent)} aria-label={t("Settings.74a883a037")}>
     <header>{navTrigger}{heading}
       {narrow && searchBox}
       <button class="settings-close" aria-label={t("Settings.2da15e4dad")} onClick={()=>requestClose()}>×</button></header>

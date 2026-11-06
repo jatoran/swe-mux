@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { mobileLayout } from './deviceMode'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
@@ -164,6 +165,8 @@ export function GuidedTutorial({hasProject,setupCompleted=false,initialStep,onSt
   useDismissLevel(onExit,true,'tutorial')
   useEffect(()=>{
     const key=(event:KeyboardEvent)=>{
+      if (isComposingKey(event)) return
+
       if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();dismissStack.pop()}
       if(event.key==='ArrowRight'&&!step.action){event.preventDefault();setIndex(value=>Math.min(steps.length-1,value+1))}
     }

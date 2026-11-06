@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { CompactGrantFlag } from './GrantGate'
@@ -179,6 +180,8 @@ export function ClipboardTab({ onInsert, onDone, onOpenSettings, autoFocusToken 
   // The filter keeps its keyboard fast path: Enter still inserts the active row
   // without a trip through the list, and the arrows now also open and close it.
   const onSearchKey = (event: KeyboardEvent) => {
+      if (isComposingKey(event)) return
+
     const entry = entries[index]
     if (event.key === 'ArrowDown') { event.preventDefault(); setIndex(value => Math.min(value + 1, Math.max(0, entries.length - 1))) }
     else if (event.key === 'ArrowUp') { event.preventDefault(); setIndex(value => Math.max(0, value - 1)) }

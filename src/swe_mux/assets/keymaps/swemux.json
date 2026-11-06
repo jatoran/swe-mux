@@ -1,9 +1,10 @@
 {
   "id": "swemux",
   "title": "swe-mux",
-  "description": "The default. A small flat set on Ctrl+Shift for the things you do constantly, and Ctrl+Shift+Space as a leader for everything else. Ctrl+Shift is what every terminal emulator claims for itself, because Ctrl+<letter> belongs to the shell inside; it is also the one common namespace AltGr does not collide with and no window manager grabs.",
   "leader": "ctrl+shift+space",
-  "include": ["leader-tree"],
+  "include": [
+    "leader-tree"
+  ],
   "bindings": {
     "ctrl+shift+p": "palette.open",
     "f1": "palette.open",
@@ -60,25 +61,106 @@
       "platform": "mac",
       "note": "Cmd is the primary modifier on macOS, so the Ctrl+Shift set above is mirrored onto it. Both work; nothing was taken away. The leader stays Ctrl+Shift+Space, which is free on macOS - Cmd+Space is Spotlight."
     },
-    { "keys": "meta+shift+enter", "command": "session.spawnShell", "platform": "mac" },
-    { "keys": "meta+shift+\\", "command": "pane.splitHorizontal", "platform": "mac" },
-    { "keys": "meta+shift+-", "command": "pane.splitVertical", "platform": "mac" },
-    { "keys": "meta+shift+z", "command": "pane.zoom", "platform": "mac" },
-    { "keys": "meta+shift+x", "command": "pane.close", "platform": "mac" },
-    { "keys": "meta+shift+arrowleft", "command": "pane.focusLeft", "platform": "mac" },
-    { "keys": "meta+shift+arrowright", "command": "pane.focusRight", "platform": "mac" },
-    { "keys": "meta+shift+arrowup", "command": "pane.focusUp", "platform": "mac" },
-    { "keys": "meta+shift+arrowdown", "command": "pane.focusDown", "platform": "mac" },
-    { "keys": "meta+shift+[", "command": "tab.previous", "platform": "mac" },
-    { "keys": "meta+shift+]", "command": "tab.next", "platform": "mac" },
-    { "keys": "meta+shift+f", "command": "terminal.find", "platform": "mac" },
-    { "keys": "meta+shift+e", "command": "drawer.files", "platform": "mac" },
-    { "keys": "meta+shift+g", "command": "drawer.git", "platform": "mac" },
-    { "keys": "meta+shift+u", "command": "drawer.queue", "platform": "mac" },
-    { "keys": "meta+shift+k", "command": "drawer.transcript", "platform": "mac" },
-    { "keys": "meta+shift+l", "command": "drawer.toggle", "platform": "mac" },
-    { "keys": "meta+shift+s", "command": "sidebar.toggle", "platform": "mac" },
-    { "keys": "meta+,", "command": "settings.open", "platform": "mac" },
-    { "keys": "meta+shift+h", "command": "history.open", "platform": "mac" }
-  ]
+    {
+      "keys": "meta+shift+enter",
+      "command": "session.spawnShell",
+      "platform": "mac"
+    },
+    {
+      "keys": "meta+shift+\\",
+      "command": "pane.splitHorizontal",
+      "platform": "mac"
+    },
+    {
+      "keys": "meta+shift+-",
+      "command": "pane.splitVertical",
+      "platform": "mac"
+    },
+    {
+      "keys": "meta+shift+z",
+      "command": "pane.zoom",
+      "platform": "mac"
+    },
+    {
+      "keys": "meta+shift+x",
+      "command": "pane.close",
+      "platform": "mac"
+    },
+    {
+      "keys": "meta+shift+arrowleft",
+      "command": "pane.focusLeft",
+      "platform": "mac"
+    },
+    {
+      "keys": "meta+shift+arrowright",
+      "command": "pane.focusRight",
+      "platform": "mac"
+    },
+    {
+      "keys": "meta+shift+arrowup",
+      "command": "pane.focusUp",
+      "platform": "mac"
+    },
+    {
+      "keys": "meta+shift+arrowdown",
+      "command": "pane.focusDown",
+      "platform": "mac"
+    },
+    {
+      "keys": "meta+shift+[",
+      "command": "tab.previous",
+      "platform": "mac"
+    },
+    {
+      "keys": "meta+shift+]",
+      "command": "tab.next",
+      "platform": "mac"
+    },
+    {
+      "keys": "meta+shift+f",
+      "command": "terminal.find",
+      "platform": "mac"
+    },
+    {
+      "keys": "meta+shift+e",
+      "command": "drawer.files",
+      "platform": "mac"
+    },
+    {
+      "keys": "meta+shift+g",
+      "command": "drawer.git",
+      "platform": "mac"
+    },
+    {
+      "keys": "meta+shift+u",
+      "command": "drawer.queue",
+      "platform": "mac"
+    },
+    {
+      "keys": "meta+shift+k",
+      "command": "drawer.transcript",
+      "platform": "mac"
+    },
+    {
+      "keys": "meta+shift+l",
+      "command": "drawer.toggle",
+      "platform": "mac"
+    },
+    {
+      "keys": "meta+shift+s",
+      "command": "sidebar.toggle",
+      "platform": "mac"
+    },
+    {
+      "keys": "meta+,",
+      "command": "settings.open",
+      "platform": "mac"
+    },
+    {
+      "keys": "meta+shift+h",
+      "command": "history.open",
+      "platform": "mac"
+    }
+  ],
+  "description_message": "keybinding.preset.swemux.description"
 }

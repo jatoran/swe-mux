@@ -137,7 +137,7 @@ export function PromptLibrary({ project, backend, startCreating, onInsert, onClo
   }
 
   return <div class="modal-layer prompt-library-layer" onMouseDown={event => event.target === event.currentTarget && close()}>
-    <section class="prompt-library" role="dialog" aria-modal="true" aria-label={t("PromptLibrary.a9e479fe98")}>
+    <section data-dialog-id="prompts" class="prompt-library" role="dialog" aria-modal="true" aria-label={t("PromptLibrary.a9e479fe98")}>
       <header>
         <div>
           <strong>{t("PromptLibrary.bc787aa8c4")}</strong>

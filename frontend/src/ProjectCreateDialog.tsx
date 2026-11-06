@@ -69,7 +69,7 @@ export function ProjectCreateDialog({groups,onClose,onCreated,onSetupComplete}:P
     <form ref={panel} data-tutorial="project-form" class="modal project-create-dialog" onSubmit={event=>{event.preventDefault();void submit()}}>
       <div class="modal-heading"><h2 data-heading-message="ProjectCreateDialog.fa67e4d0da">{t("ProjectCreateDialog.fa67e4d0da")}</h2><button type="button" aria-label={t("ProjectCreateDialog.c446f1a379")} disabled={busy} onClick={close}>×</button></div>
       <fieldset disabled={busy} class="project-create-fields">
-        <div class="project-create-mode" role="tablist" aria-label={t("ProjectCreateDialog.d919bdeddd")}>
+        <div data-tab-group="ProjectCreateDialog.d919bdeddd" class="project-create-mode" role="tablist" aria-label={t("ProjectCreateDialog.d919bdeddd")}>
           <button type="button" role="tab" aria-selected={draft.mode==='existing'} class={draft.mode==='existing'?'active':''} onClick={()=>setDraft(current=>({...current,mode:'existing'}))}>{t("ProjectCreateDialog.f160333f79")}</button>
           <button type="button" role="tab" aria-selected={draft.mode==='new'} class={draft.mode==='new'?'active':''} onClick={()=>setDraft(current=>({...current,mode:'new'}))}>{t("ProjectCreateDialog.cf28f49ec5")}</button>
         </div>

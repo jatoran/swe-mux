@@ -44,7 +44,7 @@
 
   /* Mono carries identity: headings, labels, commands, anything terminal-shaped.
      Sans carries prose, because monospace paragraphs are what made this page tiring. */
-  --mono: ui-monospace, "SF Mono", SFMono-Regular, "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, "Microsoft YaHei UI", "Noto Sans CJK SC", "PingFang SC", monospace;
   --sans: "Inter var", Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI Variable Text",
           "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --pad: clamp(18px, 4vw, 40px);
@@ -646,6 +646,9 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 .hero .sub { max-width: 850px; }
 .hero-facts { color: var(--fg-2); margin: 0 0 20px; }
 .demo-disclosure { padding: 8px 12px; margin: 0; color: var(--fg-2); font: 13px/1.5 var(--sans); border-top: 1px solid var(--line); }
+.demo-language { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.demo-language select { max-width: 120px; background: var(--panel); color: var(--fg); border: 1px solid var(--line-2); padding: 5px; font: inherit; }
+.demo-head { flex-wrap: wrap; }
 .demo-keymap-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--line); font-size: 12px; }
 .demo-keymap-bar[hidden] { display: none; }
 .demo-keymap-buttons { display: inline-flex; flex-wrap: wrap; gap: 4px; }
@@ -1089,10 +1092,35 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
     <h1>Changelog</h1>
     <div class="rel">
       <div class="relhead">
-        <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.4.0...HEAD">Unreleased</a></h2>
+        <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.4.1...HEAD">Unreleased</a></h2>
         <span class="fill"></span>
       </div>
       <p class="prose">Nothing yet.</p>
+    </div>
+    <div class="rel">
+      <div class="relhead">
+        <h2><a href="https://github.com/jatoran/swe-mux/releases/tag/v0.4.1">0.4.1</a></h2>
+        <span class="when">2026-11-05</span>
+        <span class="fill"></span>
+        <a class="relnotes" href="https://github.com/jatoran/swe-mux/releases/tag/v0.4.1">release notes</a>
+      </div>
+      <div class="relgroups">
+        <div><span class="k">Added</span> <span class="sep">1 entry</span></div>
+        <div><span class="k">Fixed</span> <span class="sep">3 entries</span></div>
+      </div>
+      <details class="relmore">
+        <summary>all 4 entries</summary>
+        <div class="changetype">Added</div>
+        <ul class="bullets">
+          <li><span>The website demo now supports English and Simplified Chinese, including walkthroughs, sample conversations and desktop/phone controls. Language switching preserves sessions and keymaps. The website links directly to the Chinese README and demo.</span></li>
+        </ul>
+        <div class="changetype">Fixed</div>
+        <ul class="bullets">
+          <li><span>Chinese input-method candidate keys no longer trigger application shortcuts, dismiss dialogs or get recorded as shortcut bindings. Starting composition cancels an unfinished shortcut sequence.</span></li>
+          <li><span>Command names, keymap descriptions and keyboard conflict warnings now follow the selected UI language.</span></li>
+          <li><span>Chinese text and emoji in the simulated demo terminal use their correct cell widths and preserve character boundaries during editing.</span></li>
+        </ul>
+      </details>
     </div>
     <div class="rel">
       <div class="relhead">

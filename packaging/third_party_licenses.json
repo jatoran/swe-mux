@@ -410,6 +410,12 @@
       "ecosystem": "npm"
     },
     {
+      "name": "ansi-regex",
+      "version": "6.5.0",
+      "license": "MIT",
+      "ecosystem": "npm"
+    },
+    {
       "name": "classnames",
       "version": "2.5.1",
       "license": "MIT",
@@ -437,6 +443,12 @@
       "name": "flatbuffers",
       "version": "1.12.0",
       "license": "SEE LICENSE IN LICENSE.txt",
+      "ecosystem": "npm"
+    },
+    {
+      "name": "get-east-asian-width",
+      "version": "1.7.0",
+      "license": "MIT",
       "ecosystem": "npm"
     },
     {
@@ -586,6 +598,18 @@
     {
       "name": "sigma",
       "version": "3.0.3",
+      "license": "MIT",
+      "ecosystem": "npm"
+    },
+    {
+      "name": "string-width",
+      "version": "8.3.0",
+      "license": "MIT",
+      "ecosystem": "npm"
+    },
+    {
+      "name": "strip-ansi",
+      "version": "7.2.0",
       "license": "MIT",
       "ecosystem": "npm"
     },

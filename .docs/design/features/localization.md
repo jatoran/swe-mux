@@ -10,7 +10,9 @@ Runtime English fallback remains available for damaged or partially installed ca
 
 Application chrome, setup, Settings, help, accessible labels, display statuses, backend messages, native dialogs, and push copy use catalogs.
 Terminal output, user-authored names and content, provider output, command syntax, protocol values, and voice recognition are not translated.
-The standalone voice benchmark and the marketing demo fixtures are development material, outside the product-copy guard.
+The standalone voice benchmark is development material, outside the product-copy guard.
+The marketing demo has separate English and Chinese catalogs and its own guard; see [Interactive website demo](demo.md).
+Command labels, groups, shipped keymap descriptions and conflict warnings use backend catalogs while command IDs and chords stay unchanged.
 
 ## Preference and selection
 

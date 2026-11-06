@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { rich, t } from './localization/index.ts'
 import { touchInput } from './deviceMode'
 import { useEffect, useRef, useState } from 'preact/hooks'
@@ -173,7 +174,9 @@ export function PreviewPane({ preview, onClose }: { preview: Preview; onClose: (
 
   useEffect(() => {
     if (!selecting) return
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); cancelSelect() } }
+    const onKey = (e: KeyboardEvent) => {
+      if (isComposingKey(e)) return
+ if (e.key === 'Escape') { e.preventDefault(); cancelSelect() } }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
   }, [selecting])

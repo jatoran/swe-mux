@@ -1,3 +1,5 @@
+import { codeLabel } from './localization/codeLabels.ts'
+import { isComposingKey } from './inputComposition.ts'
 import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { browserUuid } from './layout'
@@ -93,14 +95,14 @@ type EditingState = {
 }
 
 const STATE_LABEL: Record<string, string> = {
-  draft: 'draft',
-  armed: 'armed',
-  blocked: 'blocked',
-  delivering: 'delivering…',
-  sent: 'sent',
-  failed: 'failed',
-  cancelled: 'cancelled',
-  stranded: 'stranded',
+  get draft() { return codeLabel('draft') },
+  get armed() { return codeLabel('armed') },
+  get blocked() { return codeLabel('blocked') },
+  get delivering() { return codeLabel('delivering') + '…' },
+  get sent() { return codeLabel('sent') },
+  get failed() { return codeLabel('failed') },
+  get cancelled() { return codeLabel('cancelled') },
+  get stranded() { return codeLabel('stranded') },
 }
 
 function describeOutcome(outcome: QueueSendOutcome): string {
@@ -717,6 +719,8 @@ export function QueuePane({
           // the drawer can be swiped shut in the next frame without losing anything.
           onBlur={() => { void queueDraftSaver.flush(editing.key) }}
           onKeyDown={event => {
+      if (isComposingKey(event)) return
+
             if (event.key === 'Escape') {
               event.preventDefault()
               void closeEditor()

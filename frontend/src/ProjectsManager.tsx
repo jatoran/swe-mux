@@ -341,7 +341,7 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
   </div>
 
   return <div class="modal-layer projects-manager-layer" onMouseDown={event=>event.target===event.currentTarget&&onClose()}>
-    <section class="projects-manager" role="dialog" aria-modal="true" aria-label={t("ProjectsManager.7e01880f87")} ref={panel}>
+    <section data-dialog-id="projects" class="projects-manager" role="dialog" aria-modal="true" aria-label={t("ProjectsManager.7e01880f87")} ref={panel}>
       <header><div><span>{t("ProjectsManager.9f309c4aa2")}</span><h2 data-heading-message="ProjectsManager.04e2a9728a">{t("ProjectsManager.04e2a9728a")}</h2><small>{t("ProjectsManager.f9b1e7e32b")}</small></div><div class="projects-manager-header-actions"><button onClick={onAddGroup}>{t("ProjectsManager.df796c655f")}</button><button data-tutorial="add-project" class="primary" onClick={onAdd}>{t("ProjectsManager.cf77ef5338")}</button><button class="icon" aria-label={t("ProjectsManager.d9523c9f8b")} onClick={onClose}>×</button></div></header>
       <div class="projects-manager-body">
         <aside><div class="projects-manager-filter"><input aria-label={t("ProjectsManager.9e079c7df9")} placeholder={t("ProjectsManager.b0c5facf52")} value={query} onInput={event=>setQuery(event.currentTarget.value)}/><Dropdown ariaLabel={t("ProjectsManager.8fd82c567a")} value={filter} onChange={value=>setFilter(value as typeof filter)} options={[{value:'all',get label() { return t("ProjectsManager.a52ace420f") }},{value:'visible',get label() { return t("ProjectsManager.479c830779") }},{value:'hidden',get label() { return t("ProjectsManager.7e6fefff0f") }}]}/></div>

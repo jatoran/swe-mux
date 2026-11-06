@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { t } from './localization/index.ts'
 import { createPortal } from 'preact/compat'
 import { useEffect, useRef, useState } from 'preact/hooks'
@@ -88,7 +89,9 @@ export function ResourceUsageSummary({snapshot,sessions,compact=false,onRefresh,
     position()
     const reposition=()=>position()
     const dismiss=(event:PointerEvent)=>{const target=event.target as Node;if(!root.current?.contains(target)&&!popover.current?.contains(target))setOpen(false)}
-    const key=(event:KeyboardEvent)=>{if(event.key==='Escape')setOpen(false)}
+    const key=(event:KeyboardEvent)=>{
+      if (isComposingKey(event)) return
+if(event.key==='Escape')setOpen(false)}
     window.addEventListener('resize',reposition);window.addEventListener('scroll',reposition,true);window.addEventListener('pointerdown',dismiss);window.addEventListener('keydown',key)
     return()=>{window.removeEventListener('resize',reposition);window.removeEventListener('scroll',reposition,true);window.removeEventListener('pointerdown',dismiss);window.removeEventListener('keydown',key)}
   },[open])

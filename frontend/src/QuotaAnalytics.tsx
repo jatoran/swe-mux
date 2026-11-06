@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useEffect, useMemo, useState } from 'preact/hooks'
 import { api } from './api'
@@ -247,6 +248,8 @@ function QuotaChart({
         tabIndex={0}
         aria-label={t("QuotaAnalytics.04c3a74307", { windowLabel: windowLabel })}
         onKeyDown={event=>{
+      if (isComposingKey(event)) return
+
           const index=active==null?instants.length-1:instants.indexOf(active)
           const next=event.key==='ArrowLeft'?Math.max(0,index-1)
             :event.key==='ArrowRight'?Math.min(instants.length-1,index+1)

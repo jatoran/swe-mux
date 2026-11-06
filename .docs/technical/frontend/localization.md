@@ -8,6 +8,7 @@ Fill the matching keys in these UTF-8 JSON objects:
 |---|---|
 | `frontend/src/localization/catalogs/en.json` | `frontend/src/localization/catalogs/zh-Hans.json` |
 | `src/swe_mux/assets/locales/en.json` | `src/swe_mux/assets/locales/zh-Hans.json` |
+| `frontend/src/demo/catalogs/en.json` | `frontend/src/demo/catalogs/zh-Hans.json` |
 
 Keep ids unchanged.
 Both target catalogs must cover every English key with a nonempty value before tests or builds pass.
@@ -81,6 +82,21 @@ Backend-facing labels and errors use `ui_message`.
 Keep the resulting value until `json_response` or the native/push presentation boundary.
 Use `error_text` when transferring an exception's catalog-backed message into an API error body.
 Do not add localization dependencies to the PTY supervisor, framed IPC, terminal core, or gateway closure.
+
+## Keyboard presentation and composition
+
+Shipped keymap JSON uses `title_message`, `description_message` and `warning_message` references into the backend catalogs.
+Custom literal metadata stays user-authored text.
+Settings refreshes presentation fields after a locale change without replacing unsaved keymap edits.
+Regenerate demo keymap translations with `uv run python frontend/scripts/gen_keymap_fixture.py` after changing these messages.
+
+`inputComposition.ts` recognizes `isComposing`, legacy key code 229 and the Process key before application shortcut handling.
+Global composition start cancels pending leader sequences.
+Candidate selection stays with the input method, including when the UI is English.
+The terminal's custom handler yields composing events to xterm's own IME implementation.
+Renderer tests cover browser composition, including Chromium CDP composition insertion, but do not certify native OS input methods.
+The remaining manual matrix is Windows Pinyin plus Android and iOS Chinese keyboards in terminals, notes, search and the shortcut recorder: candidate Enter, Escape, arrows, Space and Shift language switching.
+Record device/browser/input-method versions with any result; engineering ask A28 owns that check.
 
 ## Generated help
 

@@ -8079,5 +8079,7 @@
   "wslBridge.471c663416": "此发行版内未原生安装智能体 CLI。通过 /mnt 访问的 Windows CLI 不算，它虽能运行，但会将对话记录写在 Windows 端，mux 无法跟踪。",
   "wslBridge.fb1e0435d6": "尚未检查，请使用「检查发行版」。",
   "Settings.loading": "正在加载…",
-  "Settings.restoring": "正在恢复默认值…"
+  "Settings.restoring": "正在恢复默认值…",
+  "drawer.sessionContext": "会话：{name}",
+  "deliveryReadiness.deliverable": "可投递"
 }

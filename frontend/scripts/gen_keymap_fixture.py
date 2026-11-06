@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from swe_mux import keybindings, keychords, keymaps
+from swe_mux.ui_messages import localize_payload
 
 #: What the demo declares itself to be. It runs in an iframe on the marketing site, so
 #: the browser half of the host table is the honest one; `win` is simply the majority
@@ -69,7 +70,26 @@ def build() -> dict[str, Any]:
 
 def main() -> None:
     target = Path(__file__).resolve().parents[1] / "src" / "demo" / "keymapFixture.ts"
-    body = json.dumps(build(), indent=1, ensure_ascii=False)
+    fixture = build()
+    body = json.dumps(fixture, indent=1, ensure_ascii=False)
+    patches: list[dict[str, Any]] = []
+
+    def collect(source: Any, translated: Any, path: list[str]) -> None:
+        if isinstance(source, dict):
+            for key, value in source.items():
+                collect(value, translated[key], [*path, key])
+        elif isinstance(source, list):
+            for index, value in enumerate(source):
+                collect(value, translated[index], [*path, str(index)])
+        elif isinstance(source, str) and source != translated:
+            patches.append({"path": path, "value": translated})
+
+    collect(fixture, localize_payload(fixture, "zh-Hans"), [])
+    target.with_name("keymapTranslations.json").write_text(
+        json.dumps(patches, indent=1, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
     # LF endings and a trailing newline, matching every other source file here: the
     # generator runs on Windows and Python would otherwise translate them on write.
     target.write_text(f"{HEADER}{body}\n", encoding="utf-8", newline="\n")

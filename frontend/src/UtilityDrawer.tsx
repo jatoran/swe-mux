@@ -1,3 +1,4 @@
+import { isComposingKey } from './inputComposition.ts'
 import { t } from './localization/index.ts'
 import type { JSX } from 'preact'
 import { useEffect, useRef } from 'preact/hooks'
@@ -634,7 +635,7 @@ export function UtilityDrawer(props: Props) {
     // The display name, not the raw one: this heading names the same session the sidebar
     // and the tab strip name, and a drawer that still said `claude-0e7d93` after a title
     // arrived read as a different session than the pane it describes.
-    if (scope === 'session') return session ? `Session: ${sessionDisplayName(session)}` : t("UtilityDrawer.e49ed53065")
+    if (scope === 'session') return session ? t('drawer.sessionContext', { name: sessionDisplayName(session) }) : t("UtilityDrawer.e49ed53065")
     // The Project's bare name, with no `Project:` in front of it (operator decision
     // 2026-08-22). The word cost eight characters of the heading row on every
     // Project-scoped tab, and on a phone that is what pushed Git's three subtabs into
@@ -679,7 +680,7 @@ export function UtilityDrawer(props: Props) {
       // `<i>` itself: `aria-label` on the button already replaces its content, so a
       // count left only in the pill is a count a screen reader never hears.
       const badge = drawerTabBadge(id, { unread: props.unread, queueDepth: props.queueDepth })
-      return <button
+      return <button data-tab-id={id}
         id={tabDomId(stack.id, id)}
         key={id}
         role="tab"
@@ -710,6 +711,8 @@ export function UtilityDrawer(props: Props) {
           onTab(id, id === selected)
         }}
         onKeyDown={event => {
+      if (isComposingKey(event)) return
+
           if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
           event.preventDefault()
           const offset = event.key === 'ArrowLeft' ? -1 : 1
@@ -836,6 +839,8 @@ export function UtilityDrawer(props: Props) {
       apply(node.ratio)
     }
     const key = (keyboard: KeyboardEvent) => {
+      if (isComposingKey(keyboard)) return
+
       if (keyboard.key !== 'Escape') return
       keyboard.preventDefault()
       cancel()
@@ -897,6 +902,8 @@ export function UtilityDrawer(props: Props) {
         onPointerDown={event => resizeSplit(event, node)}
         onDblClick={() => updateRatio(0.5)}
         onKeyDown={event => {
+      if (isComposingKey(event)) return
+
           const decrease = node.direction === 'horizontal' ? 'ArrowLeft' : 'ArrowUp'
           const increase = node.direction === 'horizontal' ? 'ArrowRight' : 'ArrowDown'
           let ratio: number | null = null
@@ -928,6 +935,8 @@ export function UtilityDrawer(props: Props) {
       onPointerDown={props.onResize}
       onDblClick={() => props.onWidth(props.defaultWidth)}
       onKeyDown={event => {
+      if (isComposingKey(event)) return
+
         let width: number | null = null
         if (event.key === 'ArrowLeft') width = props.width + 10
         if (event.key === 'ArrowRight') width = props.width - 10
@@ -945,6 +954,8 @@ export function UtilityDrawer(props: Props) {
       aria-modal={mobile || undefined}
       aria-label={t("UtilityDrawer.5c6ef8b9b3")}
       onKeyDown={event => {
+      if (isComposingKey(event)) return
+
         if (event.key === 'Escape' && !event.defaultPrevented) { event.stopPropagation(); onClose() }
       }}
     >

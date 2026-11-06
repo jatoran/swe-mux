@@ -179,7 +179,7 @@ export function FindingsPane({ session, project, onOpenAutomationDashboard }: {
 
   return <section class="findings-pane">
     <header class="findings-header">
-      <div class="findings-scope" role="tablist" aria-label={t("FindingsPane.122263be95")}>
+      <div data-tab-group="FindingsPane.122263be95" class="findings-scope" role="tablist" aria-label={t("FindingsPane.122263be95")}>
         <button role="tab" aria-selected={scope === 'session'} class={scope === 'session' ? 'active' : ''}
           disabled={!sid} onClick={() => selectScope('session')}>{t("FindingsPane.6da6530a07")}</button>
         <button role="tab" aria-selected={scope === 'project'} class={scope === 'project' ? 'active' : ''}

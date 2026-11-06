@@ -113,7 +113,7 @@ export function BranchPicker({ session, onClose, onBranch }: Props) {
   }
 
   return (
-    <div
+    <div data-dialog-id="branch"
       class="modal-layer control-plane-modal-layer"
       role="dialog"
       aria-modal="true"

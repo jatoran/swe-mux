@@ -1,7 +1,7 @@
 {
   "name": "swe-mux-frontend",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.4.1",
   "type": "module",
   "engines": {
     "node": ">=22.6"
@@ -12,12 +12,12 @@
     "prebuild": "node scripts/patch-xterm-webgl.mjs --check && node scripts/patch-xterm-requestmode.mjs --check && node --experimental-strip-types scripts/check-localization.mjs",
     "build": "tsc && vite build",
     "postbuild": "node scripts/compress-static.mjs && node scripts/verify-bundle.mjs",
-    "prebuild:demo": "node scripts/patch-xterm-webgl.mjs --check && node scripts/patch-xterm-requestmode.mjs --check && node --experimental-strip-types scripts/check-localization.mjs",
-    "build:demo": "tsc && vite build --config vite.demo.config.ts",
-    "precheck": "node scripts/patch-xterm-webgl.mjs --check && node scripts/patch-xterm-requestmode.mjs --check && node --experimental-strip-types scripts/check-localization.mjs",
+    "prebuild:demo": "node scripts/patch-xterm-webgl.mjs --check && node scripts/patch-xterm-requestmode.mjs --check && node --experimental-strip-types scripts/check-localization.mjs && node --experimental-strip-types scripts/check-demo-localization.mjs",
+    "build:demo": "tsc && node --experimental-strip-types scripts/build-demo-copy.mjs && vite build --config vite.demo.config.ts",
+    "precheck": "node scripts/patch-xterm-webgl.mjs --check && node scripts/patch-xterm-requestmode.mjs --check && node --experimental-strip-types scripts/check-localization.mjs && node --experimental-strip-types scripts/check-demo-localization.mjs",
     "check": "tsc --noEmit",
     "check:tests": "tsc --noEmit -p tsconfig.test.json",
-    "pretest": "node scripts/patch-xterm-webgl.mjs --check && node scripts/patch-xterm-requestmode.mjs --check && node --experimental-strip-types scripts/check-localization.mjs",
+    "pretest": "node scripts/patch-xterm-webgl.mjs --check && node scripts/patch-xterm-requestmode.mjs --check && node --experimental-strip-types scripts/check-localization.mjs && node --experimental-strip-types scripts/check-demo-localization.mjs",
     "test": "node --experimental-strip-types test/all.ts",
     "test:renderer": "playwright test --config playwright.renderer.config.ts",
     "check:settings-aliases": "playwright test --config playwright.renderer.config.ts settings-search.spec.ts",
@@ -66,7 +66,8 @@
     "preact": "^10.26.4",
     "qrcode-generator": "^1.5.2",
     "react-diff-view": "^3.3.3",
-    "sigma": "^3.0.3"
+    "sigma": "^3.0.3",
+    "string-width": "^8.3.0"
   },
   "devDependencies": {
     "@preact/preset-vite": "^2.10.1",

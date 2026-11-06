@@ -1,3 +1,5 @@
+import { dt } from './messages.ts'
+import { initialDemoLanguage } from './languageBootstrap.ts'
 /**
  * The demo's invented install: two Projects, four sessions, a static preview,
  * a couple of notes, and a config close enough to a real daemon's `/api/config`
@@ -178,30 +180,30 @@ const PROFILE_GIT: Partial<Session['git']> = {
 
 const SESSIONS: Session[] = [
   makeSession({
-    id: 's-claude', name: 'fix flaky checkout test', project: DEMO_PROJECT_ID,
+    id: 's-claude', name: dt('demo.session.checkout'), project: DEMO_PROJECT_ID,
     backend: 'claude', state: 'idle', model: 'claude-opus-4-8',
     tokens: 48200, cost: 1.84, contextPct: 0.31, turnSeq: 4, workedMs: 8 * 60_000,
     ageSeconds: 2 * 3600,
   }),
   makeSession({
-    id: 's-rage', name: 'review checkout flow', project: DEMO_PROJECT_ID,
+    id: 's-rage', name: dt('demo.session.reviewCheckout'), project: DEMO_PROJECT_ID,
     backend: 'claude', state: 'idle', model: 'claude-opus-4-8',
     tokens: 187400, cost: 6.42, contextPct: 0.86, turnSeq: 31, workedMs: 71 * 60_000,
     ageSeconds: 4 * 3600 + 12 * 60,
   }),
   makeSession({
-    id: 's-working', name: 'refactor the coupon table', project: DEMO_PROJECT_ID,
+    id: 's-working', name: dt('demo.session.coupons'), project: DEMO_PROJECT_ID,
     backend: 'claude', state: 'working', model: 'claude-opus-4-8',
     tokens: 33100, cost: 1.12, contextPct: 0.24, turnSeq: 6, workedMs: 12 * 60_000,
     ageSeconds: 55 * 60, workingForSeconds: 96,
     cwd: DEMO_WORKTREE_COUPON, git: COUPON_GIT,
     standing: [{
-      kind: 'subagents', source: 'transcript', evidence: 'two Task calls still open',
-      since: now - 240, expires_at: null, count: 2, detail: 'readers, writers',
+      kind: 'subagents', source: 'transcript', evidence: dt("demo.598b138c22"),
+      since: now - 240, expires_at: null, count: 2, detail: dt("demo.b7c4dc2f20"),
     }],
   }),
   makeSession({
-    id: 's-codex', name: 'profile cart endpoint', project: DEMO_PROJECT_ID,
+    id: 's-codex', name: dt("demo.8bdd99fc4d"), project: DEMO_PROJECT_ID,
     backend: 'codex', state: 'idle', model: 'gpt-demo',
     tokens: 21050, cost: 0.62, contextPct: 0.18, turnSeq: 2, workedMs: 5 * 60_000,
     ageSeconds: 90 * 60, cwd: DEMO_WORKTREE_PROFILE, git: PROFILE_GIT,
@@ -211,19 +213,19 @@ const SESSIONS: Session[] = [
     backend: 'shell', state: 'running', ageSeconds: 40 * 60,
   }),
   makeSession({
-    id: 's-garden', name: 'refresh content indexes', project: DEMO_PROJECT2_ID,
+    id: 's-garden', name: dt('demo.session.refresh'), project: DEMO_PROJECT2_ID,
     backend: 'claude', state: 'idle', model: 'claude-opus-4-8',
     tokens: 9800, cost: 0.31, contextPct: 0.09, turnSeq: 1, ageSeconds: 20 * 60,
     cwd: DEMO_ROOT2, git: GARDEN_GIT,
   }),
   makeSession({
-    id: 's-vibe', name: 'review search results', project: DEMO_PROJECT2_ID,
+    id: 's-vibe', name: dt('demo.session.search'), project: DEMO_PROJECT2_ID,
     backend: 'codex', state: 'idle', model: 'gpt-demo',
     tokens: 64300, cost: 1.97, contextPct: 0.67, turnSeq: 9, workedMs: 23 * 60_000,
     ageSeconds: 70 * 60, cwd: DEMO_ROOT2, git: GARDEN_GIT,
   }),
   makeSession({
-    id: 's-migrate', name: 'migrate the cache schema', project: DEMO_PROJECT2_ID,
+    id: 's-migrate', name: dt('demo.session.migrate'), project: DEMO_PROJECT2_ID,
     backend: 'codex', state: 'awaiting', model: 'gpt-demo',
     tokens: 12750, cost: 0.38, contextPct: 0.44, turnSeq: 2, workedMs: 4 * 60_000,
     ageSeconds: 18 * 60, workingForSeconds: 402, cwd: DEMO_ROOT2, git: GARDEN_GIT,
@@ -234,7 +236,7 @@ const SESSIONS: Session[] = [
  *  status line and the sidebar row can never disagree. */
 function composerFor(id: string): ComposerInfo {
   const found = SESSIONS.find(item => item.id === id)
-  if (!found) throw new Error(`no demo session ${id}`)
+  if (!found) throw new Error(dt("demo.5f8e95a229", { value1: id }))
   return composerInfo(found)
 }
 
@@ -322,21 +324,21 @@ const PREVIEWS: Preview[] = []
 
 const NOTES: DemoNote[] = [
   {
-    note_id: 'n-launch', project_id: DEMO_PROJECT_ID, title: 'launch checklist',
+    note_id: 'n-launch', project_id: DEMO_PROJECT_ID, get title() { return dt("demo.46e3617b22") },
     revision: 4, updated_at: now - 5400,
     content: [
       '# Launch checklist',
       '',
-      '- [x] make the cart fast (codex says it was the 40MB coupon file)',
-      '- [x] de-flake checkout test',
-      '- [ ] convince the demo visitors this is all real',
-      '- [ ] ship it',
+      dt("demo.f2cc703e8d"),
+      dt("demo.3472e40b94"),
+      dt("demo.ca0756be0d"),
+      dt("demo.870312806a"),
       '',
-      'Notes live beside the terminals so agents and humans share them.',
+      dt("demo.3cbda0d2b4"),
     ].join('\n'),
   },
   {
-    note_id: 'n-ideas', project_id: DEMO_PROJECT2_ID, title: 'ideas',
+    note_id: 'n-ideas', project_id: DEMO_PROJECT2_ID, get title() { return dt("demo.53d8ba9090") },
     revision: 1, updated_at: now - 86400,
     content: '# ideas\n\n- improve empty search results\n- preserve IDs in the cache migration\n',
   },
@@ -344,6 +346,7 @@ const NOTES: DemoNote[] = [
 
 export function demoConfig(): Record<string, unknown> {
   return {
+    ui_language: initialDemoLanguage,
     schema_version: 35,
     revision: 1,
     host: '127.0.0.1',
@@ -612,16 +615,16 @@ const LANDS: DemoLandRequest[] = [
     worktree_root: DEMO_WORKTREE_PROFILE,
     state: 'landed',
     requested_by: 's-codex',
-    requested_by_name: 'profile cart endpoint',
+    requested_by_name: dt("demo.8bdd99fc4d"),
     created_at: now - 2 * 3600,
     updated_at: now - 2 * 3600 + 220,
     landed_at: now - 2 * 3600 + 220,
-    verification: { kind: 'skipped', reason: 'documentation only', duration_s: 0 },
+    verification: { kind: 'skipped', reason: dt("demo.701cd9f02f"), duration_s: 0 },
     events: [
-      { at: now - 2 * 3600, state: 'queued', note: 'Requested from the session standing in this checkout.' },
-      { at: now - 2 * 3600 + 90, state: 'reconciling', note: 'Merged master into agent/cart-profile cleanly.' },
-      { at: now - 2 * 3600 + 150, state: 'verifying', note: 'Every incoming path was documentation, so the gate was skipped.' },
-      { at: now - 2 * 3600 + 220, state: 'landed', note: 'Fast-forwarded master to agent/cart-profile.' },
+      { at: now - 2 * 3600, state: 'queued', note: dt("demo.30fa5c70a2") },
+      { at: now - 2 * 3600 + 90, state: 'reconciling', note: dt("demo.f6305c9cdd") },
+      { at: now - 2 * 3600 + 150, state: 'verifying', note: dt("demo.99c5ecc383") },
+      { at: now - 2 * 3600 + 220, state: 'landed', note: dt("demo.ea94836138") },
     ],
   },
 ]
@@ -701,7 +704,7 @@ function demoDeviceSettings(): Record<string, Record<string, unknown>> {
 export const DEMO_DIALOG_ID = 'dlg-demo'
 
 /** Bump when the seed shape changes so persisted visitor state is discarded. */
-export const DEMO_STATE_VERSION = 20
+export const DEMO_STATE_VERSION = 22
 
 export function initialDemoState(): DemoState {
   return {
@@ -716,7 +719,7 @@ export function initialDemoState(): DemoState {
     assistant: {
       dialogId: DEMO_DIALOG_ID,
       createdAt: now,
-      title: 'Demo conversation',
+      get title() { return dt("demo.0daaef10d2") },
       messages: [],
       actions: [],
       turnRunning: false,
@@ -727,7 +730,7 @@ export function initialDemoState(): DemoState {
     terminals: {
       's-claude': claudeScrollback(),
       's-rage': rageScrollback(),
-      's-working': workingScrollback(composerFor('s-working'), 'pull the coupon table out of the request path'),
+      's-working': workingScrollback(composerFor('s-working'), dt("demo.a9516a5fe3")),
       's-codex': codexScrollback(),
       's-shell': shellScrollback(),
       's-garden': spawnScrollback(composerFor('s-garden')),
