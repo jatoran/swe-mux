@@ -9,7 +9,8 @@ Nothing connects to a real daemon or model provider.
 English and Simplified Chinese share one build.
 The full-screen language picker, embedded website controls, captions, fixture conversations and simulated terminal prompts use the demo catalogs.
 The application itself continues to use its production catalogs.
-The website's remaining editorial text is English, with prominent links to the Chinese README and demo.
+The website's remaining editorial text is English.
+A compact globe menu in the top bar links to the English demo, Chinese demo and Chinese README; the hero carries no language announcement.
 
 Use `/demo/?lang=zh-Hans` for a Chinese link or `?lang=en` for English.
 An explicit URL choice wins at startup; otherwise the saved or supported browser preference applies.

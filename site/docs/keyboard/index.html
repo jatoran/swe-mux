@@ -178,6 +178,15 @@ a[aria-current="page"]::before { content: "\25B8\00A0"; color: var(--green); }
 }
 .util a:hover, .util button:hover { color: var(--fg); border-color: var(--line-2); background: var(--panel-2); }
 .util svg { width: 14px; height: 14px; fill: currentColor; flex: none; display: block; }
+.language-menu { position: relative; flex: none; }
+.util .language-menu > summary { display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; color: var(--fg-3); cursor: pointer; list-style: none; border: 1px solid transparent; }
+.language-menu > summary::-webkit-details-marker { display: none; }
+.util .language-menu > summary:hover, .language-menu[open] > summary { color: var(--fg); border-color: var(--line-2); background: var(--panel-2); }
+.language-menu > summary:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
+.util .language-menu svg { fill: none; stroke: currentColor; stroke-width: 1.3; }
+.language-options { position: absolute; top: calc(100% + 7px); right: 0; width: 164px; padding: 4px; background: var(--panel); border: 1px solid var(--line-2); box-shadow: 0 6px 18px #0002; }
+.util .language-options a { height: auto; min-height: 36px; justify-content: flex-start; padding: 10px; }
+@media (max-width: 460px) { .util > a[aria-label="Source on GitHub"] { display: none; } }
 .util .ghost { display: none; }
 :root[data-theme="light"] .util .moon { display: none; }
 :root[data-theme="light"] .util .sun  { display: block; }
@@ -1061,6 +1070,16 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
         <span class="lbl">github</span>
       </a>
+      <details class="language-menu">
+        <summary aria-label="Language options" title="Language options">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"/><ellipse cx="8" cy="8" rx="2.7" ry="6"/><path d="M2 8h12"/></svg>
+        </summary>
+        <div class="language-options">
+          <a href="../../demo/?lang=en">English demo</a>
+          <a lang="zh-Hans" href="../../demo/?lang=zh-Hans">中文演示</a>
+          <a lang="zh-Hans" href="https://github.com/jatoran/swe-mux/blob/master/README.zh-CN.md">中文说明</a>
+        </div>
+      </details>
       <button type="button" id="themebtn" aria-label="Toggle colour scheme" title="Toggle colour scheme">
         <svg class="moon" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 10.2A6 6 0 0 1 5.8 2.5a6 6 0 1 0 7.7 7.7Z"/></svg>
         <svg class="sun" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 4.6A3.4 3.4 0 1 0 8 11.4 3.4 3.4 0 0 0 8 4.6Zm0-4.6h0a.7.7 0 0 1 .7.7v1.3a.7.7 0 0 1-1.4 0V.7A.7.7 0 0 1 8 0Zm0 13.3a.7.7 0 0 1 .7.7v1.3a.7.7 0 0 1-1.4 0V14a.7.7 0 0 1 .7-.7ZM16 8a.7.7 0 0 1-.7.7H14a.7.7 0 0 1 0-1.4h1.3A.7.7 0 0 1 16 8ZM2.7 8a.7.7 0 0 1-.7.7H.7a.7.7 0 0 1 0-1.4H2a.7.7 0 0 1 .7.7Zm10.96-5.66a.7.7 0 0 1 0 1l-.94.94a.7.7 0 1 1-1-1l.94-.94a.7.7 0 0 1 1 0ZM4.28 11.72a.7.7 0 0 1 0 1l-.94.94a.7.7 0 1 1-1-1l.94-.94a.7.7 0 0 1 1 0Zm9.38 1.94a.7.7 0 0 1-1 0l-.94-.94a.7.7 0 1 1 1-1l.94.94a.7.7 0 0 1 0 1ZM4.28 4.28a.7.7 0 0 1-1 0l-.94-.94a.7.7 0 0 1 1-1l.94.94a.7.7 0 0 1 0 1Z"/></svg>
@@ -1363,6 +1382,18 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
      button, so an open menu would be left behind with no way to dismiss it. */
   var wide = window.matchMedia('(min-width: 861px)');
   wide.addEventListener('change', function (e) { if (e.matches) open(false); });
+})();
+(function () {
+  var language = document.querySelector('.language-menu');
+  if (!language) return;
+  document.addEventListener('click', function (event) {
+    if (!language.contains(event.target)) language.open = false;
+  });
+  document.addEventListener('keydown', function (event) {
+    if (event.key !== 'Escape' || !language.open) return;
+    language.open = false;
+    language.querySelector('summary').focus();
+  });
 })();
 
 /* ----------------------------------------------------------------- search */

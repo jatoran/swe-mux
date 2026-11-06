@@ -729,6 +729,15 @@ def index_style() -> str:
     return m.group(1)
 
 
+def index_language_menu(up: str) -> str:
+    """Share the homepage's language links without duplicating their markup."""
+    text = (SITE / "index.html").read_text(encoding="utf-8")
+    match = re.search(r'      <details class="language-menu">.*?</details>', text, re.S)
+    if not match:
+        raise SystemExit("site/index.html has no language menu to inherit from")
+    return match.group(0).replace('href="demo/', f'href="{up}demo/')
+
+
 def index_block(name: str) -> str:
     """A marked run of inline script out of `index.html`.
 
@@ -837,6 +846,7 @@ def shell(path: str, title: str, description: str, body: str, scripts: str = "")
         {GITHUB_MARK}
         <span class="lbl">github</span>
       </a>
+{index_language_menu(up)}
       <button type="button" id="themebtn" aria-label="Toggle colour scheme" title="Toggle colour scheme">
         {MOON}
         {SUN}
