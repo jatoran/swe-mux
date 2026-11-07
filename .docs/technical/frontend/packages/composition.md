@@ -204,7 +204,8 @@ One constant rather than a per-surface value is the point: a surface that picks 
 A `groupable` predicate turns a row that cannot be grouped with into pure insertion over its whole height, rather than a middle band that quietly does nothing.
 `DROP_LIST_MARGIN` is how far outside a list the pointer may stray before the drop resolves to nothing, which keeps a session drag from committing to a Project the pointer has left.
 `pointerDragClaim.ts` is deliberately process-wide: a running drag claims the pointer there so the mobile gesture recognizer stands down, which is arbitration between two window-level listeners and has nowhere else to live.
-`holdMenuGuard.ts` is process-wide for a smaller reason: only one finger can be holding a menu open, and the click it must swallow can land anywhere. Every driver that opens a menu from a touch hold arms it, before the menu renders.
+`holdMenuGuard.ts` is process-wide for a smaller reason: only one finger can be holding a menu open, and the click it must swallow can land anywhere.
+Every driver that opens a menu from a touch hold arms it, before the menu renders.
 
 ### Sidebar ordering and attention
 
