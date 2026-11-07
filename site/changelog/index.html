@@ -1115,19 +1115,22 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <span class="fill"></span>
       </div>
       <div class="relgroups">
-        <div><span class="k">Changed</span> <span class="sep">2 entries</span></div>
-        <div><span class="k">Fixed</span> <span class="sep">1 entry</span></div>
+        <div><span class="k">Changed</span> <span class="sep">4 entries</span></div>
+        <div><span class="k">Fixed</span> <span class="sep">2 entries</span></div>
       </div>
       <details class="relmore">
-        <summary>all 3 entries</summary>
+        <summary>all 6 entries</summary>
         <div class="changetype">Changed</div>
         <ul class="bullets">
           <li><span><b>Recently used now follows activity in a Project's sessions, whatever caused it.</b> A Project moves up when one of its sessions starts, wakes for a new turn, resumes after an approval, or receives a message from another session, as well as when you use it yourself. That covers scheduled runs, loops and background tasks waking an agent, and any other session started through mux. A message still waiting for your approval does not count until it is delivered, and plain shells count when they start rather than per command.</span></li>
           <li><span><b>A new Project now appears at the top of Recently used</b>, instead of below every Project that had any recorded use. So does a removed Project you add back.</span></li>
+          <li><span><b>Picking a result in the sidebar search now closes the search.</b> Clicking a Project or session in the filtered list brings the whole sidebar back, as pressing Enter already did.</span></li>
+          <li><span><b>Project rows on desktop now always show their options (<code>⋮</code>) and Run (<code>▶</code>) buttons.</b> Run used to appear only on hover, and <code>⋮</code> was hidden on desktop entirely.</span></li>
         </ul>
         <div class="changetype">Fixed</div>
         <ul class="bullets">
           <li><span><b>Long-pressing on a phone can no longer press a menu row by itself.</b> A menu opens under your finger, so lifting that finger could immediately run whichever row it had landed on, most often Rename on a Project low on the screen. This applies to every menu opened by a long press.</span></li>
+          <li><span><b>The address bar now follows a selection made while an overlay was open.</b> Choosing a Project or session from the sidebar search, the palette or another overlay selected it, but closing the overlay put the previous Project back in the URL, so a reload or a copied link opened the wrong view.</span></li>
         </ul>
       </details>
     </div>

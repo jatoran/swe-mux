@@ -248,7 +248,7 @@ import { dismissStack } from './dismissStack.ts'
 import { useDismissLevel } from './modalFocus'
 import { installSystemBack } from './systemBack.ts'
 import { composeBackTarget, viewBackEnabled, viewHistory, type ViewEntry, type ViewNavigator, type ViewPosition } from './viewHistory.ts'
-import { focusMemoryWith, parseFocusMemory, parseViewPreference, reconcileFocusView, rememberedView, resolveActiveSession, resolveInitialFocus, viewUrl } from './viewState'
+import { focusMemoryWith, installViewUrlReassert, parseFocusMemory, parseViewPreference, reconcileFocusView, rememberedView, resolveActiveSession, resolveInitialFocus, viewUrl, type ViewSelection } from './viewState'
 import {
   DROP_LIST_MARGIN, edgeAutoScrollDelta, listDropTargetForPoint, MOBILE_HOLD_DRAG, MOBILE_HOLD_MOVE_DRAG, POINTER_MOVE_DRAG, pointerDragMoveDecision,
   reorderForHover, reorderTargetFromContainer, type DropSide, type ListDropTarget, type PointerDragActivation, type ReorderAxis, type ReorderTarget,
@@ -3328,6 +3328,8 @@ if(keyboard.key==='Escape'){keyboard.preventDefault();finish(false)}}
    *  the layout carrying it is a refresh behind. A plain `setFocusedViewId` is undone by
    *  the reconciliation above before that refresh lands. */
   const requestFocusView=(id:string)=>{pendingFocusId.current=id;setFocusedViewId(id)}
+  /** What the URL currently projects, for re-applying it after history moves under it. */
+  const viewSelectionRef=useRef<ViewSelection|null>(null)
 
   useEffect(() => {
     if (focusHydrated || projects.length === 0) return
@@ -3354,9 +3356,12 @@ if(keyboard.key==='Escape'){keyboard.preventDefault();finish(false)}}
     const focusView=leaves(activeLayout).some(leaf=>leaf.id===focusedViewId)?focusedViewId:null
     focusMemory.current=focusMemoryWith(focusMemory.current,projectId,session?.id||null,focusView)
     localStorage.setItem('mux.focus.v1',JSON.stringify(focusMemory.current))
+    viewSelectionRef.current={projectId,sessionId:session?.id||null}
     const next=viewUrl(location.href,projectId,session?.id||null)
     if(`${location.pathname}${location.search}${location.hash}`!==next)window.history.replaceState(window.history.state,'',next)
   },[focusHydrated,projectId,activeId,focusedViewId,sessions,layoutMap])
+  // Stepping off the back gesture's sentinel lands on an entry holding an older URL.
+  useEffect(()=>installViewUrlReassert(()=>viewSelectionRef.current),[])
 
   // Feed the most-recently-focused stack a close consults (`sessionFocusHistory.ts`).
   //
@@ -5052,6 +5057,10 @@ if(keyboard.key==='Escape'){keyboard.preventDefault();finish(false)}}
     setSidebarSearchQuery('')
     setSidebarSearchCursor(NO_SEARCH_CURSOR)
   }
+  /** Clicking a row is the same answer `Enter` gives: the search found what it was for, so the
+   *  whole tree comes back. Leaving it filtered meant closing it by hand, or waiting out the
+   *  idle timer, before the rest of the sidebar was usable again. */
+  const closeSidebarSearchOnPick=()=>{if(sidebarSearchOpen)closeSidebarSearch()}
   /** The palette/keybinding entry point, which has to bring the sidebar with it: the
    *  filter is chrome inside a column that is a hidden overlay on a phone and can be
    *  collapsed to a rail on the desktop, and focusing an input nobody can see is the
@@ -7962,7 +7971,7 @@ if(keyboard.key==='Escape'){keyboard.preventDefault();finish(false)}}
     const attention=!agent||activeId===session.id?''
       :visibleSessionIds.includes(session.id)?'viewing'
       :isUnread(session,ackedTurns)?'unread':'read'
-    return <div class="session-entry"><button data-sidebar-session-id={session.id} data-sidebar-project-id={session.project_id} data-sidebar-reorder={placement==='paned'&&!session.pending?undefined:'off'} class={`session-row ${activeId === session.id ? 'active' : ''} ${isSearchCursorSession(session.id)?'search-cursor':''} ${agent?'agent':''} ${attention} ${session.state} ${isColdSession(session)?'cold':''} ${isInactiveSession(session)?'inactive':''} ${session.pending?'pending-terminal-row':''}`} title={isInactiveSession(session) ? inactiveSessionSummary(session) : isColdSession(session) ? coldSessionSummary(session) : undefined} onPointerDown={event=>{if(!session.pending)beginSessionPointerDrag(event,session)}} onContextMenu={event => { event.preventDefault();if(!session.pending&&!mobileWorkspace)openSessionMenu(session,event.clientX,event.clientY,'sidebar') }} onClick={() => {if(suppressDragClickRef.current===`session:${session.id}`){suppressDragClickRef.current=null;return}void selectSession(session)}}>
+    return <div class="session-entry"><button data-sidebar-session-id={session.id} data-sidebar-project-id={session.project_id} data-sidebar-reorder={placement==='paned'&&!session.pending?undefined:'off'} class={`session-row ${activeId === session.id ? 'active' : ''} ${isSearchCursorSession(session.id)?'search-cursor':''} ${agent?'agent':''} ${attention} ${session.state} ${isColdSession(session)?'cold':''} ${isInactiveSession(session)?'inactive':''} ${session.pending?'pending-terminal-row':''}`} title={isInactiveSession(session) ? inactiveSessionSummary(session) : isColdSession(session) ? coldSessionSummary(session) : undefined} onPointerDown={event=>{if(!session.pending)beginSessionPointerDrag(event,session)}} onContextMenu={event => { event.preventDefault();if(!session.pending&&!mobileWorkspace)openSessionMenu(session,event.clientX,event.clientY,'sidebar') }} onClick={() => {if(suppressDragClickRef.current===`session:${session.id}`){suppressDragClickRef.current=null;return}void selectSession(session);closeSidebarSearchOnPick()}}>
       {sessionStateDot(session,rowConfig.dotShape,sessionContextArc(session,rowConfig),sessionStandingMark(session,rowConfig))}
       <SessionRowLive session={session} config={rowConfig} facts={rowFacts} identityOnly={identityOnly}/>
       {!session.pending && <span class="row-actions" onPointerDown={event=>event.stopPropagation()} onClick={event => event.stopPropagation()}><button class={confirmKillId === session.id ? 'confirming' : ''} title={confirmKillId === session.id ? (isEndedSession(session) ? t("App.10764ef5d0") : t("App.1284a7d280")) : (isEndedSession(session) ? t("App.5a2641ec88") : t("App.ee72959b9b"))} onClick={() => runNamedCommand(`session.requestKill(${session.id})`)}>{confirmKillId === session.id ? '✓' : '×'}</button></span>}
@@ -8274,7 +8283,7 @@ if(keyboard.key==='Escape'){keyboard.preventDefault();finish(false)}}
     const liveCount=children.filter(session=>!session.pending&&!['exited','crashed'].includes(session.state)).length
     const hasSessions=children.length>0&&!sidebarFilter
     return <section key={project.id} data-reorder-id={project.id} style={{order:projectPreviewIds.indexOf(project.id)}} class={`project-group ${project.id === projectId ? 'active' : ''} ${collapsed?'collapsed':''} ${dropClass}`}>
-      <div class={`project-row draggable-project ${isSearchCursorProject(project.id)?'search-cursor':''} ${dragProject?.id===project.id?'dragging':''}`} title={mobileWorkspace ? t("App.55092a77d5") : t("App.1bd21fc49d")} onPointerDown={event=>beginProjectPointerDrag(event,project)} onContextMenu={event => { event.preventDefault();if(!mobileWorkspace)openProjectMenuAt(project,event.clientX,event.clientY) }} onClick={()=>{if(suppressDragClickRef.current===`project:${project.id}`){suppressDragClickRef.current=null;return}selectProject(project.id)}}>
+      <div class={`project-row draggable-project ${isSearchCursorProject(project.id)?'search-cursor':''} ${dragProject?.id===project.id?'dragging':''}`} title={mobileWorkspace ? t("App.55092a77d5") : t("App.1bd21fc49d")} onPointerDown={event=>beginProjectPointerDrag(event,project)} onContextMenu={event => { event.preventDefault();if(!mobileWorkspace)openProjectMenuAt(project,event.clientX,event.clientY) }} onClick={()=>{if(suppressDragClickRef.current===`project:${project.id}`){suppressDragClickRef.current=null;return}selectProject(project.id);closeSidebarSearchOnPick()}}>
         {hasSessions ? <button class="project-chevron project-collapse-toggle" aria-expanded={!collapsed} aria-label={t("App.a325b9ccc4", { value1: (collapsed) ? 'yes' : 'no', name: project.name })} title={collapsed ? t("App.1e7feb926e") : t("App.96385e6d4b")} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();toggleProjectCollapsed(project.id)}}>{collapsed ? '▸' : '▾'}</button> : <span class="project-chevron project-collapse-spacer" aria-hidden="true"/>}<strong class="project-name-cell"><span class="project-name-text">{project.name}</span>{collapsed&&liveCount>0 && <span class="project-collapsed-badge" title={t("App.00206486d7", { liveCount: liveCount, value2: (liveCount===1) ? 'yes' : 'no' })}>{liveCount}</span>}</strong><button data-menu-toggle class="project-row-menu" title={t("App.7b40fabecd", { name: project.name })} aria-label={t("App.7b40fabecd", { name: project.name })} aria-haspopup="menu" aria-expanded={projectMenu?.project.id===project.id} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();if(projectMenu?.project.id===project.id){setProjectMenu(null);return}const rect=event.currentTarget.getBoundingClientRect();openProjectMenuAt(project,rect.left,rect.bottom+4)}}>⋮</button><button data-tutorial="project-run" class="project-row-run" title={t("App.672398143e", { name: project.name })} aria-label={t("App.672398143e", { name: project.name })} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();openRunMenu(project,event.currentTarget)}}>▶</button>
       </div>
       {!collapsed && <div class="session-list">

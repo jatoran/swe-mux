@@ -23,12 +23,18 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
   A message still waiting for your approval does not count until it is delivered, and plain shells count when they start rather than per command.
 - **A new Project now appears at the top of Recently used**, instead of below every Project that had any recorded use.
   So does a removed Project you add back.
+- **Picking a result in the sidebar search now closes the search.**
+  Clicking a Project or session in the filtered list brings the whole sidebar back, as pressing Enter already did.
+- **Project rows on desktop now always show their options (`⋮`) and Run (`▶`) buttons.**
+  Run used to appear only on hover, and `⋮` was hidden on desktop entirely.
 
 ### Fixed
 
 - **Long-pressing on a phone can no longer press a menu row by itself.**
   A menu opens under your finger, so lifting that finger could immediately run whichever row it had landed on, most often Rename on a Project low on the screen.
   This applies to every menu opened by a long press.
+- **The address bar now follows a selection made while an overlay was open.**
+  Choosing a Project or session from the sidebar search, the palette or another overlay selected it, but closing the overlay put the previous Project back in the URL, so a reload or a copied link opened the wrong view.
 
 ## [0.4.2] - 2026-11-06
 

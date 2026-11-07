@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { focusMemoryWith, parseFocusMemory, parseViewPreference, reconcileFocusView, rememberedView, resolveActiveSession, resolveInitialFocus, viewUrl } from '../src/viewState.ts'
+import { focusMemoryWith, parseFocusMemory, parseViewPreference, reconcileFocusView, installViewUrlReassert, rememberedView, resolveActiveSession, resolveInitialFocus, viewUrl } from '../src/viewState.ts'
 
 const sessions = [
   { id: 'first', project_id: 'default', state: 'running' },
@@ -158,4 +158,73 @@ test('with no request pending, focus reconciles exactly as before', () => {
     settled({ hasRoot: false, holdsFocused: false, firstPaneActive: null }),
     { focus: null, keepRequest: false },
   )
+})
+
+// A browser history with the same shape as the real one: a stack of URL entries, where
+// replaceState edits the entry we are on and back() steps to the one below it.
+function fakeWindow(start: string) {
+  const entries = [start]
+  let index = 0
+  const target = new EventTarget()
+  const location = {
+    get href() { return `http://localhost${entries[index]}` },
+    get pathname() { return new URL(this.href).pathname },
+    get search() { return new URL(this.href).search },
+    get hash() { return new URL(this.href).hash },
+  }
+  const history = {
+    state: null,
+    replaceState: (_state: unknown, _unused: string, url: string) => { entries[index] = url },
+  }
+  return {
+    win: Object.assign(target, { location, history }),
+    pushSentinel: () => { entries.splice(index + 1); entries.push(entries[index]); index += 1 },
+    back: () => { index -= 1; target.dispatchEvent(new Event('popstate')) },
+    url: () => entries[index],
+  }
+}
+
+test('leaving the back sentinel keeps the URL on what was picked while an overlay was open', () => {
+  // The reported shape: open the sidebar search, pick another Project, and the search closing
+  // stepped back onto an entry that still named the Project you started on.
+  const browser = fakeWindow('/?project=start')
+  let selection = { projectId: 'start', sessionId: null as string | null }
+  const stop = installViewUrlReassert(() => selection, browser.win)
+
+  browser.pushSentinel()
+  selection = { projectId: 'picked', sessionId: 'session-1' }
+  browser.win.history.replaceState(null, '', '/?project=picked&session=session-1')
+  browser.back()
+
+  assert.equal(browser.url(), '/?project=picked&session=session-1')
+  stop()
+})
+
+test('re-applying the URL keeps the rest of the address and leaves an unchanged one alone', () => {
+  const browser = fakeWindow('/?debug=1&project=one#notes')
+  let writes = 0
+  const replace = browser.win.history.replaceState
+  browser.win.history.replaceState = (state: unknown, unused: string, url: string) => { writes += 1; replace(state, unused, url) }
+  const stop = installViewUrlReassert(() => ({ projectId: 'one', sessionId: null }), browser.win)
+
+  browser.pushSentinel()
+  browser.back()
+  assert.equal(writes, 0, 'nothing moved, so nothing is written')
+
+  stop()
+  const after = installViewUrlReassert(() => ({ projectId: 'two', sessionId: 's' }), browser.win)
+  browser.pushSentinel()
+  browser.back()
+  assert.equal(browser.url(), '/?debug=1&project=two&session=s#notes')
+  after()
+})
+
+test('before anything is focused there is nothing to re-apply', () => {
+  const browser = fakeWindow('/?project=start')
+  const stop = installViewUrlReassert(() => null, browser.win)
+  browser.pushSentinel()
+  browser.win.history.replaceState(null, '', '/?project=other')
+  browser.back()
+  assert.equal(browser.url(), '/?project=start')
+  stop()
 })

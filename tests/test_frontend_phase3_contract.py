@@ -495,7 +495,8 @@ def test_mobile_sidebars_use_the_full_selection_and_width_contract() -> None:
     assert not source_contains(overlay, "min(")
 
 
-def test_project_rows_reserve_empty_fold_and_hover_run_cells() -> None:
+def test_project_rows_reserve_empty_fold_and_always_show_their_controls() -> None:
+    """The row's options and Run used to wait for a hover; the operator asked to see them."""
     root = Path(__file__).parents[1] / "frontend" / "src"
     app = localized_source((root / "App.tsx").read_text(encoding="utf-8"))
     css = localized_source((root / "style.css").read_text(encoding="utf-8"))
@@ -503,9 +504,10 @@ def test_project_rows_reserve_empty_fold_and_hover_run_cells() -> None:
     assert source_contains(app, "const hasSessions=children.length>0")
     assert source_contains(app, 'class="project-chevron project-collapse-spacer"')
     assert source_contains(css, ".project-row .project-collapse-spacer{")
-    assert source_contains(css, ".project-row-run{opacity:0;visibility:hidden;pointer-events:none")
-    assert source_contains(css, ".project-group:hover>.project-row .project-row-run")
-    assert source_contains(css, ".project-group:focus-within>.project-row .project-row-run")
+    assert source_contains(css, ".project-row-menu{display:grid!important")
+    assert source_contains(css, ".project-row-run{display:grid!important")
+    assert not source_contains(css, ".project-row-run{opacity:0")
+    assert not source_contains(css, ".project-row-menu{display:none")
 
 
 def test_collapsed_sidebar_rail_keeps_sidebar_controls_reachable() -> None:

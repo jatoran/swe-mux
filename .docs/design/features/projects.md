@@ -109,8 +109,9 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
   change riding on the same gesture, a stray release must not reassign a Project.
 - Mobile Project pickup closes open menus, gives short haptic feedback, previews the landing slot, and edge-scrolls the tree until release.
   Cancellation preserves the original order and Group.
-- Mobile Project rows expose `⋮` immediately left of Run for the Project context menu.
-  Project long-press is reserved for reorder; desktop right-click remains the pointer context-menu route.
+- Every Project row shows `⋮` immediately left of Run, on every device, for the Project context menu.
+  Both used to wait for a hover on desktop, where `⋮` was hidden outright; they are always shown because a control that appears only under the pointer is one nobody knows is there.
+  Desktop right-click and a mobile long-press open the same menu.
   Mobile session long-press remains context-menu-only and never starts sidebar grouping or reorder.
 - A Group header's only button is `✎` (rename), revealed on hover over that header and on keyboard focus.
   It carried a `×` that deleted the Group and ungrouped its Projects; that sat a pixel from the fold toggle

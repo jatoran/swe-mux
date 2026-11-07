@@ -218,8 +218,8 @@ See [UI localization](localization.md) for the rendering and identity boundaries
   `session-row-layout.spec.ts` guards it: hovering must leave the title, flag strip, and every
   flag box byte-identical.
 - The active-Project header exposes **Run** persistently.
-  On desktop, each Project row reveals its Run control while the pointer or keyboard focus is anywhere in that Project's row-and-session block; its reserved column preserves row alignment while hidden.
-  On mobile, Project rows expose Run persistently and also expose `⋮` immediately left of it, giving Project actions direct tap targets.
+  Every Project row shows Run and `⋮` immediately left of it at all times, on every device, giving Project actions direct targets.
+  Desktop used to reveal Run only while the pointer or keyboard focus was in that Project's block and hid `⋮` outright; the operator asked to see both, and a control that exists only under the pointer is not discoverable.
   The compact Run menu contains new Claude/Codex/shell/custom-terminal launchers followed by trusted Project Actions; it is a launch surface, not persistent sidebar grouping.
   Each harness launch row is marked with that harness's own mark (`harnessMark`, `harnessIcons.tsx`) rather than a play triangle, and a launch profile wears its harness's mark because it launches that harness.
   Every row in the section starts a session, so a triangle on all of them distinguished nothing; which CLI a row starts is the fact that separates them.
@@ -359,7 +359,11 @@ Its rules, and what each one is defending:
   A session matches on the name its row draws, plus its Project's name and root, its harness, and its branch or worktree.
 - **It retires itself after five seconds untouched**, clearing the query and restoring the tree.
   A filter is a transient lens, and one left standing over a sidebar the user walked away from misreports the fleet at a glance.
-  Typing, arrows, the pointer crossing the tree, and activating a row all restart the clock.
+  Typing, arrows, and the pointer crossing the tree all restart the clock.
+- **Picking a row ends it.**
+  Clicking a Project or session row in the filtered tree closes the filter, exactly as `Enter` on the best match does, because the search has found what it was for and the rest of the sidebar should come back.
+  It used to stay up after a click, so the tree stayed filtered until it was closed by hand or the idle timer ran out.
+  The row's own buttons (`⋮`, Run) do not count as picking it.
   Interaction is recorded in a ref and idleness is polled, so pointer movement over the tree costs no re-render.
 - **Reopening always starts empty.**
   There is nothing worth restoring: a query typed minutes ago would filter the tree by a question already answered.
@@ -1732,6 +1736,10 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   One sentinel rather than one per level is the invariant that matters — per-level entries desynchronize the first time a level closes by button instead of by back, with nothing able to resynchronize them.
   Closing the last level steps back over the sentinel so the next back press is not silently swallowed, and the popstate that step causes is counted and ignored rather than read as a user gesture.
   A sentinel that is no longer the current history entry is dropped rather than stepped over, because navigating the user somewhere they did not ask to go is the worse failure.
+- **Leaving the sentinel must not move the URL.**
+  The entry below the sentinel still holds the URL from when the first level opened, so anything focused while a level was up (a Project picked from the sidebar search, a session from the palette) was undone in the address bar the moment that level closed, while the app itself kept showing the new view.
+  `installViewUrlReassert` (`viewState.ts`) re-applies the URL for the current focus after every `popstate`, which is correct because the URL is only ever a projection of focus.
+  `systemBack.ts` stays blind to URLs on purpose: it can read the sentinel's URL when a level closes by button, but not after the platform has already popped it, so only the owner of the projection can cover both paths.
 - The one back press this deliberately does not see is the one that dismisses the Android soft keyboard: the platform consumes it and never tells the page, so an overlay behind the keyboard survives the first press.
   That matches how the keyboard shadows back everywhere else on the platform and is not special-cased.
 - **With nothing layered, back steps through the tabs and Projects most recently looked at, then leaves.**

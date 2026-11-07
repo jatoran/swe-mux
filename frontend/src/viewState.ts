@@ -148,3 +148,36 @@ export function viewUrl(href: string, projectId: string, sessionId: string | nul
   else url.searchParams.delete('session')
   return `${url.pathname}${url.search}${url.hash}`
 }
+
+export type ViewSelection = { projectId: string; sessionId: string | null }
+
+type ViewUrlWindow = Pick<Window, 'addEventListener' | 'removeEventListener'> & {
+  location: Pick<Location, 'href' | 'pathname' | 'search' | 'hash'>
+  history: Pick<History, 'state' | 'replaceState'>
+}
+
+/**
+ * Put the URL back on what is focused whenever history moves under it. Returns a teardown.
+ *
+ * The URL is a projection of the focused view, written with `replaceState`, so the app holds
+ * no route history. The one other entry in the stack is the back gesture's sentinel
+ * (`systemBack.ts`), pushed when an overlay opens. Leaving it, by back or because the last
+ * overlay closed by button, lands on the entry below, which still holds the URL from when
+ * the overlay opened. So a selection made while one was open was undone in the address bar:
+ * pick a Project from the sidebar search and the URL went on naming the previous one.
+ */
+export function installViewUrlReassert(
+  current: () => ViewSelection | null,
+  win: ViewUrlWindow = window,
+): () => void {
+  const reassert = () => {
+    const selection = current()
+    if (!selection) return
+    const next = viewUrl(win.location.href, selection.projectId, selection.sessionId)
+    if (`${win.location.pathname}${win.location.search}${win.location.hash}` !== next) {
+      win.history.replaceState(win.history.state, '', next)
+    }
+  }
+  win.addEventListener('popstate', reassert)
+  return () => win.removeEventListener('popstate', reassert)
+}
