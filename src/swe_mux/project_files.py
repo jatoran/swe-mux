@@ -75,6 +75,15 @@ PROJECT_CONFIG_FIELDS = {
     # call writes an inert Fleet Queue request a human approves. Authority is by
     # target Project, as for interrupt/end.
     "spawn_grant",
+    # The authority level for an agent scheduling a run INTO this Project
+    # (`mux.request_schedule`), once the `scheduled_runs` automation is opted in.
+    # "limited" (the default when unset) arms a one-off, and a recurring schedule
+    # that fires at most `agent_schedule_daily_fire_limit` times a day, directly;
+    # anything busier waits for a person. "draft" puts a person in front of every
+    # agent schedule, "granted" in front of none. Its own field rather than a level
+    # of `spawn_grant`, because what a schedule adds over a spawn is that it keeps
+    # firing after the agent that wrote it has gone.
+    "schedule_grant",
     # Phase 14: the authority level for agent-initiated landing of a worktree branch
     # into this Project's trunk, once the `land_queue` automation is opted in.
     # "draft" (the default) makes `request_land` write an inert request a human
@@ -140,6 +149,9 @@ PROJECT_CONFIG_FIELDS = {
 #: The two authority levels a grant field may hold. "off" is not a value here -
 #: it is the absence of the `session_control` automation opt-in.
 SESSION_CONTROL_GRANTS = ("draft", "granted")
+#: What `schedule_grant` may hold, narrowest first, matching
+#: `agent_authority.AUTHORITY_FIELDS["schedule_grant"].levels` (pinned by a test).
+SCHEDULE_GRANTS = ("draft", "limited", "granted")
 #: What `message_envelope` may hold, **widest disclosure first** so it reads in
 #: the order a person thinks about it. `agent_authority.AUTHORITY_FIELDS` holds
 #: the same three in the opposite order, because comparison there is by
@@ -1598,6 +1610,8 @@ def parse_project_config(data: bytes) -> dict[str, Any]:
         raise ValueError(ui_message("project_files.dc03c24323"))
     if parsed.get("spawn_grant") not in {None, *SESSION_CONTROL_GRANTS}:
         raise ValueError(ui_message("project_files.2fd9b74913"))
+    if parsed.get("schedule_grant") not in {None, *SCHEDULE_GRANTS}:
+        raise ValueError(ui_message("project_files.schedule_grant_invalid"))
     if parsed.get("land_grant") not in {None, *SESSION_CONTROL_GRANTS}:
         raise ValueError(ui_message("project_files.854f74a79d"))
     if parsed.get("land_verify_grant") not in {None, *SESSION_CONTROL_GRANTS}:
@@ -1686,6 +1700,7 @@ def serialize_project_config(values: dict[str, Any]) -> bytes:
         "prompt_library_scope",
         "session_control_grant",
         "spawn_grant",
+        "schedule_grant",
         "land_grant",
         "land_verify_grant",
         "interject_grant",

@@ -10,9 +10,11 @@ import {
 } from './branchPoints'
 import {
   BLOCKED_LABELS, CRON_PRESETS, OUTCOME_LABELS, TARGET_KIND_COPY, absoluteLabel, actionLabel,
-  cadenceLabel, draftFromSchedule, draftToBody, emptyDraft, needsAttention, orderSchedules,
+  authorLabel, cadenceLabel, draftFromSchedule, draftToBody, emptyDraft, frequencyLabel,
+  inactiveLabel, isAgentAuthored, isAwaitingApproval, needsAttention, orderSchedules,
   presetForCron, targetIsMissing, untilLabel,
   type Schedule, type ScheduleDraft, type ScheduleStatus, type ScheduleTargetKind,
+  type ScheduleWhenLive,
 } from './schedules'
 import { transcriptSpeaker } from './transcriptView'
 import type { LaunchProfile, Project } from './types'
@@ -101,7 +103,14 @@ export function ScheduleTab({
     // One cheap GET while the tab is open. Nothing here polls the daemon's process
     // tree or its transcripts, so an open tab costs a query per half minute.
     const timer = setInterval(() => void load(), REFRESH_MS)
-    return () => clearInterval(timer)
+    // And one more whenever a schedule changes or fires anywhere, so an agent's new
+    // request, a decision taken on the phone, or an expiry shows without the wait.
+    const onChanged = () => void load()
+    window.addEventListener('mux:schedules-changed', onChanged)
+    return () => {
+      clearInterval(timer)
+      window.removeEventListener('mux:schedules-changed', onChanged)
+    }
   }, [scope])
 
   // A seed is a request to author one schedule, so it opens the editor once and is
@@ -202,7 +211,7 @@ export function ScheduleTab({
         {scope ? t("ScheduleTab.2f5f825f0d") : t("ScheduleTab.beb4d49009")}
       </p>}
       {ordered.map(schedule => <section
-        class={`schedule-row ${schedule.enabled ? '' : 'paused'} ${schedule.blocked || targetIsMissing(schedule) ? 'blocked' : ''}`}
+        class={`schedule-row ${schedule.enabled ? '' : 'paused'} ${schedule.blocked || targetIsMissing(schedule) ? 'blocked' : ''} ${isAwaitingApproval(schedule) ? 'awaiting' : ''}`}
         key={schedule.id}
       >
         <button
@@ -217,11 +226,24 @@ export function ScheduleTab({
           <small>
             {cadenceLabel(schedule)}
             {' · '}
-            {schedule.enabled ? untilLabel(schedule.next_fire_at) : t("ScheduleTab.a7a9dc5bcf")}
+            {schedule.enabled ? untilLabel(schedule.next_fire_at) : inactiveLabel(schedule)}
             {' · '}
             {actionLabel(schedule)}
           </small>
         </button>
+        {/* Who wrote it, when it was not the reader. An agent's schedule carries the
+            authority its Project granted agents, which is worth knowing before pausing
+            or editing it, and its stated reason is the one piece of context a person
+            reviewing it cannot get anywhere else. */}
+        {isAgentAuthored(schedule) && <p class="schedule-author">
+          <span>{authorLabel(schedule)}</span>
+          {schedule.request_reason && <em>{schedule.request_reason}</em>}
+        </p>}
+        {isAwaitingApproval(schedule) && <p class="schedule-approval">
+          <strong>{t("ScheduleTab.approvalHeading")}</strong>
+          {' '}
+          <small>{schedule.approval_reason}{schedule.trigger_kind !== 'once' ? ` (${frequencyLabel(schedule.fires_per_day)})` : ''}</small>
+        </p>}
         {/* A resume against a conversation that has been deleted reads armed and can
             never fire, which is the same lie `blocked` exists to prevent. Said on the
             row rather than left for the run history, because the next fire that would
@@ -250,8 +272,20 @@ export function ScheduleTab({
             title={t("ScheduleTab.5a8c65ccf7")}
             onClick={() => { onOpenSession(schedule.last_session_id as string); onDone() }}
           >{t("ScheduleTab.bf8caf6677")}</button>}
+          {schedule.expires_at && <span class="schedule-expiry">{t("ScheduleTab.endsAt", { when: absoluteLabel(schedule.expires_at) })}</span>}
         </div>
-        <div class="schedule-actions">
+        {isAwaitingApproval(schedule) ? <div class="schedule-actions">
+          <button
+            class="primary"
+            disabled={busy !== ''}
+            onClick={() => void act(`decide:${schedule.id}`, () => api('POST', `/api/schedules/${schedule.id}/decide`, { decision: 'approve' }))}
+          >{t("ScheduleTab.approve")}</button>
+          <button
+            disabled={busy !== ''}
+            onClick={() => void act(`decide:${schedule.id}`, () => api('POST', `/api/schedules/${schedule.id}/decide`, { decision: 'dismiss' }))}
+          >{t("ScheduleTab.dismiss")}</button>
+          <button disabled={busy !== ''} onClick={() => startEdit(schedule)}>{t("ScheduleTab.262121c537")}</button>
+        </div> : <div class="schedule-actions">
           <button
             disabled={busy !== ''}
             title={t("ScheduleTab.755ae1c9b1")}
@@ -267,7 +301,7 @@ export function ScheduleTab({
             disabled={busy !== ''}
             onClick={() => void act(`delete:${schedule.id}`, () => api('DELETE', `/api/schedules/${schedule.id}`))}
           >{t("ScheduleTab.6197595503")}</button>
-        </div>
+        </div>}
         {expanded === schedule.id && <div class="schedule-detail">
           {schedule.action === 'resume' && schedule.target && !schedule.target.missing && <p class="schedule-target">
             <strong>{TARGET_KIND_COPY[schedule.target_kind].label}</strong>
@@ -510,6 +544,13 @@ function ScheduleEditor({ draft, onDraft, profiles, busy, error, projectName, on
     <p class={`schedule-preview ${previewError ? 'bad' : ''}`}>
       {previewError || (fires.length ? t("ScheduleTab.634d8b810d", { value1: fires.slice(0, 3).map(absoluteLabel).join(' · ') }) : t("ScheduleTab.e58b9f1484"))}
     </p>
+    {/* An end date belongs to a recurring trigger: a one-off ends by firing. Agents'
+        recurring schedules always carry one, and a person may set or clear it here. */}
+    {draft.trigger_kind !== 'once' && <label>{rich("ScheduleTab.endsField", { value1: <em>{t("ScheduleTab.ec91fdd925")}</em>, value2: <input
+      type="datetime-local"
+      value={draft.expires_local}
+      onInput={event => change('expires_local', event.currentTarget.value)}
+    />, value3: <small>{t("ScheduleTab.endsHint")}</small> })}</label>}
     {/* A resume runs the harness the conversation belongs to, with `--resume <id>` as
         its arguments, in the Project root the conversation resolves from. The daemon
         refuses a backend or a profile on one rather than ignoring it, so offering
@@ -526,6 +567,13 @@ function ScheduleEditor({ draft, onDraft, profiles, busy, error, projectName, on
         ...profilesForBackend.map(profile => ({ value: profile.id, label: profile.label })),
       ]}
     />, value2: <small>{t("ScheduleTab.5a94ad7fea")}</small> })}</label>}
+    {!resuming && draft.backend && <label>{rich("ScheduleTab.modelField", { value1: <em>{t("ScheduleTab.ec91fdd925")}</em>, value2: <input
+      value={draft.model}
+      spellcheck={false}
+      maxLength={100}
+      placeholder={t("ScheduleTab.modelPlaceholder")}
+      onInput={event => change('model', event.currentTarget.value)}
+    />, value3: <small>{t("ScheduleTab.modelHint")}</small> })}</label>}
     <label>{rich("ScheduleTab.2bd076e3aa", { value1: <em>{t("ScheduleTab.ec91fdd925")}</em>, value2: <input
       value={draft.session_name}
       maxLength={80}
@@ -536,7 +584,14 @@ function ScheduleEditor({ draft, onDraft, profiles, busy, error, projectName, on
       { value: 'skip', get label() { return t("ScheduleTab.d0fc7b77ee") } },
       { value: 'allow', get label() { return t("ScheduleTab.c86ae1e9af") } },
     ]}/> })}</label>}
-    {resuming && draft.target_kind !== 'fork_point' && <p class="schedule-note">{t("ScheduleTab.aef2e66c6b")}</p>}
+    {resuming && draft.target_kind !== 'fork_point' && <label>{rich("ScheduleTab.whenLiveField", { value1: <Dropdown
+      value={draft.when_live}
+      onChange={value => change('when_live', value as ScheduleWhenLive)}
+      options={[
+        { value: 'skip', get label() { return t("ScheduleTab.whenLiveSkip") } },
+        { value: 'deliver', get label() { return t("ScheduleTab.whenLiveDeliver") } },
+      ]}
+    />, value2: <small>{draft.when_live === 'deliver' ? t("ScheduleTab.whenLiveDeliverHint") : t("ScheduleTab.aef2e66c6b")}</small> })}</label>}
     <label class="schedule-check">{rich("ScheduleTab.9c8dacba78", { value1: <input
       type="checkbox"
       checked={draft.catch_up}

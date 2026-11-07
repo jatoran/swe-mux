@@ -165,6 +165,19 @@ AUTHORITY_FIELDS: dict[str, AuthorityField] = {
             gated_by="land_queue",
         ),
         AuthorityField(
+            field="schedule_grant",
+            # Three levels rather than two, because the risk a schedule adds over
+            # an immediate spawn is *persistence*, and persistence has a size: a
+            # one-off is a spawn that happens later, while a recurring schedule is
+            # standing load that outlives the agent that wrote it. `limited` arms
+            # the first and a low-frequency second directly and puts a person in
+            # front of anything busier (`schedules.agent_schedule_verdict`).
+            levels=("draft", "limited", "granted"),
+            builtin="limited",
+            label=ui_message("agent_authority.schedule_grant"),
+            gated_by="scheduled_runs",
+        ),
+        AuthorityField(
             field="interject_grant",
             levels=("off", "granted"),
             builtin="granted",
@@ -194,6 +207,7 @@ AUTHORITY_FIELDS: dict[str, AuthorityField] = {
 ACTUATION_FIELDS: tuple[str, ...] = (
     "session_control_grant",
     "spawn_grant",
+    "schedule_grant",
     "land_grant",
     "land_verify_grant",
     "interject_grant",

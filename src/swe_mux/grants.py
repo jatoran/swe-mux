@@ -75,6 +75,10 @@ GRANTABLE_PROJECT_VALUES: Mapping[str, tuple[Any, ...]] = {
     "land_verify_grant": ("granted",),
     "session_control_grant": ("granted",),
     "spawn_grant": ("granted",),
+    # Raising past the default `limited` is the one direction a gate offers: a drafted
+    # agent schedule's card is where someone is standing when they decide agents may
+    # arm busier schedules here without asking.
+    "schedule_grant": ("granted",),
     "interject_grant": ("granted",),
 }
 

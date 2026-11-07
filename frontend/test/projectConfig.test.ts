@@ -82,6 +82,7 @@ test('"reset repo options" reaches only the fields that form draws', () => {
     'scan_timeline_auto_enable',
     'session_control_grant',
     'spawn_grant',
+    'schedule_grant',
     'land_grant',
     'interject_grant',
     'approval_allow',

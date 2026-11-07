@@ -917,6 +917,216 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "request_schedule",
+        "description": (
+            "Make work happen LATER, on its own: start a new agent session with your "
+            "prompt (action spawn), or reopen an existing conversation - your own by "
+            "default - and hand it your prompt (action resume). Name exactly one of "
+            "in_minutes or at for a one-off, or cron or every_minutes for a recurring "
+            "run. A one-off is armed immediately. A recurring schedule is armed "
+            "immediately if it fires only a few times a day (list_schedules reports "
+            "the limit for the Project); a busier one is filed for a person to "
+            "approve, and a message tells you when they decide. Recurring schedules "
+            "expire on their own after a bounded number of days. Resuming yourself is "
+            "the 'pick this up later' case: when it fires your conversation is "
+            "reopened in a new pane, or - if it is still open then - the prompt is "
+            "queued into it as a message you asked for, so 'continue at 9 tomorrow' "
+            "and 'check back in two hours' both work. A spawn's prompt must stand on "
+            "its own: the new session knows nothing of this conversation. Pass "
+            "dry_run:true to validate and see the next fire times and whether it would "
+            "be armed, writing nothing. For work that should start now, use "
+            "request_spawn instead. The schedule belongs to your Project unless you "
+            "name another; a resume always runs in the conversation's own Project."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": (
+                        "What the session should do when this fires: the first message "
+                        "of a new session (spawn), or the message delivered into the "
+                        "reopened conversation (resume). Write it for a reader who has "
+                        "only this text and, for a resume, the conversation itself."
+                    ),
+                },
+                "label": {
+                    "type": "string",
+                    "description": (
+                        "Short name a person sees in the Schedule tab (default: the "
+                        "prompt's start)"
+                    ),
+                },
+                "action": {
+                    "type": "string",
+                    "enum": ["spawn", "resume"],
+                    "description": (
+                        "spawn starts a new session; resume reopens a conversation "
+                        "(default: resume when target is given, otherwise spawn)"
+                    ),
+                },
+                "target": {
+                    "type": "string",
+                    "description": (
+                        "For resume: 'self' (the default - this conversation), or "
+                        "another conversation as a session id or name (live or ended) "
+                        "or a history run id from search_history"
+                    ),
+                },
+                "target_kind": {
+                    "type": "string",
+                    "enum": ["run", "latest_of_session"],
+                    "description": (
+                        "For resume: run reopens the conversation exactly as named; "
+                        "latest_of_session follows it to wherever it has got to (and "
+                        "skips a fire once it is over 70% of its context window). "
+                        "Default: run for a one-off, latest_of_session for recurring."
+                    ),
+                },
+                "when_live": {
+                    "type": "string",
+                    "enum": ["deliver", "skip"],
+                    "description": (
+                        "For resume, when the conversation is already open at fire "
+                        "time: deliver (the default) queues the prompt into that open "
+                        "pane; skip records a skipped run instead"
+                    ),
+                },
+                "in_minutes": {
+                    "type": "number",
+                    "description": "One-off: fire this many minutes from now (at least 1)",
+                },
+                "at": {
+                    "type": "string",
+                    "description": (
+                        "One-off: an ISO-8601 time, e.g. 2026-11-08T09:00 (this host's "
+                        "local time, or timezone if given) or 2026-11-08T15:00:00Z"
+                    ),
+                },
+                "cron": {
+                    "type": "string",
+                    "description": (
+                        "Recurring: five-field cron 'minute hour day-of-month month "
+                        "day-of-week', e.g. '0 9 * * mon-fri'. No seconds field and no "
+                        "@daily macros."
+                    ),
+                },
+                "every_minutes": {
+                    "type": "number",
+                    "description": (
+                        "Recurring: every N minutes (at least 5), first fire one "
+                        "interval from now"
+                    ),
+                },
+                "timezone": {
+                    "type": "string",
+                    "description": (
+                        "IANA zone for cron and for an 'at' with no offset, e.g. "
+                        "America/Chicago (default: this host's local time)"
+                    ),
+                },
+                "expires_in_days": {
+                    "type": "number",
+                    "description": (
+                        "Recurring: stop after this many days (default and maximum: "
+                        "the install's limit, reported by list_schedules)"
+                    ),
+                },
+                "daily_run_cap": {
+                    "type": "integer",
+                    "description": "Optional ceiling on runs in any 24 hours",
+                },
+                "catch_up": {
+                    "type": "boolean",
+                    "description": (
+                        "If the machine was off or asleep at the fire time, run once "
+                        "when it is back (default true for a one-off, false for "
+                        "recurring)"
+                    ),
+                },
+                "project": {
+                    "type": "string",
+                    "description": (
+                        "Project a spawn runs in (name or id; defaults to yours). A "
+                        "schedule has one Project, so \"fleet\" is not accepted. "
+                        "Whether it is armed or filed follows that Project's rules."
+                    ),
+                },
+                "backend": {
+                    "type": "string",
+                    "enum": list(agent_harnesses()),
+                    "description": "For spawn: agent CLI to start (defaults to yours)",
+                },
+                "model": {
+                    "type": "string",
+                    "description": (
+                        "For spawn: model in the CLI's own spelling, checked now "
+                        "against the harness (see list_models)"
+                    ),
+                },
+                "name": {"type": "string", "description": "Name for the session it opens"},
+                "reason": {
+                    "type": "string",
+                    "description": "Why this should run later (shown to a person who approves it)",
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "description": "Validate and report what would happen; write nothing",
+                },
+            },
+            "required": ["prompt"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "cancel_schedule",
+        "description": (
+            "Withdraw a schedule you wrote, armed or still waiting for approval. It is "
+            "disarmed rather than deleted, so its history stays readable. Schedules a "
+            "person or another session wrote are refused - ask the operator. Find ids "
+            "with list_schedules(mine:true)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "schedule_id": {"type": "string", "description": "The schedule's id (sch_...)"},
+                "reason": {"type": "string", "description": "Why it is no longer needed (logged)"},
+            },
+            "required": ["schedule_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "list_schedules",
+        "description": (
+            "What is scheduled to run later: each schedule's cadence, next fire time, "
+            "who wrote it, whether it is armed or waiting for a person's approval, and "
+            "how its last run went. Scoped to your Project by default; with one Project "
+            "in scope the result also carries the rules an agent schedule meets there "
+            "(the schedule_grant level, how many times a day a recurring schedule may "
+            "fire and still be armed directly, the most days it may run, and how many "
+            "slots and hourly requests you have left). Pass mine:true for only yours, "
+            'include_inactive:true for paused, expired and cancelled ones, project:"fleet" '
+            "for every Project."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "mine": {"type": "boolean", "description": "Only schedules you wrote"},
+                "include_inactive": {
+                    "type": "boolean",
+                    "description": "Also paused, dismissed, expired, cancelled and completed ones",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "At most this many (default 25, max 100)",
+                },
+                "project": _PROJECT_ARG,
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "search_history",
         "description": (
             "Context-efficient search over your Project's indexed agent conversations. "
@@ -2261,8 +2471,12 @@ class McpService:
         configurator: Any = None,
         surface_gate: Any = None,
         attention_credit: Any = None,
+        schedule_authoring: Any = None,
     ) -> None:
         self.sessions = sessions
+        # The schedule write path (`schedule_authoring.py`). Absent it, the three
+        # schedule tools answer unavailable rather than writing anything partial.
+        self.schedule_authoring = schedule_authoring
         self.history = history
         # Phase 5 write tools. Absent (tests, minimal wiring) the tools still
         # list but answer that they are unavailable — never a partial write.
@@ -5251,6 +5465,39 @@ class McpService:
             return {"watch_error": "the watch could not be armed"}
         return {"watch": dict(watch)}
 
+    def _schedules(self) -> Any:
+        if self.schedule_authoring is None:
+            raise RuntimeError(
+                "transient: scheduled runs are not available on this daemon"
+            )
+        return self.schedule_authoring
+
+    async def request_schedule(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        """`mux.request_schedule`: a caller over the schedule write path.
+
+        Every bound - the grant, the frequency measurement, the lifetime, the
+        per-Project cap, the hourly budget, duplicate suppression - lives in the
+        service; this translates nothing but the transport. The author is the token's
+        session, never an argument.
+        """
+        self.writes += 1
+        return dict(await self._schedules().request(caller, args))
+
+    async def cancel_schedule(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        """`mux.cancel_schedule`: disarm a schedule the caller wrote, and only that."""
+        self.writes += 1
+        return dict(
+            await self._schedules().cancel(
+                caller,
+                str(args.get("schedule_id") or ""),
+                reason=str(args.get("reason") or ""),
+            )
+        )
+
+    async def list_schedules(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        """`mux.list_schedules`: what is scheduled in a scope, and the rules there."""
+        return dict(await self._schedules().list_for_agent(caller, args))
+
     def _control(self) -> Any:
         if self.session_control is None:
             raise RuntimeError(
@@ -5710,6 +5957,9 @@ class McpService:
             "use_worktree": self.use_worktree,
             "request_land": self.request_land,
             "request_verify": self.request_verify,
+            "request_schedule": self.request_schedule,
+            "cancel_schedule": self.cancel_schedule,
+            "list_schedules": self.list_schedules,
         }
         if name in _CONFIGURATOR_TOOL_NAMES:
             # The same gate `tools_for` applies to listing. Phrased as "unknown
@@ -5777,15 +6027,19 @@ class McpService:
                             "Project, or a Project name or id for one other. Sessions in "
                             "other Projects are reachable — you just have to ask for them. "
                             "An empty result means nothing relevant exists in the scope you "
-                            "asked for. Two bounded write "
-                            "tools exist: `notify` puts a message into another "
-                            "session's prompt queue (it waits for that session's "
-                            "readiness and, by default, for a human to approve it; "
-                            "pass `dry_run` to see whether anything would deliver it "
-                            "before you stage it, and `revoke_message` to withdraw one "
-                            "that has not been delivered), "
-                            "and `request_spawn` drafts a new-session request in the "
-                            "Fleet Queue for a human to approve. It starts nothing."
+                            "asked for. The write tools are bounded and each answers "
+                            "with what it actually did: `notify` puts a message into "
+                            "another session's prompt queue (it waits for that "
+                            "session's readiness; pass `dry_run` to see whether "
+                            "anything would deliver it, and `revoke_message` to "
+                            "withdraw one that has not been delivered); "
+                            "`request_spawn` starts a session now, or drafts one for a "
+                            "person where the Project asks for that; and "
+                            "`request_schedule` makes work happen later - a new "
+                            "session, or this conversation picked up again - armed "
+                            "directly or filed for a person's approval by the "
+                            "Project's rules (`list_schedules` shows them, "
+                            "`cancel_schedule` withdraws yours)."
                             + (
                                 " This session was launched as the swe-mux "
                                 "configurator, so it also holds the "

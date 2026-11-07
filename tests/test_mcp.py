@@ -1306,6 +1306,11 @@ async def test_initialize_negotiates_and_lists_closed_tool_allowlist() -> None:
         "request_verify",
         "watch_session",
         "await_session",
+        # Scheduling: a read over the schedule store, a grant-bounded write that
+        # arms or files a schedule, and the narrow write that withdraws your own.
+        "list_schedules",
+        "request_schedule",
+        "cancel_schedule",
     }
     assert names == {tool["name"] for tool in TOOLS}
     by_name = {tool["name"]: tool for tool in listing["result"]["tools"]}

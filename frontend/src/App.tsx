@@ -2740,7 +2740,10 @@ if(keyboard.key==='Escape'){keyboard.preventDefault();finish(false)}}
           if(event.type==='project_configuration_changed')window.dispatchEvent(new CustomEvent('mux:project-automations-changed',{detail:{projectId:String(event.payload?.project_id||'')}}))
           // Queue tabs and pane chips live-update off these; payloads carry ids/counts only.
           if(event.type==='queue_updated'||event.type==='queue_delivery'){window.dispatchEvent(new CustomEvent('mux:queue-changed',{detail:{sessionId:event.session_id}}));refreshQueueSummary()}
-          if(event.type==='spawn_request_drafted'||event.type==='spawn_request_decided')window.dispatchEvent(new CustomEvent('mux:queue-changed',{detail:{projectId:event.payload?.project_id}}))
+          if(event.type==='spawn_request_drafted'||event.type==='spawn_request_decided'||event.type==='schedule_changed')window.dispatchEvent(new CustomEvent('mux:queue-changed',{detail:{projectId:event.payload?.project_id}}))
+          // The Schedule tab re-reads on any schedule write or fire, so an agent's request
+          // or a decision taken on another device shows without waiting for its poll.
+          if(event.type==='schedule_changed'||event.type==='schedule_fired')window.dispatchEvent(new CustomEvent('mux:schedules-changed',{detail:{projectId:event.payload?.project_id}}))
           // The drawer's Git tab refetches its worktree list off this. Branch/dirty/upstream
           // reach the row through the event's own row patch (`applyRowEvent` above), so
           // the tab needs only *which Project* moved, the one thing it uses to decide

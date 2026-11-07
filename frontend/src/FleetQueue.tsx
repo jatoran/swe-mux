@@ -2,11 +2,12 @@ import { codeLabel } from './localization/codeLabels.ts'
 import { catalogRevision, rich, t, locale as uiLocale } from './localization/index.ts'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import {
-  cancelQueueMessage, decideControlRequest, decideSpawnRequest, deleteQueueMessage,
-  fetchAutoStatus, fetchFleetQueue, scheduleStatus, senderLabel,
+  cancelQueueMessage, decideControlRequest, decideScheduleRequest, decideSpawnRequest,
+  deleteQueueMessage, fetchAutoStatus, fetchFleetQueue, scheduleStatus, senderLabel,
   type FleetQueueAuthor, type FleetQueueView, type QueueAutoStatus,
   type QueueMessage, type SpawnRequestRow,
 } from './queueApi'
+import { absoluteLabel, cadenceLabel, frequencyLabel } from './schedules'
 import { Dropdown } from './Dropdown'
 import { byProjectName } from './projectOptions'
 import { useModalFocus } from './modalFocus'
@@ -107,12 +108,14 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
 
   const projectNames = useMemo(
     () => new Map(projects.map(project => [project.id, project.name])), [projects, uiLocale.value, catalogRevision.value])
+  const scheduleRequests = view.schedule_requests || []
   const projectOptions = useMemo(() => {
     const ids = new Set(view.targets.map(target => target.project_id).filter((id): id is string => !!id))
     for (const request of view.spawn_requests) ids.add(request.project_id)
     for (const request of view.control_requests) ids.add(request.project_id)
+    for (const request of view.schedule_requests || []) ids.add(request.project_id)
     return byProjectName([...ids], id => projectNames.get(id) || id)
-  }, [projectNames, view.control_requests, view.spawn_requests, view.targets, uiLocale.value, catalogRevision.value])
+  }, [projectNames, view.control_requests, view.spawn_requests, view.schedule_requests, view.targets, uiLocale.value, catalogRevision.value])
   const targetOptions = useMemo(
     () => view.targets.filter(target => !projectId || target.project_id === projectId), [projectId, view.targets, uiLocale.value, catalogRevision.value])
 
@@ -273,6 +276,56 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
                 </li>
               )
             })}
+            {/* An agent asking for a session *later*. The card carries what the decision
+                needs - the measured frequency, the next fire times from the daemon, the
+                end date, and why it needed a person - because a cron expression is the
+                one field here whose meaning cannot be read off its own text. */}
+            {!targetSessionId && scheduleRequests.map(request => {
+              const busy = busyId === request.id
+              const pending = request.status === 'pending'
+              return (
+                <li key={`schedule:${request.id}`} class={`observation-request${pending ? '' : ' done'}`}>
+                  <div class="observation-request-head">
+                    <span class="observation-request-tag">{request.action === 'resume' ? t("FleetQueue.scheduleResumeTag") : t("FleetQueue.scheduleSpawnTag")}</span>
+                    <span>{request.author_name || request.author_session_id || t("FleetQueue.647936ec3e")}</span>
+                    <span>{cadenceLabel(request)}</span>
+                    {request.trigger_kind !== 'once' && <span>{frequencyLabel(request.fires_per_day)}</span>}
+                    {request.model && <span class="observation-request-model">{rich("FleetQueue.93b522f810", { model: request.model })}</span>}
+                    <span class="fleet-queue-project">{rich("FleetQueue.b1c7dfe207", { value1: projectNames.get(request.project_id) || request.project_name || request.project_id })}</span>
+                    <span class="observation-request-status">{codeLabel(request.status)}</span>
+                  </div>
+                  {pending && request.approval_reason && <p class="observation-request-reason">{t("FleetQueue.scheduleWhy", { reason: request.approval_reason })}</p>}
+                  {request.request_reason && <p class="observation-request-reason">{request.request_reason}</p>}
+                  <p class="observation-request-reason">
+                    {request.preview_fires.length
+                      ? t("FleetQueue.scheduleNext", { when: request.preview_fires.map(absoluteLabel).join(' · ') })
+                      : ''}
+                    {request.expires_at ? t("FleetQueue.scheduleEnds", { when: absoluteLabel(request.expires_at) }) : ''}
+                  </p>
+                  <pre class="observation-request-prompt">{request.prompt}</pre>
+                  <div class="observation-request-actions">
+                    {pending ? <>
+                      <button
+                        type="button"
+                        class="primary"
+                        disabled={busy}
+                        onClick={() => void run(request.id, () => decideScheduleRequest(request.id, 'approve'))}
+                      >{t("FleetQueue.57de86e073")}</button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void run(request.id, () => decideScheduleRequest(request.id, 'dismiss'))}
+                      >{t("FleetQueue.48845bff33")}</button>
+                      {/* Approving arms the schedule; it cannot fire until the Project
+                          permits scheduled runs, so the switch is offered right here. */}
+                      {!request.scheduled_runs_opted_in && <GrantButton
+                        id="project.scheduledRuns" projectId={request.project_id} onGranted={refresh}
+                      >{t("FleetQueue.scheduleGrant")}</GrantButton>}
+                    </> : (<span>{request.status === 'approved' ? t("FleetQueue.scheduleApproved") : t("FleetQueue.701b07dbed")}</span>)}
+                  </div>
+                </li>
+              )
+            })}
             {!targetSessionId && view.control_requests.map(request => {
               const busy = busyId === request.id
               const pending = request.status === 'pending'
@@ -350,7 +403,7 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
                 </li>
               )
             })}
-            {!view.messages.length && (!view.spawn_requests.length || !!targetSessionId) && (<li class="queue-empty">{t("FleetQueue.27483023ff")}</li>)}
+            {!view.messages.length && ((!view.spawn_requests.length && !scheduleRequests.length) || !!targetSessionId) && (<li class="queue-empty">{t("FleetQueue.27483023ff")}</li>)}
           </ul>
         </main>
       </section>

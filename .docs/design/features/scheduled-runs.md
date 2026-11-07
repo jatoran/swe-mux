@@ -9,10 +9,13 @@ A schedule does one of two things in one Project on its own, on a cron expressio
 
 Either carries a prompt, and optionally a queue of messages behind it.
 
-That framing is the authorization argument.
-A schedule is a **user-authored deferred press of a button the author could have pressed themselves**, so it inherits their authority.
-It is not the decision-gated "model-authored action selection, autonomous worker spawning" in `../../development/ROADMAP.md`: no model chooses to create, edit, or fire one.
-What it did owe that gate is the rest of the checklist, and those are the guards in this document.
+A schedule has one of two authors, and the author is the authorization argument.
+
+- **A person's schedule** is a deferred press of a button its author could have pressed themselves, so it inherits their authority.
+- **An agent's schedule** (`mux.request_schedule`, "Agent-authored schedules") carries the authority its *target* Project granted agents through `schedule_grant`.
+  That is the same grant model an agent's immediate spawn already answers to (`spawn_grant`, `mux-mcp.md`), with the bounds persistence needs added on top, because a schedule keeps firing after the agent that wrote it has gone.
+
+Every guard in "What a fire does" applies to both, and both go through the same spawn, resume and queue paths.
 
 ## Where it lives
 
@@ -97,8 +100,31 @@ The ceiling belongs to `latest_of_session` alone: the other two kinds either pin
 ## What a resume may not say
 
 The conversation's history row and its adapter already fix the harness, the argv (`--resume <id>`), and the working directory (the Project root the conversation resolves from).
-`backend`, `profile_id`, and `cwd` are therefore **refused** on a resume rather than ignored, and the editor does not offer them: accepting one silently would make the form promise control it does not have.
+`backend`, `profile_id`, `cwd` and `model` are therefore **refused** on a resume rather than ignored, and the editor does not offer them: accepting one silently would make the form promise control it does not have.
 `overlap: allow` is refused for the same class of reason - a CLI opens a conversation once - so saying it at write time beats a nightly `conversation_live` skip its author reads as a bug.
+
+## When the conversation is already open
+
+`when_live` is a resume's answer to finding its conversation open in a mux pane at fire time.
+
+| `when_live` | What happens | Run outcome |
+|---|---|---|
+| `skip` (default for a person's schedule) | The fire is recorded and nothing opens. | `skipped`, reason `conversation_live` |
+| `deliver` (default for an agent's) | The prompt, then the follow-ups, are queued into the pane that holds the conversation. | `delivered` |
+
+`deliver` is the resume its author asked for - the same conversation - arriving through the ordinary prompt queue instead of a second pane, so readiness, head-of-line order and the auto-delivery gate decide when it lands.
+It is decided before the overlap and concurrency guards, because both exist to stop a schedule *opening* a pane, and delivering opens none.
+The rolling-continuation ceiling still applies: delivering into a conversation that is already too full is the accumulation the ceiling exists to stop.
+A delivered run names the pane in its run row but never becomes the schedule's `last_session_id`, so a pane somebody else opened is not counted as this schedule's live session.
+A conversation held by a process mux does not own (`conversation_held`) is still skipped either way: there is no pane to queue into.
+`deliver` is refused on a spawn, which opens a conversation nobody holds.
+
+## End dates
+
+Any schedule may carry `expires_at`.
+The sweep disarms a schedule past its end date before it looks for due fires (`disabled_reason = expired`), so it cannot fire in the tick it expired in, and it stays in the list with its history.
+A past end date is refused at write time rather than accepted and immediately expired, and re-arming an expired schedule from the tab is refused until the end date moves.
+Every recurring agent schedule carries one; a person's has none unless they set it.
 
 A `once` resume is held inside a 21-day horizon rather than the one-year horizon a spawn gets.
 The reason is not caution: the agent CLIs prune their own transcripts on their own timers (Claude's `cleanupPeriodDays` defaults to 30 days of inactivity), mux neither owns that file nor is consulted, and a resume parked past that window is a schedule whose most likely outcome is `transcript_unavailable`.
@@ -122,15 +148,17 @@ The sweep runs on the shared background-task supervisor (`background_tasks.py`),
 
 1. **Advance the window first.** A fire refused for any reason still moves `next_fire_at`, or the sweep spins on the same row for as long as the refusal lasts.
 2. **Claim the occurrence.** A run row is inserted under a unique `(schedule_id, fire_key)` index *before* anything is spawned, so a daemon that dies mid-fire cannot spawn the same occurrence again on restart and two sweeps cannot race. A manual run gets its own key and never collides with the timer's claim.
-3. **Check permission at fire time, not at write time**: the install-wide switch, then the Project's `scheduled_runs` opt-in. Revoking either takes effect immediately.
-4. **Overlap.** `skip`, the default, refuses to start a second run while the previous one's session is still alive. Nothing ends an agent session automatically, so this is what stops a nightly job becoming a fleet of forgotten panes.
-5. **Caps.** An optional per-schedule daily cap, and the install-wide ceiling on concurrently live scheduled sessions.
-6. **Act.**
+3. **Check permission at fire time, not at write time**: the install-wide switch, then the Project's `scheduled_runs` opt-in, then - for a schedule an agent armed under its grant - the Project's `schedule_grant` as it stands now. Revoking any of them takes effect immediately.
+4. **Daily cap.** An optional per-schedule cap over a rolling 24 hours, counting `spawned` and `delivered` runs.
+5. **Deliver into an open conversation**, for a resume whose `when_live` is `deliver` ("When the conversation is already open").
+6. **Overlap.** `skip`, the default, refuses to start a second run while the previous one's session is still alive. Nothing ends an agent session automatically, so this is what stops a nightly job becoming a fleet of forgotten panes.
+7. **Concurrency.** The install-wide ceiling on concurrently live scheduled sessions.
+8. **Act.**
    A spawn goes through `_spawn_from_body`, the identical path the Run menu, the Fleet Queue approval, and the granted agent spawn use.
    A resume goes through `session_resume.resume_run`, the identical path the History browser's Resume button uses, after resolving its target and (for `fork_point`) writing the fork.
    A second spawn path or a second resume path would be a second authority, and the one that drifted would do so silently at 3 a.m.
-7. **Queue the messages** through `PromptQueueService.enqueue` with `sender_kind: "rule"`. Bind-on-first-run keys each message to the session *and* its first agent run, so one can never land in a conversation it was not written for, and a per-message delay becomes a `not_before` constraint the queue enforces (`prompt-queue.md`, `auto-delivery.md`). Never a timer owned by this feature.
-8. **Record the outcome** (`spawned`, `skipped`, `failed`, `missed`) with its reason, and notify on a failure.
+9. **Queue the messages** through `PromptQueueService.enqueue`. Bind-on-first-run keys each message to the session *and* its first agent run, so one can never land in a conversation it was not written for, and a per-message delay becomes a `not_before` constraint the queue enforces (`prompt-queue.md`, `auto-delivery.md`). Never a timer owned by this feature. Who the message is *from* decides how it may be armed ("What an agent's schedule says").
+10. **Record the outcome** (`spawned`, `delivered`, `skipped`, `failed`, `missed`) with its reason, and notify on a failure.
 
 A failed spawn is contained: it is recorded, alerted, and the loop continues.
 The session it could not start is the only thing lost.
@@ -140,8 +168,8 @@ The session it could not start is the only thing lost.
 A spawn's prompt rides argv as the seed (`stage_seed_argv`).
 A resume's does not: the resumed pane's argv is already `--resume <id>`, and whether a positional prompt may follow that is per-harness luck rather than a contract.
 It is enqueued as the first queue item instead, ahead of the follow-ups.
-The consequence is deliberate and is stated in the editor: a `rule`-authored message is never self-arming, so it is delivered automatically only where that conversation has an auto-delivery grant, and otherwise waits in the Queue tab.
-Granting a rule-authored message automatic delivery is the decision-gated thing this feature does not do.
+For a person's schedule the consequence is deliberate and is stated in the editor: a `rule`-authored message is never self-arming, so it waits in the Queue tab for a person to send it.
+Granting a person's rule-authored message automatic delivery is a decision this feature does not take; an agent's schedule is armed by a different, narrower argument ("What an agent's schedule says").
 
 ### The refusals only a resume has
 
@@ -163,10 +191,81 @@ A schedule armed against a conversation its author also uses by hand meets them 
 A scheduled fork records a `branch` lineage edge, not a `resume` one.
 `resolve_latest_run` follows `resume` edges, so calling a fork a resume would make every later fire of a rolling schedule chase last night's fork.
 
+## Agent-authored schedules
+
+An agent writes a schedule through `mux.request_schedule`, lists them through `mux.list_schedules`, and withdraws its own through `mux.cancel_schedule` (`mux-mcp.md`).
+Before these existed an agent with a shell could already POST the Project route directly, and the row it wrote was indistinguishable from a person's and bounded by nothing an agent answers to.
+The tools close that by giving the capability an attributed, bounded path, and the agent skill steers agents to them.
+
+### The verdict
+
+The target Project's `schedule_grant` decides, resolved through the four authority layers (`agent_authority.py`), and `schedules.agent_schedule_verdict` applies it:
+
+| `schedule_grant` | A one-off | A recurring schedule |
+|---|---|---|
+| `draft` | waits for a person | waits for a person |
+| `limited` (built-in default) | armed directly | armed directly at most `agent_schedule_daily_fire_limit` fires in any 24 hours, otherwise waits |
+| `granted` | armed directly | armed directly |
+
+A Project that has not opted into `scheduled_runs` collapses to `draft`, the way an agent spawn collapses when `session_control` is off: the request still has somewhere to go, and the approval card offers the opt-in.
+An unknown level fails closed to the same place.
+
+Frequency is measured, not estimated.
+`schedules.fires_per_day` walks the real occurrences the scheduler would produce over the next eight days through the same wall-clock arithmetic, and takes the most inside any rolling 24 hours, so a weekday-only expression is judged on a weekday and a DST transition is counted the way it will fire.
+Counting stops past 96, so anything busier than every fifteen minutes is "more than 96" at bounded cost.
+
+### The bounds persistence needs
+
+The per-origin spawn budget is counted while its author is alive, and a schedule is the thing that outlives its author, so these exist in addition to the grant:
+
+| Config | Default | What it bounds |
+|---|---|---|
+| `agent_schedule_max_days` | `30` | A recurring agent schedule expires after at most this many days (sooner if it asks); a one-off may be parked at most this far ahead. |
+| `agent_schedules_per_project` | `10` | Agent schedules standing in one Project, armed or pending. `0` stops agents scheduling. |
+| `agent_schedule_hourly_budget` | `6` | Requests one agent session may make per hour, in any state, counted from the table so a restart does not refill it. |
+| `agent_schedule_daily_fire_limit` | `2` | The `limited` level's frequency line. |
+
+An identical request from the same author returns the schedule it already made instead of arming a second copy, so an agent that retries a call it could not see the answer to is safe.
+`dry_run` answers with the verdict, the measured frequency and the next fire times and writes nothing, including the refusal a real call would meet.
+
+### Pending requests are the rows themselves
+
+A request that waits is the schedule row with `approval_state = pending`, disarmed with `disabled_reason = awaiting_approval`; there is no second copy of the definition for an approval to drift from.
+The Fleet Queue lists it beside drafted spawns with the measured frequency, the next fire times from the daemon, the end date and the reason it needed a person, and the Schedule tab shows the same row with Approve and Dismiss.
+`POST /api/schedules/{id}/decide` is one conditional update, so the desktop and a phone cannot both win; arming a pending row from the tab's pause switch is the same approval.
+Approval arms from now - a one-off whose moment passed while it waited fires on the next sweep - and records who decided.
+Dismissal keeps the row, disarmed, so the record of what an agent asked for survives.
+Either way the author is told in its own conversation, if that conversation is still the one that asked, through a `rule` message armed by naming the schedule in `solicited_by`.
+
+### Re-judged at every fire
+
+A schedule an agent armed under its grant (`approval_state = granted`) is judged again at every timer fire against the level as it stands.
+Lowering the Project to `draft`, or lowering the install's daily limit below its frequency, turns it back into a pending request in the Fleet Queue instead of letting it keep firing on an authority nobody would grant it today.
+A schedule a person approved (`approved`) carries that person's authority and is never re-judged, and a person's edit of an agent-armed schedule makes it `approved` for the same reason; editing a pending request does not approve it.
+A manual Run now is a person's own press and is never withheld.
+
+### What an agent's schedule says
+
+Agent-authored text is attributed rather than anonymous.
+A spawn's seed and a resume's first message are headed by a daemon-written line naming the schedule, its id, the authoring agent and when it was set up - the disclosure `notify`'s envelope makes, at its fullest, because the schedule fires long after anyone could ask the author what it meant.
+
+How the message is armed follows the receiver-side consent rule (`agent-messaging.md`), never the sender's claim:
+
+- A resume of **the author's own conversation** (`target_run_id` is the author's run - the "pick this up later" case) is the answer to a request that conversation made, so it is staged armed by naming the schedule in `solicited_by`, exactly like a settle-watch notice. It is sent without a person wherever the conversation's auto-delivery grant and the install brakes allow, and the request result says so when an install brake would hold it.
+- A resume of **another conversation** is the authoring agent's message (`sender_kind = agent`), armed only under that conversation's own `accept_agent_messages` grant, like `notify`.
+- A **person's** schedule is unchanged: `rule` messages that never arm on their own.
+
+### What an agent may not do
+
+- Withdraw or edit a schedule a person wrote, or another agent wrote. `cancel_schedule` disarms only a row attributed to the caller's session or to the conversation it is running.
+- Choose a fixed fork point. Agents resume a conversation as it stands (`run`) or wherever it has got to (`latest_of_session`); `fork_point` needs a message id and is set from the UI.
+- Reopen a conversation under another Project's root. A resume runs in the conversation's own Project, and naming another is refused.
+- Write anything while the install switch is off. That is the emergency stop, so it refuses rather than filing requests nobody can act on.
+
 ## What it deliberately does not do
 
 - It does not end the session it started or reopened. Scheduled agent runs are interactive panes, because `completion_mode: one_shot` is shell-only, so the concurrency ceiling is the bound rather than an automatic teardown.
-- It does not decide what to run. Every definition is human-authored; there is no path from a model to a schedule.
+- It does not let an agent schedule outside its target Project's grant. A model may write a schedule only through `mux.request_schedule`, under `schedule_grant` and the bounds in "Agent-authored schedules"; there is no other agent path to a schedule that the daemon recognises.
 - It does not compute a fire time in the browser. The editor previews through `POST /api/schedules/preview` so that what a user is shown before saving comes from the code that will fire it.
 - It does not run a repository-provided command. A schedule seeds an agent prompt; executing repository content stays behind Project Action trust.
 - It does not fork a conversation to get around a refusal. A conversation somebody else is holding is skipped, because forking would silently produce a *second* conversation where the author asked to return to one. Forking is a target kind the author chooses, never a fallback.
@@ -180,21 +279,33 @@ A scheduled fork records a `branch` lineage edge, not a `resume` one.
 | `scheduled_runs_max_concurrent` | `3` | Live schedule-started sessions at once. |
 | `scheduled_runs_poll_seconds` | `5.0` | How promptly a due minute is noticed. |
 | `scheduled_run_retention_days` | `60` | How long run history is kept. |
+| `agent_schedule_hourly_budget` | `6` | Agent schedule requests per session per hour. |
+| `agent_schedule_daily_fire_limit` | `2` | Fires a day a recurring agent schedule may have and still be armed at `limited`. |
+| `agent_schedules_per_project` | `10` | Agent schedules standing in one Project. |
+| `agent_schedule_max_days` | `30` | Longest an agent schedule may run or be parked. |
+
+The four agent bounds are edited in Settings → Prompt queue → Agent actuation beside the spawn budget; `schedule_grant` is a row in the Automation policy's agent authority table.
 
 ## Key files
 
-- `src/swe_mux/schedules.py` - triggers, wall-clock arithmetic, the action/target model, validation.
-- `src/swe_mux/schedule_store.py` - definitions and run history, machine-local.
-- `src/swe_mux/scheduler.py` - the sweep, the guards, the fire, the resume path.
+- `src/swe_mux/schedules.py` - triggers, wall-clock arithmetic, the action/target model, validation, `fires_per_day` and `agent_schedule_verdict`.
+- `src/swe_mux/schedule_store.py` - definitions, authorship, approval state, and run history, machine-local.
+- `src/swe_mux/schedule_authoring.py` - the one write path: a person's create, an agent's request with every bound, approval, dismissal, cancellation, and the agent listing.
+- `src/swe_mux/scheduler.py` - the sweep, expiry, the guards, the agent authority re-check, the fire, the resume and deliver paths, and how a message is attributed and armed.
 - `src/swe_mux/session_resume.py` - the single resume authority, shared with the History route.
 - `src/swe_mux/transcript_view.py` - `conversation_cut_points` and `resolve_cut_offset`, shared with the branch picker.
 - `src/swe_mux/server.py` - the routes, the live `blocked` answer, the resolved `target`, and `GET /api/history/{id}/branch-points`.
+- `src/swe_mux/routes/schedules.py` - the routes, including `POST /api/schedules/{id}/decide`; `src/swe_mux/routes/queue.py` adds `schedule_requests` to the Fleet Queue view.
+- `src/swe_mux/mcp.py`, `src/swe_mux/mcp_contract.py` - `request_schedule`, `cancel_schedule`, `list_schedules`.
 - `frontend/src/ScheduleTab.tsx`, `frontend/src/schedules.ts` - the drawer tab and its pure helpers.
+- `frontend/src/FleetQueue.tsx` - the agent schedule request cards.
 - `frontend/src/HistoryBrowser.tsx`, `frontend/src/App.tsx` - the two places a resume is seeded from.
 
 ## Relates to
 
 - `automation-enablement.md` - the `scheduled_runs` per-Project opt-in.
+- `mux-mcp.md` - the three schedule tools and the authority model they share with `request_spawn`.
+- `agent-messaging.md` - the receiver-side consent rule that decides how an agent schedule's message is armed.
 - `prompt-queue.md`, `auto-delivery.md` - how a resume's prompt and the follow-up messages are delivered.
 - `history.md` - the run rows a resume targets, and the Resume button that shares its authority.
 - `transcript-branches.md` - what a fork may legally be cut at.

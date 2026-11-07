@@ -721,19 +721,26 @@
   `design/features/processes-and-previews.md`, `development/PERFORMANCE_RUNBOOK.md`,
   `technical/backend/packages.md`, `technical/frontend/packages.md`
 - Changing scheduled runs (the triggers and their wall-clock/DST arithmetic, the missed-window
-  policy, the fire guards, the resume action and its target kinds, the Schedule drawer tab, or
-  where a definition is stored):
-  `design/features/scheduled-runs.md`, `design/features/automation-enablement.md`,
+  policy, the fire guards, the resume action and its target kinds, `when_live`, end dates,
+  agent-authored schedules and `schedule_grant`, the Schedule drawer tab, the Fleet Queue's
+  schedule requests, or where a definition is stored):
+  `design/features/scheduled-runs.md`, `design/features/mux-mcp.md`,
+  `design/features/agent-messaging.md`, `design/features/automation-enablement.md`,
   `design/features/prompt-queue.md`, `design/features/history.md`, `design/features/ui.md`,
   `design/interfaces.md`, `design/data-model.md`, `technical/backend/packages.md`,
   `technical/backend/sqlite.md`, `technical/frontend/packages.md`.
-  The rule the design turns on: a schedule is a *user-authored deferred press of a button the
-  author could have pressed themselves*, so it goes through the ordinary spawn path, the
-  ordinary resume path (`session_resume.py`, shared with the History Resume button) and the
-  ordinary prompt queue, and never grows a second authority; a resume names its conversation by
-  history *run* id rather than session id, because a session is exactly the thing that drifts;
-  and the definitions stay machine-local, because a schedule committed to a repository would
-  arm itself in every clone and worktree.
+  The rule the design turns on: a schedule is a *deferred press of a button its author could
+  have pressed*, so it goes through the ordinary spawn path, the ordinary resume path
+  (`session_resume.py`, shared with the History Resume button) and the ordinary prompt queue,
+  and never grows a second authority; a resume names its conversation by history *run* id
+  rather than session id, because a session is exactly the thing that drifts; and the
+  definitions stay machine-local, because a schedule committed to a repository would arm itself
+  in every clone and worktree.
+  Every schedule is written through `schedule_authoring.py`, for a person and an agent alike.
+  An agent's carries its target Project's `schedule_grant` and the bounds persistence needs
+  (frequency, lifetime, per-Project cap, hourly budget), is re-judged at every fire, and a
+  pending one is the row itself rather than a copy; how its messages are armed follows the
+  receiver-side consent rule in `agent-messaging.md` and must never grow a sender-claimed form.
 - Changing per-project automation opt-in, the enablement dependency graph, or its toggle
   surface: `design/features/automation-enablement.md`,
   `design/features/project-resources.md`, `design/data-model.md`, `design/interfaces.md`

@@ -35,6 +35,21 @@ What this module owns is the decision to fire, and every guard around it:
 - **Enablement.** The Project must have opted into the `scheduled_runs`
   automation, and the install-wide switch must be on. Permission is checked at
   every fire, not at write time, so revoking it takes effect immediately.
+- **Agent authority.** A schedule an agent armed under its Project's
+  `schedule_grant` is judged against that grant again at every timer fire
+  (`schedules.agent_schedule_verdict`). Lowering the level turns it back into a
+  pending request rather than letting it keep the authority it was armed under.
+- **Expiry.** A schedule past its end date is disarmed by the sweep before the sweep
+  looks for due fires, so it cannot fire in the tick it expired in.
+
+What an agent-authored schedule *says* when it fires is attributed rather than
+anonymous: a spawn's seed and a resume's prompt are headed by a daemon-written line
+naming the schedule and the agent that wrote it. A resume of the author's *own*
+conversation is the answer to a request that conversation made, so its prompt is
+staged armed by naming the schedule in `solicited_by` - the same receiver-side
+consent a settle watch or a land handback uses - and a resume of anyone else's
+conversation is staged as the authoring agent's message, armed only on that
+conversation's own `accept_agent_messages` grant.
 
 Nothing here can raise into the daemon: the loop runs under the background-task
 supervisor, and a fault costs one occurrence rather than the feature.
@@ -47,13 +62,24 @@ import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 from typing import Any
 
 from .background_tasks import background
-from .schedule_store import ScheduleConflict, ScheduleStore
+from .schedule_store import (
+    APPROVAL_APPROVED,
+    APPROVAL_GRANTED,
+    APPROVAL_PENDING,
+    AUTHOR_AGENT,
+    DISABLED_AWAITING_APPROVAL,
+    ScheduleConflict,
+    ScheduleStore,
+)
 from .schedules import (
     FollowUp,
     ScheduleSpec,
+    agent_schedule_verdict,
+    fires_per_day,
     first_occurrence,
     next_occurrence,
     occurrence_key,
@@ -84,7 +110,16 @@ REASON_LABELS = {
     "missed_window": "the daemon was not running when this was due",
     "target_missing": "the conversation this schedule resumes has no History entry any more",
     "history_unavailable": "history is not available to this daemon",
+    "awaiting_approval": "an agent wrote this schedule and a person has not approved it yet",
+    "agent_authority_lowered": (
+        "agent schedules in this Project now need a person's approval, so it is waiting "
+        "in the Fleet Queue"
+    ),
 }
+
+# What a `delivered` run row says. A resume found its conversation already open and,
+# because the schedule asked for it, queued the prompt into that pane.
+DELIVERED_REASON = "the conversation was already open, so the prompt was queued into it"
 
 # Refusals a resume can meet that say "not now" rather than "never". They are recorded
 # as `skipped` and raise no alert, because a schedule armed against a conversation the
@@ -133,7 +168,51 @@ def spec_from_row(row: dict[str, Any]) -> ScheduleSpec:
         target_cut_message_id=str(row.get("target_cut_message_id") or ""),
         target_cut_mode=str(row.get("target_cut_mode") or ""),
         context_ceiling_pct=float(row.get("context_ceiling_pct") or 0.0),
+        model=str(row.get("model") or ""),
+        expires_at=row.get("expires_at"),
+        when_live=str(row.get("when_live") or "skip"),  # type: ignore[arg-type]
     )
+
+
+def _written_on(row: dict[str, Any]) -> str:
+    created = row.get("created_at")
+    if not isinstance(created, int | float):
+        return "an earlier date"
+    return datetime.fromtimestamp(float(created)).astimezone().strftime("%Y-%m-%d %H:%M")
+
+
+def agent_message_header(row: dict[str, Any], *, kind: str) -> str:
+    """The daemon-written line that heads what an agent-authored schedule says.
+
+    Fixed wording with only names and ids substituted, so the receiving model always
+    knows where the text below it came from - which is the disclosure an agent's
+    `notify` makes through its envelope, applied at its fullest because a schedule
+    fires long after anyone could ask the author what they meant.
+    """
+    label = str(row.get("label") or "")
+    schedule_id = str(row.get("id") or "")
+    author = str(row.get("author_name") or row.get("author_session_id") or "an agent")
+    written = _written_on(row)
+    if kind == "spawn":
+        return (
+            f'[swe-mux] This session was started by the schedule "{label}" ({schedule_id}), '
+            f'which agent session "{author}" set up on {written}. Its instructions follow.'
+        )
+    if kind == "self":
+        return (
+            f'[swe-mux] Scheduled message: you set up the schedule "{label}" ({schedule_id}) '
+            f"from this conversation on {written}, and it has fired."
+        )
+    return (
+        f'[swe-mux] Scheduled message from agent session "{author}" (schedule "{label}", '
+        f"{schedule_id}, set up {written}). It is not from the operator."
+    )
+
+
+def _resumes_its_author(row: dict[str, Any]) -> bool:
+    """Whether this agent schedule reopens the conversation that wrote it."""
+    author_run = str(row.get("author_run_id") or "")
+    return bool(author_run) and str(row.get("target_run_id") or "") == author_run
 
 
 class ScheduleService:
@@ -153,9 +232,14 @@ class ScheduleService:
         notify: Callable[..., Awaitable[dict[str, Any]]] | None = None,
         history: Any = None,
         automation_store: Any = None,
+        schedule_grant: Callable[[str], str] | None = None,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self.store = store
+        # `(project_root) -> level` for `schedule_grant`, the same resolver the
+        # authoring service uses at write time. Absent (older tests), an agent-armed
+        # schedule keeps the authority it was armed under.
+        self._schedule_grant = schedule_grant
         self.projects = projects
         self.sessions = sessions
         self.config = config
@@ -199,6 +283,22 @@ class ScheduleService:
     async def tick(self, now: float | None = None) -> list[dict[str, Any]]:
         """Fire every schedule that is due. Returns the run rows it settled."""
         moment = self._clock() if now is None else now
+        for expired in await self.store.expire_due(moment):
+            log.info(
+                "schedule_expired schedule_id=%s project_id=%s author=%s",
+                expired["id"],
+                expired["project_id"],
+                expired.get("author_kind") or "user",
+            )
+            await self.events.emit(
+                "schedule_changed",
+                source="daemon",
+                action="expired",
+                schedule_id=expired["id"],
+                project_id=str(expired["project_id"]),
+                author_kind=str(expired.get("author_kind") or "user"),
+                approval_state=str(expired.get("approval_state") or ""),
+            )
         due = await self.store.due(moment)
         settled: list[dict[str, Any]] = []
         for schedule in due:
@@ -279,6 +379,10 @@ class ScheduleService:
             session_id=session_id,
             queued_messages=queued,
             now=self._clock(),
+            # A delivered resume queued into a pane this schedule did not start, so
+            # that pane must not become what the overlap and concurrency guards count
+            # as this schedule's own live session.
+            track_session=outcome != "delivered",
         )
         await self.events.emit(
             "schedule_fired",
@@ -335,8 +439,8 @@ class ScheduleService:
         if "scheduled_runs" not in enabled:
             return "skipped", REASON_LABELS["automation_disabled"], None, 0
 
-        if spec.overlap == "skip" and self._session_live(schedule.get("last_session_id")):
-            return "skipped", REASON_LABELS["overlap"], None, 0
+        if (withheld := await self._agent_authority(schedule, spec, project, moment, origin)):
+            return "skipped", withheld, None, 0
 
         cap = int(spec.daily_run_cap or 0)
         if cap:
@@ -344,6 +448,21 @@ class ScheduleService:
             # The claim row for this very fire is already counted.
             if used > cap:
                 return "skipped", REASON_LABELS["daily_cap"], None, 0
+
+        # A resume that may deliver into an open conversation is decided before the
+        # overlap and concurrency guards, because both exist to stop a schedule
+        # *opening* a pane - and delivering opens none. The overlap guard is the coarse
+        # version of a question `claim_refusal` answers exactly for a resume.
+        delivering = spec.action == "resume" and spec.when_live == "deliver"
+        if delivering and (early := await self._deliver_if_live(schedule, spec, run)):
+            return early
+
+        if (
+            spec.overlap == "skip"
+            and not delivering
+            and self._session_live(schedule.get("last_session_id"))
+        ):
+            return "skipped", REASON_LABELS["overlap"], None, 0
 
         concurrent = await self._live_scheduled_sessions()
         limit = int(getattr(self.config, "scheduled_runs_max_concurrent", 2))
@@ -353,12 +472,17 @@ class ScheduleService:
         if spec.action == "resume":
             return await self._resume(schedule, spec, run, project=project, moment=moment)
 
+        seed = spec.prompt
+        if str(schedule.get("author_kind")) == AUTHOR_AGENT:
+            seed = f"{agent_message_header(schedule, kind='spawn')}\n\n{spec.prompt}"
         body: dict[str, Any] = {
             "project_id": str(project.id),
-            "seed_text": spec.prompt,
+            "seed_text": seed,
         }
         if spec.backend:
             body["backend"] = spec.backend
+        if spec.model:
+            body["model"] = spec.model
         if spec.profile_id:
             body["profile_id"] = spec.profile_id
         if spec.cwd:
@@ -379,8 +503,89 @@ class ScheduleService:
             return "failed", f"{type(exc).__name__}: {exc}"[:400], None, 0
 
         session_id = str(session.record.id)
-        queued = await self._queue_messages(spec, session_id, run_id=str(run["id"]))
+        queued = await self._queue_messages(schedule, spec, session_id, run_id=str(run["id"]))
+        log.info(
+            "scheduled_spawn schedule_id=%s project_id=%s session_id=%s author=%s queued=%d",
+            schedule_id,
+            project.id,
+            session_id,
+            schedule.get("author_kind") or "user",
+            queued,
+        )
         return "spawned", "", session_id, queued
+
+    # -------------------------------------------------------- agent authority
+
+    async def _agent_authority(
+        self,
+        schedule: dict[str, Any],
+        spec: ScheduleSpec,
+        project: Any,
+        moment: float,
+        origin: str,
+    ) -> str | None:
+        """Why an agent-authored schedule may not fire now, or None.
+
+        A person's schedule, and an agent's a person approved, carry that person's
+        authority and are never re-judged. One an agent armed under its Project's
+        grant is judged against the grant as it stands *now*: a Project lowered to
+        `draft` - or an install that lowered the daily limit - turns it back into a
+        pending request in the Fleet Queue, rather than letting it keep firing on an
+        authority nobody would grant it today.
+
+        A manual Run now is a person's own press and is never withheld here.
+        """
+        if str(schedule.get("author_kind")) != AUTHOR_AGENT or origin == "manual":
+            return None
+        state = str(schedule.get("approval_state") or "")
+        if state == APPROVAL_APPROVED:
+            return None
+        if state != APPROVAL_GRANTED:
+            # A pending or dismissed row is never armed; reaching here means one was
+            # re-armed by something other than an approval, and it must not fire.
+            return REASON_LABELS["awaiting_approval"]
+        if self._schedule_grant is None:
+            return None
+        level = self._schedule_grant(str(project.root))
+        frequency = int(schedule.get("fires_per_day") or 0) or fires_per_day(spec, now=moment)
+        verdict = agent_schedule_verdict(
+            level,
+            spec,
+            frequency=frequency,
+            daily_limit=int(getattr(self.config, "agent_schedule_daily_fire_limit", 2)),
+            # The opt-in was checked a moment ago by the caller, with its own reason.
+            opted_in=True,
+        )
+        if verdict.direct:
+            return None
+        updated = await self.store.set_approval(
+            str(schedule["id"]),
+            expected=(APPROVAL_GRANTED,),
+            state=APPROVAL_PENDING,
+            enabled=False,
+            next_fire_at=None,
+            disabled_reason=DISABLED_AWAITING_APPROVAL,
+            approval_reason=verdict.reason,
+            now=moment,
+        )
+        log.info(
+            "agent_schedule_withheld schedule_id=%s project_id=%s level=%s reason=%s",
+            schedule["id"],
+            project.id,
+            level,
+            verdict.reason,
+        )
+        if updated is not None:
+            await self.events.emit(
+                "schedule_changed",
+                source="daemon",
+                action="requested",
+                schedule_id=str(schedule["id"]),
+                project_id=str(project.id),
+                author_kind=AUTHOR_AGENT,
+                approval_state=APPROVAL_PENDING,
+            )
+        return REASON_LABELS["agent_authority_lowered"]
 
     # ----------------------------------------------------------------- resume
 
@@ -449,6 +654,11 @@ class ScheduleService:
                 fork=fork,
             )
         except ResumeRefused as refusal:
+            # The pre-check in `_execute` can lose a race with a pane opening the
+            # conversation in the second between them; the answer is the same.
+            live_id = str(refusal.detail.get("session_id") or "")
+            if refusal.code == "conversation_live" and spec.when_live == "deliver" and live_id:
+                return await self._deliver_into(schedule, spec, run, live_id)
             transient = refusal.code in TRANSIENT_RESUME_CODES
             reason = RESUME_REASON_LABELS.get(refusal.code, str(refusal))[:400]
             if refusal.code == "not_agent":
@@ -475,8 +685,79 @@ class ScheduleService:
             return "failed", f"{type(exc).__name__}: {exc}"[:400], None, 0
         session_id = str(outcome.session.record.id)
         await self._record_resume_lineage(row, outcome)
-        queued = await self._queue_messages(spec, session_id, run_id=str(run["id"]))
+        queued = await self._queue_messages(schedule, spec, session_id, run_id=str(run["id"]))
+        log.info(
+            "scheduled_resume schedule_id=%s run_id=%s session_id=%s author=%s queued=%d",
+            schedule_id,
+            row.get("id"),
+            session_id,
+            schedule.get("author_kind") or "user",
+            queued,
+        )
         return "spawned", "", session_id, queued
+
+    async def _deliver_if_live(
+        self, schedule: dict[str, Any], spec: ScheduleSpec, run: dict[str, Any]
+    ) -> tuple[str, str, str | None, int] | None:
+        """Deliver into the pane that already holds this conversation, if one does.
+
+        The conversation is resolved exactly as the resume would resolve it, and the
+        rolling-continuation ceiling still applies - delivering into a conversation
+        that is already too full is the same accumulation the ceiling exists to stop.
+        Anything this cannot answer (no history, no row, nobody holding it) returns
+        None and leaves the ordinary resume path to say why.
+        """
+        if self._history is None or spec.target_kind == "fork_point":
+            return None
+        row = await self._target_row(spec)
+        if row is None:
+            return None
+        if (full := self._context_refusal(spec, row)) is not None:
+            return "skipped", full, None, 0
+        backend = str(row.get("backend") or "")
+        native_id = str(row.get("native_id") or "")
+        if not native_id:
+            return None
+        live = next(
+            (
+                session
+                for session in self.sessions.sessions.values()
+                if session.record.backend == backend
+                and session.record.state not in {"exited", "crashed"}
+                and session.record.native_session_id == native_id
+            ),
+            None,
+        )
+        if live is None:
+            return None
+        return await self._deliver_into(schedule, spec, run, str(live.record.id))
+
+    async def _deliver_into(
+        self,
+        schedule: dict[str, Any],
+        spec: ScheduleSpec,
+        run: dict[str, Any],
+        session_id: str,
+    ) -> tuple[str, str, str | None, int]:
+        """Queue the prompt into a pane that already holds the conversation.
+
+        The prompt goes first, then the follow-ups, through the ordinary prompt queue -
+        the same staging a resume into a new pane gets, so readiness, head-of-line
+        order and the auto-delivery gate decide when it lands. Nothing here types into
+        a turn that is running.
+        """
+        queued = await self._queue_messages(schedule, spec, session_id, run_id=str(run["id"]))
+        if not queued:
+            reason = "the conversation was open but its queue refused the prompt"
+            return "failed", reason, session_id, 0
+        log.info(
+            "scheduled_resume_delivered schedule_id=%s session_id=%s author=%s queued=%d",
+            schedule["id"],
+            session_id,
+            schedule.get("author_kind") or "user",
+            queued,
+        )
+        return "delivered", DELIVERED_REASON, session_id, queued
 
     async def _target_row(self, spec: ScheduleSpec) -> dict[str, Any] | None:
         """The history row this fire resumes, resolved now rather than at write time."""
@@ -552,7 +833,9 @@ class ScheduleService:
 
     # ------------------------------------------------------------- follow-ups
 
-    async def _queue_messages(self, spec: ScheduleSpec, session_id: str, *, run_id: str) -> int:
+    async def _queue_messages(
+        self, schedule: dict[str, Any], spec: ScheduleSpec, session_id: str, *, run_id: str
+    ) -> int:
         """Stage what this schedule says, in order, through the ordinary prompt queue.
 
         Bind-on-first-run means these can be written the moment the session exists:
@@ -566,24 +849,68 @@ class ScheduleService:
         The queue is the contract, so the prompt goes through it like every other
         rule-authored message, which also means it obeys the auto-delivery gate rather
         than walking around it.
+
+        Who the message is *from* decides how it may be armed, and the queue - not this
+        method - enforces it (`prompt_queue.enqueue`):
+
+        - a person's schedule stages ``rule`` messages, which arm only if marked and
+          never on their own, exactly as before;
+        - an agent's resume of **its own** conversation is the answer to a request that
+          conversation made, so it is armed by naming the schedule in `solicited_by`;
+        - an agent's resume of **another** conversation is that agent's message, armed
+          only under the receiving conversation's `accept_agent_messages` grant.
+
+        Agent-authored text is headed by `agent_message_header` either way.
         """
         queued = 0
         base = self._clock()
         messages = list(spec.follow_ups)
         if spec.action == "resume" and spec.prompt.strip():
             messages.insert(0, FollowUp(body=spec.prompt))
+        by_agent = str(schedule.get("author_kind")) == AUTHOR_AGENT
+        own = by_agent and _resumes_its_author(schedule)
+        header = ""
+        if by_agent and spec.action == "resume":
+            header = agent_message_header(schedule, kind="self" if own else "other")
         for index, item in enumerate(messages):
             constraints = {"not_before": base + item.delay_seconds} if item.delay_seconds else None
+            body = item.body
+            if header and index == 0:
+                body = f"{header}\n\n{body}"
+            sender: dict[str, Any] = {
+                "armed": item.armed,
+                "sender_kind": "rule",
+                "sender_id": f"schedule:{run_id}",
+            }
+            if own:
+                sender = {
+                    "armed": True,
+                    "sender_kind": "rule",
+                    "sender_id": f"schedule:{run_id}",
+                    "solicited_by": str(schedule["id"]),
+                }
+            elif by_agent and spec.action == "resume":
+                author = str(schedule.get("author_session_id") or "") or None
+                sender = {
+                    "armed": True,
+                    "sender_kind": "agent",
+                    "sender_id": author,
+                    "origin_session_id": author,
+                }
             try:
                 await self._enqueue(
                     target_session_id=session_id,
-                    body=item.body,
-                    armed=item.armed,
-                    sender_kind="rule",
-                    sender_id=f"schedule:{run_id}",
+                    body=body,
                     sender_label=f"Schedule · {spec.label}",
                     constraints=constraints,
-                    origin={"kind": "schedule", "label": spec.label, "index": index},
+                    origin={
+                        "kind": "schedule",
+                        "label": spec.label,
+                        "index": index,
+                        "schedule_id": str(schedule["id"]),
+                        "author_kind": str(schedule.get("author_kind") or "user"),
+                    },
+                    **sender,
                 )
             except Exception:  # noqa: BLE001 - the session started; the queue is best effort
                 log.exception(

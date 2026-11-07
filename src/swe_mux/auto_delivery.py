@@ -603,6 +603,20 @@ class AutoDeliveryController:
             }
         return windows
 
+    async def install_brake(self) -> str | None:
+        """The install-wide reason nothing will press send anywhere, or None.
+
+        The part of `outlook` that does not depend on a target, for a caller that
+        stages a message for a session that does not exist yet - a scheduled resume,
+        whose pane is opened when the schedule fires and starts with the default
+        per-run grant. Quiet hours are left out: they end on their own.
+        """
+        if not self.config.auto_delivery_enabled:
+            return "auto-delivery is switched off for this install"
+        if await self.paused():
+            return "auto-delivery is paused install-wide"
+        return None
+
     async def outlook(self, session_id: str) -> dict[str, Any]:
         """Whether anything will press send at this session, and what stops it.
 

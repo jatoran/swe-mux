@@ -46,6 +46,15 @@ export type ScheduleFollowUp = {
   armed: boolean
 }
 
+/** What a resume does when its conversation is already open at fire time. */
+export type ScheduleWhenLive = 'skip' | 'deliver'
+
+/** Who wrote a schedule. Every row from before agents could write one is a person's. */
+export type ScheduleAuthorKind = 'user' | 'agent'
+
+/** How an agent's schedule came to be armed, or why it is not. Empty for a person's. */
+export type ScheduleApproval = '' | 'granted' | 'pending' | 'approved' | 'dismissed'
+
 export type ScheduleRun = {
   id: string
   schedule_id: string
@@ -54,7 +63,8 @@ export type ScheduleRun = {
   due_at: number | null
   started_at: number
   finished_at: number | null
-  outcome: 'started' | 'spawned' | 'skipped' | 'failed' | 'missed'
+  /** `delivered`: a resume found its conversation already open and queued the prompt into it. */
+  outcome: 'started' | 'spawned' | 'delivered' | 'skipped' | 'failed' | 'missed'
   reason: string
   session_id: string | null
   origin: 'timer' | 'manual'
@@ -101,6 +111,23 @@ export type Schedule = {
   context_ceiling_pct: number
   /** Null on a spawn, which has nothing to point at. */
   target: ScheduleTarget | null
+  /** A spawn's model in its CLI's own spelling; empty leaves it to the profile. */
+  model: string
+  /** When it stops being armed, as epoch seconds. Null for no end date. */
+  expires_at: number | null
+  when_live: ScheduleWhenLive
+  author_kind: ScheduleAuthorKind
+  author_session_id: string
+  author_run_id: string
+  author_name: string
+  /** The agent's own account of why, shown to whoever approves it. */
+  request_reason: string
+  approval_state: ScheduleApproval
+  /** Why an agent's schedule needs a person, in the daemon's words. */
+  approval_reason: string
+  decided_by: string
+  /** The most fires in any 24 hours, measured by the daemon. 97 means "more than 96". */
+  fires_per_day: number
 }
 
 export type ScheduleStatus = {
@@ -139,6 +166,12 @@ export type ScheduleDraft = {
    *  can name what it is about to reopen without a second fetch. */
   target_label: string
   target_backend: string
+  /** A spawn's model. Round-tripped so editing an agent's schedule cannot drop it. */
+  model: string
+  /** A resume's answer to "the conversation is already open". */
+  when_live: ScheduleWhenLive
+  /** `datetime-local` text, or '' for no end date. */
+  expires_local: string
 }
 
 /** A named cron expression, and the piece of the syntax it demonstrates.
@@ -229,9 +262,44 @@ export const BLOCKED_LABELS: Record<string, string> = {
 export const OUTCOME_LABELS: Record<string, string> = {
   get started() { return t("schedules.59dbf36d99") },
   get spawned() { return t("schedules.c8fc6bf296") },
+  get delivered() { return t("schedules.outcomeDelivered") },
   get skipped() { return t("schedules.389595a44d") },
   get failed() { return t("schedules.5d28a90f44") },
   get missed() { return t("schedules.1c33629a93") },
+}
+
+/** What a disarmed row says instead of a countdown, by the reason it was disarmed.
+ *  "Paused" for anything a person paused, or a reason this table does not know. */
+export const INACTIVE_LABELS: Record<string, string> = {
+  get awaiting_approval() { return t("schedules.inactiveAwaiting") },
+  get dismissed() { return t("schedules.inactiveDismissed") },
+  get cancelled() { return t("schedules.inactiveCancelled") },
+  get expired() { return t("schedules.inactiveExpired") },
+  get completed() { return t("schedules.inactiveCompleted") },
+}
+
+export const isAwaitingApproval = (schedule: Pick<Schedule, 'approval_state'>): boolean =>
+  schedule.approval_state === 'pending'
+
+export const isAgentAuthored = (schedule: Pick<Schedule, 'author_kind'>): boolean =>
+  schedule.author_kind === 'agent'
+
+/** The countdown's stand-in on a row that is not armed. */
+export function inactiveLabel(schedule: Schedule): string {
+  if (isAwaitingApproval(schedule)) return INACTIVE_LABELS.awaiting_approval
+  return INACTIVE_LABELS[schedule.disabled_reason] || t("schedules.inactivePaused")
+}
+
+/** "set up by agent planner", or '' for a person's own schedule. */
+export function authorLabel(schedule: Pick<Schedule, 'author_kind' | 'author_name' | 'author_session_id'>): string {
+  if (schedule.author_kind !== 'agent') return ''
+  return t("schedules.authorAgent", { name: schedule.author_name || schedule.author_session_id || '?' })
+}
+
+/** The measured frequency, said the way a person reads it. */
+export function frequencyLabel(firesPerDay: number): string {
+  if (firesPerDay > 96) return t("schedules.frequencyMany")
+  return t("schedules.frequencyCount", { count: firesPerDay, many: firesPerDay === 1 ? 'no' : 'yes' })
 }
 
 export const emptyDraft = (): ScheduleDraft => ({
@@ -257,6 +325,9 @@ export const emptyDraft = (): ScheduleDraft => ({
   context_ceiling_pct: 0,
   target_label: '',
   target_backend: '',
+  model: '',
+  when_live: 'skip',
+  expires_local: '',
 })
 
 /** The conversation a resume schedule is seeded from, as the callers can describe it.
@@ -318,6 +389,9 @@ export function draftFromSchedule(schedule: Schedule): ScheduleDraft {
     context_ceiling_pct: schedule.context_ceiling_pct,
     target_label: schedule.target?.name || '',
     target_backend: schedule.target?.backend || '',
+    model: schedule.model || '',
+    when_live: schedule.when_live || 'skip',
+    expires_local: schedule.expires_at ? localInputValue(schedule.expires_at) : '',
   }
 }
 
@@ -359,10 +433,17 @@ export function draftToBody(draft: ScheduleDraft): Record<string, unknown> {
     body.context_ceiling_pct = draft.target_kind === 'latest_of_session'
       ? draft.context_ceiling_pct
       : 0
+    body.when_live = draft.when_live
   } else {
     body.backend = draft.backend
     body.profile_id = draft.profile_id
+    // A model names a harness's own vocabulary, so it only travels with a backend.
+    if (draft.backend && draft.model.trim()) body.model = draft.model.trim()
   }
+  // Sent only when set: the editor shows the end date it was opened with, so leaving
+  // the field empty is the person clearing it, and an absent value means "no end".
+  const expires = draft.expires_local ? Date.parse(draft.expires_local) : NaN
+  if (!Number.isNaN(expires)) body.expires_at = expires / 1000
   if (draft.trigger_kind === 'cron') body.cron = draft.cron.trim()
   if (draft.trigger_kind === 'interval') body.interval_seconds = Math.round(draft.interval_minutes * 60)
   if (draft.trigger_kind === 'once') {
@@ -390,8 +471,13 @@ export function actionLabel(schedule: Schedule): string {
 export const targetIsMissing = (schedule: Schedule): boolean =>
   schedule.action === 'resume' && !!schedule.target?.missing
 
+/** Anything that carries a trigger: a saved row, an agent's request card, or a draft. */
+export type CadenceSource =
+  | Pick<Schedule, 'trigger_kind' | 'cron' | 'interval_seconds' | 'run_at' | 'timezone'>
+  | ScheduleDraft
+
 /** What the row says under the label: the trigger, in words. */
-export function cadenceLabel(schedule: Schedule | ScheduleDraft): string {
+export function cadenceLabel(schedule: CadenceSource): string {
   const kind = schedule.trigger_kind
   if (kind === 'cron') {
     const expression = 'cron' in schedule ? schedule.cron : ''
@@ -451,7 +537,9 @@ export function outcomeLabel(schedule: Schedule): string {
  *  train people to ignore the badge. */
 export function needsAttention(schedules: Schedule[]): Schedule[] {
   return schedules.filter(schedule =>
-    schedule.last_outcome === 'failed'
+    // An agent's request is waiting on exactly one thing, and it is the reader.
+    isAwaitingApproval(schedule)
+    || schedule.last_outcome === 'failed'
     || (schedule.enabled && schedule.blocked !== '')
     // An armed resume whose conversation has been deleted can never fire. It is the
     // same class of failure as `blocked` - a row that looks armed and is inert - and

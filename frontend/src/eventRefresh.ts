@@ -46,6 +46,10 @@ const EVENT_HANDLED_WITHOUT_FLEET_REFRESH = new Set([
   'provider_quota_refreshed',
   'queue_delivery',
   'queue_updated',
+  // The Schedule tab and the Fleet Queue each re-read their own endpoint off it, and
+  // no fleet slice holds a schedule; agents writing schedules must not cost a refetch
+  // of all five slices per write.
+  'schedule_changed',
   'settings_changed',
   'spawn_request_decided',
   'spawn_request_drafted',

@@ -1592,5 +1592,12 @@
   "keybinding.warning.contested": "also the browser's {action}",
   "keybinding.warning.terminal": "a shell reads this as {action}; scope the binding away from the terminal to keep both",
   "keybinding.warning.altgr": "AltGr emits Ctrl+Alt on most non-US layouts, so this fires while typing",
-  "keybinding.preset.invalidMessage": "Unknown keymap message {reference} in {field}"
+  "keybinding.preset.invalidMessage": "Unknown keymap message {reference} in {field}",
+  "agent_authority.schedule_grant": "Schedule runs here",
+  "project_files.schedule_grant_invalid": "schedule_grant must be draft, limited, or granted",
+  "config.agent_schedule_budget": "must be between 0 and 1000 schedule requests per hour",
+  "config.agent_schedule_fire_limit": "must be between 1 and 96 fires a day",
+  "config.agent_schedules_cap": "must be between 0 and 500 schedules",
+  "config.agent_schedule_max_days": "must be between 1 and 365 days",
+  "schedules.rearm_expired": "This schedule has passed its end date; move or clear the end date before arming it again."
 }

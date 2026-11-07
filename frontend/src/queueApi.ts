@@ -226,12 +226,54 @@ export interface ControlRequestRow {
   decided_by: string | null
 }
 
+/**
+ * An agent's schedule request. It is the schedule row itself - the daemon keeps no
+ * second copy of the definition for an approval to drift from - plus the three things a
+ * card needs to be decided without opening anything else.
+ */
+export interface ScheduleRequestRow {
+  id: string
+  project_id: string
+  project_name: string
+  label: string
+  prompt: string
+  action: 'spawn' | 'resume'
+  trigger_kind: 'cron' | 'interval' | 'once'
+  cron: string
+  interval_seconds: number | null
+  run_at: number | null
+  timezone: string
+  backend: string
+  model: string
+  target_run_id: string
+  target_kind: string
+  when_live: string
+  author_name: string
+  author_session_id: string
+  author_run_id: string
+  request_reason: string
+  approval_state: string
+  approval_reason: string
+  /** `pending` until decided, then `approved` or `dismissed`. */
+  status: string
+  decided_by: string
+  fires_per_day: number
+  expires_at: number | null
+  created_at: number
+  /** The next few fire times, from the code that will fire them. */
+  preview_fires: number[]
+  /** Whether the Project permits scheduled runs at all; approving does not turn it on. */
+  scheduled_runs_opted_in: boolean
+}
+
 export interface FleetQueueView {
   author: FleetQueueAuthor
   messages: QueueMessage[]
   spawn_requests: SpawnRequestRow[]
   spawn_request_errors: { project_id: string; error: string }[]
   control_requests: ControlRequestRow[]
+  /** Absent from a daemon older than agent-authored schedules. */
+  schedule_requests?: ScheduleRequestRow[]
   targets: FleetQueueTarget[]
 }
 
@@ -380,6 +422,17 @@ export const decideControlRequest = (
 ) => api<{ outcome?: string; final_state?: string }>(
   'POST',
   `/api/projects/${encodeURIComponent(projectId)}/observations/${encodeURIComponent(requestId)}/decide`,
+  { decision },
+)
+
+/** Approve (arm) or dismiss an agent's schedule request. A decision already taken
+ *  on another device answers `already_decided` rather than winning twice. */
+export const decideScheduleRequest = (
+  scheduleId: string,
+  decision: 'approve' | 'dismiss',
+) => api<{ id: string; approval_state: string }>(
+  'POST',
+  `/api/schedules/${encodeURIComponent(scheduleId)}/decide`,
   { decision },
 )
 

@@ -1115,11 +1115,17 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <span class="fill"></span>
       </div>
       <div class="relgroups">
+        <div><span class="k">Added</span> <span class="sep">2 entries</span></div>
         <div><span class="k">Changed</span> <span class="sep">4 entries</span></div>
         <div><span class="k">Fixed</span> <span class="sep">2 entries</span></div>
       </div>
       <details class="relmore">
-        <summary>all 6 entries</summary>
+        <summary>all 8 entries</summary>
+        <div class="changetype">Added</div>
+        <ul class="bullets">
+          <li><span><b>Agents can now schedule runs themselves, through three new mux MCP tools.</b> <code>request_schedule</code> sets up a one-off or recurring run in any Project, starting a new session or resuming a conversation (including the agent's own, so "continue this tomorrow morning" works), <code>list_schedules</code> shows them, and <code>cancel_schedule</code> withdraws one. A one-off is the default; a recurring schedule up to twice a day is armed directly, and anything more frequent waits for your approval in the Fleet Queue. Every agent schedule names the session that wrote it, expires on its own (30 days at most by default), and counts against a per-Project limit and an hourly budget, and it is checked again every time it fires. A new per-Project authority, <b>Agent schedules</b> (<code>schedule_grant</code>), decides whether agents' schedules arm directly, need your approval, or may run at any frequency. It only takes effect where the Project has scheduled runs switched on; otherwise every agent schedule waits for your approval.</span></li>
+          <li><span><b>A scheduled resume can now be delivered into a conversation that is already open</b>, instead of being skipped, and any schedule can be given an end date.</span></li>
+        </ul>
         <div class="changetype">Changed</div>
         <ul class="bullets">
           <li><span><b>Recently used now follows activity in a Project's sessions, whatever caused it.</b> A Project moves up when one of its sessions starts, wakes for a new turn, resumes after an approval, or receives a message from another session, as well as when you use it yourself. That covers scheduled runs, loops and background tasks waking an agent, and any other session started through mux. A message still waiting for your approval does not count until it is delivered, and plain shells count when they start rather than per command.</span></li>

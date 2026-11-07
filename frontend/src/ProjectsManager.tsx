@@ -37,6 +37,7 @@ type Layer = 'device' | 'repo'
 const AUTHORITY_SUMMARY: { field: string; label: string; levels: Record<string, string> }[] = [
   { field: 'session_control_grant', get label() { return t("ProjectsManager.dea242baeb") }, levels: { get draft() { return t("ProjectsManager.785cda37bb") }, get granted() { return t("ProjectsManager.b87ad6cb87") } } },
   { field: 'spawn_grant', get label() { return t("ProjectsManager.f4db61e77e") }, levels: { get draft() { return t("ProjectsManager.785cda37bb") }, get granted() { return t("ProjectsManager.45cfbcf74d") } } },
+  { field: 'schedule_grant', get label() { return t("ProjectsManager.scheduleGrant") }, levels: { get draft() { return t("ProjectsManager.785cda37bb") }, get limited() { return t("ProjectsManager.scheduleLimited") }, get granted() { return t("ProjectsManager.scheduleGranted") } } },
   { field: 'land_grant', get label() { return t("ProjectsManager.3675b3e222") }, levels: { get draft() { return t("ProjectsManager.785cda37bb") }, get granted() { return t("ProjectsManager.da8fe1373d") } } },
   { field: 'land_verify_grant', get label() { return t("ProjectsManager.291b4ebfaa") }, levels: { get draft() { return t("ProjectsManager.58a8b05591") }, get granted() { return t("ProjectsManager.741e2c9982") } } },
   { field: 'interject_grant', get label() { return t("ProjectsManager.312048bb88") }, levels: { off: 'never', get granted() { return t("ProjectsManager.9e39165a1f") } } },

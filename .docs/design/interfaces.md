@@ -904,6 +904,7 @@ POST    /projects/{project_id}/schedules      {definition}
 PATCH   /schedules/{schedule_id}              {definition, revision?} | {enabled}
 DELETE  /schedules/{schedule_id}
 POST    /schedules/{schedule_id}/run          fire now, guards intact
+POST    /schedules/{schedule_id}/decide       {decision: approve|dismiss}   an agent's pending request
 GET     /schedules/{schedule_id}/runs?limit=
 GET     /projects/{project_id}/project-context
 PUT     /projects/{project_id}/project-context {markdown, revision}
@@ -983,9 +984,15 @@ Writing one is always allowed and firing it is what permission gates, so every r
 A rejected definition answers `400` with a machine `code` (`invalid_cron`, `invalid_interval`, `invalid_timezone`, `invalid_run_at`, `invalid_backend`, `invalid_follow_ups`, `invalid_action`, `invalid_target`, `invalid_overlap`) and a `fields` map, so the editor can mark the field rather than print a sentence.
 `POST /schedules/preview` answers the next five fire times for an unsaved definition: cron plus a timezone plus daylight saving has one implementation, in the daemon, and the editor must not grow a second one that disagrees with it twice a year.
 `POST .../run` is subject to every fire-time guard except lateness, so it cannot walk around the Project opt-in, the overlap policy, or the concurrency ceiling.
+A definition may also carry `expires_at` (epoch seconds, in the future and within 366 days; `invalid_expires_at` otherwise) and, on a spawn, `model`.
+Every row carries its authorship (`author_kind`, `author_name`, `author_session_id`, `request_reason`) and, for an agent's, `approval_state`, `approval_reason`, `decided_by` and `fires_per_day` (`features/scheduled-runs.md`, "Agent-authored schedules").
+`POST .../decide` approves or dismisses an agent's pending request in one conditional update: a request already decided answers `409 already_decided`, one whose end date passed while it waited answers `409 expired`, and a person's own schedule answers `404`.
+`PATCH {enabled: true}` on a pending row is the same approval; on an expired row it answers `409 expired` until the end date moves.
+`GET /queue/mailbox` adds `schedule_requests` - agent requests pending, plus those decided in the last seven days - each with the next three fire times (`preview_fires`) and `scheduled_runs_opted_in`.
 
-A definition whose `action` is `resume` carries `target_run_id` (a **history run id**, never a session id), `target_kind` (`run` | `latest_of_session` | `fork_point`), `target_cut_message_id` + `target_cut_mode` for a fork, and `context_ceiling_pct` for a rolling continuation.
-It may not carry `backend`, `profile_id`, `cwd`, or `overlap: allow`: the conversation's row and its adapter already fix the harness, the argv and the directory, and a conversation opens once.
+A definition whose `action` is `resume` carries `target_run_id` (a **history run id**, never a session id), `target_kind` (`run` | `latest_of_session` | `fork_point`), `target_cut_message_id` + `target_cut_mode` for a fork, `context_ceiling_pct` for a rolling continuation, and `when_live` (`skip` | `deliver`).
+It may not carry `backend`, `profile_id`, `cwd`, `model`, or `overlap: allow`: the conversation's row and its adapter already fix the harness, the argv and the directory, and a conversation opens once.
+`when_live: deliver` is refused on a spawn (`invalid_when_live`).
 Each row's `target` is **resolved per request** for the same reason `blocked` is - a stored label would go on naming a conversation that has since been deleted - and reports `missing`, the conversation's display name and backend, and, for a rolling target, the run it has actually reached.
 A `spawn` answers `target: null`.
 

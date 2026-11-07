@@ -1339,6 +1339,25 @@ class Config:
     # How long the run history behind each schedule is kept. Long enough that
     # "has this been failing all week" is answerable.
     scheduled_run_retention_days: int = 60
+    # Agent-authored schedules (`mux.request_schedule`, `schedule_authoring.py`). The
+    # Project's `schedule_grant` decides whether an agent may arm a schedule at all;
+    # these bound what it may arm, and every one of them exists because a schedule
+    # outlives the agent that wrote it - which the per-origin spawn budget, counted
+    # while the author is alive, cannot see.
+    #
+    # How many schedule requests one agent session may make per hour, in any state.
+    agent_schedule_hourly_budget: int = 6
+    # The most times in any 24 hours an agent's recurring schedule may fire and still
+    # be armed directly at the default `limited` level. Busier ones wait for a person.
+    agent_schedule_daily_fire_limit: int = 2
+    # How many agent-authored schedules may stand in one Project at once, armed or
+    # awaiting approval. The bound on accumulation: a forgotten agent schedule is
+    # standing load, and this is how many of them a Project can collect.
+    agent_schedules_per_project: int = 10
+    # Nothing an agent schedules lives longer than this. A recurring agent schedule
+    # expires after at most this many days (sooner if it asks), and a one-off may be
+    # parked at most this far ahead.
+    agent_schedule_max_days: int = 30
     # Phase 14 land queue. The install-wide master switch is here for the same reason
     # the scheduled-runs one is: it is the emergency stop, and off means no branch
     # lands anywhere whatever any Project opted into.
@@ -2009,6 +2028,12 @@ _RANGE_RULES: tuple[_Range, ...] = (
     _Range("land_verify_memo_seconds", 0, 7 * 24 * 3600, ui_message("config.ff84216d31")),
     _Range("scheduled_runs_poll_seconds", 1, 300, ui_message("config.0b9a023898")),
     _Range("scheduled_run_retention_days", 1, 3650, ui_message("config.fcb95e4671")),
+    _Range("agent_schedule_hourly_budget", 0, 1000, ui_message("config.agent_schedule_budget")),
+    _Range(
+        "agent_schedule_daily_fire_limit", 1, 96, ui_message("config.agent_schedule_fire_limit")
+    ),
+    _Range("agent_schedules_per_project", 0, 500, ui_message("config.agent_schedules_cap")),
+    _Range("agent_schedule_max_days", 1, 365, ui_message("config.agent_schedule_max_days")),
     _Range("automation_concurrency", 1, 16, ui_message("config.eb01fdb623")),
     _Range("automation_queue_size", 16, 4096, ui_message("config.06a50be80c")),
     _Range("automation_max_input_tokens", 128, 128000, ui_message("config.58c82bd901")),

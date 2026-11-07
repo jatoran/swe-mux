@@ -15,6 +15,16 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+### Added
+
+- **Agents can now schedule runs themselves, through three new mux MCP tools.**
+  `request_schedule` sets up a one-off or recurring run in any Project, starting a new session or resuming a conversation (including the agent's own, so "continue this tomorrow morning" works), `list_schedules` shows them, and `cancel_schedule` withdraws one.
+  A one-off is the default; a recurring schedule up to twice a day is armed directly, and anything more frequent waits for your approval in the Fleet Queue.
+  Every agent schedule names the session that wrote it, expires on its own (30 days at most by default), and counts against a per-Project limit and an hourly budget, and it is checked again every time it fires.
+  A new per-Project authority, **Agent schedules** (`schedule_grant`), decides whether agents' schedules arm directly, need your approval, or may run at any frequency.
+  It only takes effect where the Project has scheduled runs switched on; otherwise every agent schedule waits for your approval.
+- **A scheduled resume can now be delivered into a conversation that is already open**, instead of being skipped, and any schedule can be given an end date.
+
 ### Changed
 
 - **Recently used now follows activity in a Project's sessions, whatever caused it.**

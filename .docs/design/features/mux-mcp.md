@@ -57,6 +57,15 @@ are the first that act on a running agent, under a per-Project grant that defaul
 directly since 2026-08-25 and is lowered to `draft` to put an inert approval in front of a
 human (see "Session control" below).
 
+`request_schedule` is `request_spawn` deferred, and answers to the same grant model with a
+field of its own, `schedule_grant`, because what a schedule adds over a spawn is persistence: it
+keeps firing after the agent that wrote it has gone, so the per-origin spawn budget, counted
+while the author is alive, cannot bound it. Its bounds (frequency, lifetime, per-Project cap,
+hourly budget, re-judging at every fire) and the way its messages are attributed and armed are
+in `scheduled-runs.md`, "Agent-authored schedules". Before it existed an agent with a shell
+could POST the schedule route directly and be recorded as the operator; the shipped agent skill
+now says the HTTP API is the operator's and points at the tools instead.
+
 `run_action` is the one tool that starts a process, and its authority is borrowed rather than
 granted: it can run only a command whose exact bytes a human already approved through the Project
 Run menu, and an agent that edits a task file un-approves it. An agent therefore cannot approve
@@ -174,8 +183,8 @@ Phase 7.5 and are covered in "Cross-session memory reads" below.
 ## Tool surface
 
 Every tool takes `project` (omitted = the caller's own, `"fleet"` = every Project, or a
-Project name or id). `request_spawn` is the one exception: a request starts one session in one
-Project, so it accepts a name but refuses `"fleet"` with `invalid_project`.
+Project name or id). `request_spawn` and `request_schedule` are the exceptions: each writes
+into one Project, so they accept a name but refuse `"fleet"` with `invalid_project`.
 
 | Tool | Returns |
 |---|---|
@@ -216,6 +225,9 @@ Project, so it accepts a name but refuses `"fleet"` with `invalid_project`.
 | `use_worktree` | selects one exact Git-listed linked worktree for a session whose host process remains on the primary checkout; omitting `worktree_root` clears the selection. The binding is exclusive among live sessions, records the branch and agent run, persists with the session record, and is revalidated before use |
 | `request_land` | enqueues a land of the caller's **own** worktree branch onto its Project's trunk; performs nothing itself. The daemon then reconciles, verifies, and fast-forwards, one branch at a time, and hands a conflict or a failed gate back as a queue message. `report_success` (off by default) also answers the caller when it *works* - a land otherwise announces itself only by the trunk moving, which the waiting session is not watching. Gated on the `land_queue` automation, and under the default `draft` grant it writes an inert approval instead of enqueueing (`land-queue.md`) |
 | `request_verify` | the same pipeline stopped before its last step: reconcile, run the repository's verification command, report the verdict back, move no trunk. A pass is kept against the exact (git tree, command digest) it ran over, so a later `request_land` of that content skips the gate; a trunk that moved in between produces different content and the gate runs again. Gated on the same automation, and the `draft` grant **enqueues** it rather than drafting it - it moves nothing there is anything to approve in advance (`land-queue.md`) |
+| `request_schedule` | makes work happen later: a new session (`spawn`) or a conversation reopened with a prompt (`resume`, the caller's own by default). Exactly one of `in_minutes`/`at` (one-off) or `cron`/`every_minutes` (recurring). Decided by the **target** Project's `schedule_grant`: at the default `limited`, a one-off and a recurring schedule firing at most `agent_schedule_daily_fire_limit` times in any 24 hours are armed directly and anything busier is filed as a pending request a person approves; `draft` files everything, `granted` arms everything. Recurring schedules expire within `agent_schedule_max_days`; the per-Project cap and hourly budget apply; an identical request returns the schedule already made. A resume of the caller's own conversation is delivered into its pane if that pane is still open at fire time (`when_live:"deliver"`, the agent default) and arrives armed by `solicited_by`. `dry_run:true` validates and reports the verdict, frequency and next fire times having written nothing (`scheduled-runs.md`) |
+| `cancel_schedule` | disarms a schedule the caller wrote - armed or pending - keeping its row and history. Ownership is the caller's session or the conversation it is running; a person's or another agent's schedule answers `not_yours` |
+| `list_schedules` | schedules in the scope with cadence, next fire, author, state (`armed`, `awaiting_approval`, ...), last run and end date; `mine:true` narrows to the caller's, `include_inactive:true` adds paused, dismissed, expired, cancelled and completed. With one Project in scope it also returns the `policy` block: that Project's `schedule_grant`, whether it opted into scheduled runs, the daily-fire limit, the lifetime, and the caller's slots and hourly requests left |
 
 `request_land` and `request_verify` deliberately take no target.
 Resolution has two ordered paths because Claude and Codex expose worktrees differently.
@@ -533,7 +545,7 @@ The five reads are in the generated Claude permission allowlist; the three write
 - **Claude**: one static `<data_dir>/claude-mcp.json` (`--mcp-config`, added by
   `ClaudeAdapter._args` and by the shim via `MUX_CLAUDE_MCP_CONFIG`): HTTP server entry with
   a literal URL and `Authorization: Bearer ${MUX_MCP_TOKEN}` env expansion — the token never
-  lands in a shared file. Generated per-session settings allow the closed read set (the fleet reads plus the three configurator reads) without a prompt and do not allow `notify`, `revoke_message`, `request_spawn`, `run_action`, `interrupt`, `end_session`, or `configurator_apply_settings`; user deny/ask policy still has higher precedence. Pre-allowing the configurator reads for every session grants nothing — a rule only decides whether the CLI prompts, and the daemon refuses a caller that is not a configurator regardless — and it spares the one session that can call them a dialog in front of every lookup. `--mcp-config` adds servers; user MCP config is untouched.
+  lands in a shared file. Generated per-session settings allow the closed read set (the fleet reads plus the three configurator reads) without a prompt and do not allow `notify`, `revoke_message`, `request_spawn`, `request_schedule`, `cancel_schedule`, `run_action`, `interrupt`, `end_session`, or `configurator_apply_settings`; user deny/ask policy still has higher precedence. Pre-allowing the configurator reads for every session grants nothing — a rule only decides whether the CLI prompts, and the daemon refuses a caller that is not a configurator regardless — and it spares the one session that can call them a dialog in front of every lookup. `--mcp-config` adds servers; user MCP config is untouched.
 - **Codex** (>= 0.145): argv overrides `-c mcp_servers.mux.url="…"` and
   `-c mcp_servers.mux.bearer_token_env_var="MUX_MCP_TOKEN"` — natively env-based bearer, no
   stdio shim needed. Shim path mirrors it for user-typed `codex`.

@@ -51,6 +51,18 @@ const schedule = (overrides: Partial<Schedule>): Schedule => ({
   target_cut_mode: '',
   context_ceiling_pct: 0,
   target: null,
+  model: '',
+  expires_at: null,
+  when_live: 'skip',
+  author_kind: 'user',
+  author_session_id: '',
+  author_run_id: '',
+  author_name: '',
+  request_reason: '',
+  approval_state: '',
+  approval_reason: '',
+  decided_by: '',
+  fires_per_day: 1,
   ...overrides,
 })
 

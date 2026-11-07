@@ -2820,7 +2820,7 @@ body {
 .resource-usage-compact>strong,.rail-quota>strong{font-weight:600;color:var(--text)}
 .rail-quota .provider-mark{width:11px;height:11px;display:block}
 .resource-usage-compact:hover,.rail-quota:hover,.resource-usage-compact:focus-visible,.rail-quota:focus-visible{border-color:var(--accent)}
-.rail-quota.usage-warn>strong{color:var(--yellow,#e5c07b)}
+.rail-quota.usage-warn>strong{color:var(--amber)}
 .rail-quota.usage-critical{border-color:var(--red)}
 .rail-quota.usage-critical>strong{color:var(--red)}
 /* After the usage bands on purpose: an unreviewed reset makes the whole reading suspect, so it
@@ -4581,7 +4581,16 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .schedule-project{font-style:normal;padding:0 4px;border:1px solid var(--line);border-radius:8px;font-size:8px;color:var(--muted)}
 .schedule-blocked{margin:0;padding:0 9px 5px;color:var(--red,#e06c75);font-size:8px;line-height:1.5}
 .schedule-blocked button{margin-left:6px}
-.schedule-meta{display:flex;align-items:center;gap:8px;padding:0 9px 5px;color:var(--muted);font-size:8px}
+/* An agent's request waiting on the reader: marked like a blocked row, in the attention
+   colour rather than the failure one, because nothing is wrong - it is waiting on a yes. */
+.schedule-row.awaiting{border-left:2px solid var(--amber);opacity:1}
+.schedule-author{margin:0;padding:0 9px 4px;display:flex;flex-wrap:wrap;gap:6px;color:var(--muted);font-size:8px;line-height:1.5}
+.schedule-author em{min-width:0;color:var(--text);overflow-wrap:anywhere}
+.schedule-approval{margin:0;padding:0 9px 5px;color:var(--amber);font-size:8px;line-height:1.5;overflow-wrap:anywhere}
+.schedule-approval strong{font-weight:500}
+.schedule-approval small{color:var(--muted);font-size:8px}
+.schedule-meta{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:0 9px 5px;color:var(--muted);font-size:8px}
+.schedule-actions button.primary{border-color:var(--green);color:var(--text)}
 .schedule-actions{display:flex;flex-wrap:wrap;gap:5px;padding:0 9px 7px}
 .schedule-actions button{min-height:24px;padding:0 7px;border:1px solid var(--line);background:transparent;color:var(--muted);font:inherit;font-size:8px;cursor:pointer}
 .schedule-actions button:hover:not(:disabled){background:var(--panel2);color:var(--text)}

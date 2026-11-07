@@ -17,6 +17,15 @@ what makes a fire idempotent: a daemon that dies between spawning a session and
 recording the outcome cannot spawn the same occurrence again on restart, because
 the run row is written *before* the spawn and the insert is what claims the
 occurrence.
+
+**Every row records its author** (schema 3). A person's schedule is ``author_kind =
+'user'``; an agent's carries the session, run and name that asked, and an
+``approval_state`` saying how it came to be armed: ``granted`` (the Project's
+`schedule_grant` let the agent arm it), ``pending`` (a person has to decide),
+``approved``/``dismissed`` (a person decided). The pending row *is* the approval
+request - there is no second copy of the definition anywhere for the two to drift
+between - and a dismissed or cancelled one is kept, disarmed, so the audit of what an
+agent asked for survives the decision.
 """
 
 from __future__ import annotations
@@ -27,6 +36,7 @@ import sqlite3
 import time
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -39,7 +49,7 @@ from .sqlite_store import (
     write_schema_version,
 )
 
-SCHEDULE_SCHEMA_VERSION = 2
+SCHEDULE_SCHEMA_VERSION = 3
 
 SCHEDULE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS schedules(
@@ -76,7 +86,21 @@ CREATE TABLE IF NOT EXISTS schedules(
   target_kind TEXT NOT NULL DEFAULT 'run',
   target_cut_message_id TEXT NOT NULL DEFAULT '',
   target_cut_mode TEXT NOT NULL DEFAULT '',
-  context_ceiling_pct REAL NOT NULL DEFAULT 0
+  context_ceiling_pct REAL NOT NULL DEFAULT 0,
+  model TEXT NOT NULL DEFAULT '',
+  expires_at REAL,
+  when_live TEXT NOT NULL DEFAULT 'skip',
+  author_kind TEXT NOT NULL DEFAULT 'user',
+  author_session_id TEXT NOT NULL DEFAULT '',
+  author_run_id TEXT NOT NULL DEFAULT '',
+  author_name TEXT NOT NULL DEFAULT '',
+  author_project_id TEXT NOT NULL DEFAULT '',
+  request_reason TEXT NOT NULL DEFAULT '',
+  approval_state TEXT NOT NULL DEFAULT '',
+  approval_reason TEXT NOT NULL DEFAULT '',
+  decided_by TEXT NOT NULL DEFAULT '',
+  decided_at REAL,
+  fires_per_day INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS schedules_project ON schedules(project_id);
 CREATE INDEX IF NOT EXISTS schedules_due ON schedules(enabled, next_fire_at);
@@ -112,12 +136,66 @@ _ADDED_COLUMNS: tuple[tuple[str, str], ...] = (
     ("target_cut_message_id", "TEXT NOT NULL DEFAULT ''"),
     ("target_cut_mode", "TEXT NOT NULL DEFAULT ''"),
     ("context_ceiling_pct", "REAL NOT NULL DEFAULT 0"),
+    # Schema 3: authorship, approval, and the three definition fields agents needed.
+    # Every default reads as the old behaviour - a person's schedule, already armed,
+    # with no end date and a resume that skips an open conversation - so an existing
+    # row is exactly what it was.
+    ("model", "TEXT NOT NULL DEFAULT ''"),
+    ("expires_at", "REAL"),
+    ("when_live", "TEXT NOT NULL DEFAULT 'skip'"),
+    ("author_kind", "TEXT NOT NULL DEFAULT 'user'"),
+    ("author_session_id", "TEXT NOT NULL DEFAULT ''"),
+    ("author_run_id", "TEXT NOT NULL DEFAULT ''"),
+    ("author_name", "TEXT NOT NULL DEFAULT ''"),
+    ("author_project_id", "TEXT NOT NULL DEFAULT ''"),
+    ("request_reason", "TEXT NOT NULL DEFAULT ''"),
+    ("approval_state", "TEXT NOT NULL DEFAULT ''"),
+    ("approval_reason", "TEXT NOT NULL DEFAULT ''"),
+    ("decided_by", "TEXT NOT NULL DEFAULT ''"),
+    ("decided_at", "REAL"),
+    ("fires_per_day", "INTEGER NOT NULL DEFAULT 0"),
+)
+
+# Indexes over schema-3 columns. Created after `_migrate` rather than in the schema
+# script, because the script runs first and an older database does not have the
+# columns yet.
+_ADDED_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS schedules_author ON schedules(author_session_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS schedules_approval ON schedules(approval_state, project_id)",
 )
 
 # Outcomes a run row can settle on. `started` is the transient claim state, and a
 # row left in it is a fire the daemon did not live long enough to finish - which
-# is worth seeing rather than silently repairing.
-OUTCOMES = ("started", "spawned", "skipped", "failed", "missed")
+# is worth seeing rather than silently repairing. `delivered` is a resume whose
+# conversation was already open, so its prompt was queued into that pane instead of
+# opening a second one (`when_live = 'deliver'`).
+OUTCOMES = ("started", "spawned", "delivered", "skipped", "failed", "missed")
+
+AUTHOR_USER = "user"
+AUTHOR_AGENT = "agent"
+#: `approval_state` values. Empty for a person's own schedule, which needs none.
+APPROVAL_GRANTED = "granted"
+APPROVAL_PENDING = "pending"
+APPROVAL_APPROVED = "approved"
+APPROVAL_DISMISSED = "dismissed"
+#: `disabled_reason` values this store and its callers write and branch on.
+DISABLED_AWAITING_APPROVAL = "awaiting_approval"
+DISABLED_DISMISSED = "dismissed"
+DISABLED_CANCELLED = "cancelled"
+DISABLED_EXPIRED = "expired"
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduleAuthor:
+    """Who wrote a schedule. The default is a person, which is every pre-schema-3 row."""
+
+    kind: str = AUTHOR_USER
+    session_id: str = ""
+    run_id: str = ""
+    name: str = ""
+    project_id: str = ""
+    #: The agent's own account of why, shown to the person who approves it.
+    reason: str = ""
 
 
 class ScheduleConflict(Exception):
@@ -174,6 +252,20 @@ def _row_to_schedule(row: sqlite3.Row) -> dict[str, Any]:
         "target_cut_message_id": str(row["target_cut_message_id"] or ""),
         "target_cut_mode": str(row["target_cut_mode"] or ""),
         "context_ceiling_pct": float(row["context_ceiling_pct"] or 0.0),
+        "model": str(row["model"] or ""),
+        "expires_at": row["expires_at"],
+        "when_live": str(row["when_live"] or "skip"),
+        "author_kind": str(row["author_kind"] or AUTHOR_USER),
+        "author_session_id": str(row["author_session_id"] or ""),
+        "author_run_id": str(row["author_run_id"] or ""),
+        "author_name": str(row["author_name"] or ""),
+        "author_project_id": str(row["author_project_id"] or ""),
+        "request_reason": str(row["request_reason"] or ""),
+        "approval_state": str(row["approval_state"] or ""),
+        "approval_reason": str(row["approval_reason"] or ""),
+        "decided_by": str(row["decided_by"] or ""),
+        "decided_at": row["decided_at"],
+        "fires_per_day": int(row["fires_per_day"] or 0),
     }
 
 
@@ -229,6 +321,8 @@ class ScheduleStore:
         for column, declaration in _ADDED_COLUMNS:
             if column not in present:
                 self._db.execute(f"ALTER TABLE schedules ADD COLUMN {column} {declaration}")
+        for statement in _ADDED_INDEXES:
+            self._db.execute(statement)
 
     def _open(self) -> sqlite3.Connection:
         db = sqlite3.connect(self._path, check_same_thread=False)
@@ -260,9 +354,16 @@ class ScheduleStore:
         spec: ScheduleSpec,
         next_fire_at: float | None,
         now: float | None = None,
+        author: ScheduleAuthor | None = None,
+        enabled: bool = True,
+        disabled_reason: str = "",
+        approval_state: str = "",
+        approval_reason: str = "",
+        fires_per_day: int = 0,
     ) -> dict[str, Any]:
         moment = time.time() if now is None else now
         schedule_id = f"sch_{uuid.uuid4().hex[:16]}"
+        who = author or ScheduleAuthor()
 
         def op() -> dict[str, Any]:
             self._db.execute(
@@ -270,13 +371,18 @@ class ScheduleStore:
                 "cron,interval_seconds,run_at,timezone,catch_up,overlap,backend,profile_id,"
                 "cwd,session_name,prompt,follow_ups_json,daily_run_cap,next_fire_at,"
                 "created_at,updated_at,revision,action,target_run_id,target_kind,"
-                "target_cut_message_id,target_cut_mode,context_ceiling_pct)"
-                " VALUES(?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?)",
+                "target_cut_message_id,target_cut_mode,context_ceiling_pct,"
+                "model,expires_at,when_live,author_kind,author_session_id,author_run_id,"
+                "author_name,author_project_id,request_reason,approval_state,"
+                "approval_reason,disabled_reason,fires_per_day)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,"
+                "?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     schedule_id,
                     project_id,
                     project_root,
                     spec.label,
+                    int(enabled),
                     spec.trigger_kind,
                     spec.cron,
                     spec.interval_seconds,
@@ -300,6 +406,19 @@ class ScheduleStore:
                     spec.target_cut_message_id,
                     spec.target_cut_mode,
                     spec.context_ceiling_pct,
+                    spec.model,
+                    spec.expires_at,
+                    spec.when_live,
+                    who.kind,
+                    who.session_id,
+                    who.run_id,
+                    who.name,
+                    who.project_id,
+                    who.reason,
+                    approval_state,
+                    approval_reason,
+                    disabled_reason,
+                    int(fires_per_day),
                 ),
             )
             self._db.commit()
@@ -318,8 +437,16 @@ class ScheduleStore:
         next_fire_at: float | None,
         revision: int | None = None,
         now: float | None = None,
+        fires_per_day: int = 0,
     ) -> dict[str, Any] | None:
-        """Rewrite a definition. A stale `revision` loses the race and returns None."""
+        """Rewrite a definition. A stale `revision` loses the race and returns None.
+
+        This is a person's edit, and it changes what an agent-authored row means. One
+        an agent armed under its grant becomes ``approved``: a person has now read and
+        rewritten it, so it stops being re-judged against the Project's level at every
+        fire. One still awaiting a decision stays awaiting it - editing a request is not
+        approving it - and keeps the disabled reason that says so.
+        """
         moment = time.time() if now is None else now
 
         def op() -> dict[str, Any] | None:
@@ -347,19 +474,32 @@ class ScheduleStore:
                 spec.target_cut_message_id,
                 spec.target_cut_mode,
                 spec.context_ceiling_pct,
+                spec.model,
+                spec.expires_at,
+                spec.when_live,
+                int(fires_per_day),
                 schedule_id,
             ]
             clause = ""
             if revision is not None:
                 clause = " AND revision=?"
                 params.append(revision)
+            # SET expressions read the row as it was before this statement, so the two
+            # CASEs below see the old approval state, not each other's result.
             cursor = self._db.execute(
                 "UPDATE schedules SET label=?,trigger_kind=?,cron=?,interval_seconds=?,run_at=?,"
                 "timezone=?,catch_up=?,overlap=?,backend=?,profile_id=?,cwd=?,session_name=?,"
-                "prompt=?,follow_ups_json=?,daily_run_cap=?,next_fire_at=?,updated_at=?,"
+                "prompt=?,follow_ups_json=?,daily_run_cap=?,"
+                "next_fire_at=CASE WHEN approval_state='pending' THEN NULL ELSE ? END,"
+                "updated_at=?,"
                 "action=?,target_run_id=?,target_kind=?,target_cut_message_id=?,"
-                "target_cut_mode=?,context_ceiling_pct=?,"
-                "revision=revision+1,disabled_reason=''"
+                "target_cut_mode=?,context_ceiling_pct=?,model=?,expires_at=?,when_live=?,"
+                "fires_per_day=?,"
+                "approval_state=CASE WHEN approval_state='granted' THEN 'approved'"
+                " ELSE approval_state END,"
+                "disabled_reason=CASE WHEN approval_state='pending' THEN disabled_reason"
+                " ELSE '' END,"
+                "revision=revision+1"
                 f" WHERE id=?{clause}",
                 params,
             )
@@ -412,6 +552,182 @@ class ScheduleStore:
             self._db.commit()
 
         await self._run(op)
+
+    async def set_approval(
+        self,
+        schedule_id: str,
+        *,
+        expected: tuple[str, ...],
+        state: str,
+        enabled: bool,
+        next_fire_at: float | None,
+        disabled_reason: str = "",
+        decided_by: str = "",
+        approval_reason: str | None = None,
+        now: float | None = None,
+    ) -> dict[str, Any] | None:
+        """Move an agent-authored row between approval states, conditionally.
+
+        Conditional on the state the caller read (`expected`), so two people deciding
+        the same request at once - the desktop and a phone - cannot both win: the
+        loser gets None and answers "already decided" instead of re-arming a schedule
+        the other one dismissed.
+        """
+        moment = time.time() if now is None else now
+        placeholders = ",".join("?" for _ in expected)
+
+        def op() -> dict[str, Any] | None:
+            assignments = (
+                "approval_state=?,enabled=?,next_fire_at=?,disabled_reason=?,updated_at=?,"
+                "revision=revision+1"
+            )
+            params: list[Any] = [state, int(enabled), next_fire_at, disabled_reason, moment]
+            if decided_by:
+                assignments += ",decided_by=?,decided_at=?"
+                params.extend([decided_by, moment])
+            if approval_reason is not None:
+                assignments += ",approval_reason=?"
+                params.append(approval_reason)
+            params.append(schedule_id)
+            params.extend(expected)
+            cursor = self._db.execute(
+                f"UPDATE schedules SET {assignments} WHERE id=?"
+                f" AND approval_state IN ({placeholders})",
+                params,
+            )
+            self._db.commit()
+            if not cursor.rowcount:
+                return None
+            row = self._db.execute(
+                "SELECT * FROM schedules WHERE id=?", (schedule_id,)
+            ).fetchone()
+            return _row_to_schedule(row) if row else None
+
+        return await self._run(op)
+
+    async def expire_due(self, now: float) -> list[dict[str, Any]]:
+        """Disarm every armed schedule whose end date has passed, and return them.
+
+        Run by the sweep before it looks for due fires, so a schedule cannot fire in
+        the same tick it expired in, and so an expired row stops reading as armed
+        when it expires rather than at whatever its next fire would have been.
+        """
+
+        def op() -> list[dict[str, Any]]:
+            rows = self._db.execute(
+                "SELECT id FROM schedules WHERE enabled=1 AND expires_at IS NOT NULL"
+                " AND expires_at<=?",
+                (now,),
+            ).fetchall()
+            ids = [str(row["id"]) for row in rows]
+            for schedule_id in ids:
+                self._db.execute(
+                    "UPDATE schedules SET enabled=0,next_fire_at=NULL,disabled_reason=?,"
+                    "updated_at=?,revision=revision+1 WHERE id=?",
+                    (DISABLED_EXPIRED, now, schedule_id),
+                )
+            self._db.commit()
+            if not ids:
+                return []
+            placeholders = ",".join("?" for _ in ids)
+            refreshed = self._db.execute(
+                f"SELECT * FROM schedules WHERE id IN ({placeholders})", ids
+            ).fetchall()
+            return [_row_to_schedule(row) for row in refreshed]
+
+        return await self._run(op)
+
+    async def agent_created_since(self, session_id: str, since: float) -> int:
+        """Agent schedules one session has written since an instant, in any state.
+
+        Counted from the table rather than from memory, so the hourly budget survives
+        the daemon restarts that routinely happen inside it. Every state counts,
+        dismissed and cancelled included: the budget bounds asking, and a request a
+        person had to dismiss was still a request they had to read.
+        """
+
+        def op() -> int:
+            row = self._db.execute(
+                "SELECT COUNT(*) AS total FROM schedules WHERE author_kind=?"
+                " AND author_session_id=? AND created_at>=?",
+                (AUTHOR_AGENT, session_id, since),
+            ).fetchone()
+            return int(row["total"] if row else 0)
+
+        return await self._run(op)
+
+    async def active_agent_schedules(self, project_id: str) -> list[dict[str, Any]]:
+        """Agent-authored rows in one Project that are armed or waiting on a person.
+
+        What the per-Project standing cap counts: a schedule an agent wrote and nobody
+        has yet disarmed. Paused, dismissed, cancelled, expired and completed rows do
+        not count, because none of them can start anything.
+        """
+
+        def op() -> list[dict[str, Any]]:
+            rows = self._db.execute(
+                "SELECT * FROM schedules WHERE project_id=? AND author_kind=?"
+                " AND (enabled=1 OR approval_state=?) ORDER BY created_at",
+                (project_id, AUTHOR_AGENT, APPROVAL_PENDING),
+            ).fetchall()
+            return [_row_to_schedule(row) for row in rows]
+
+        return await self._run(op)
+
+    async def authored_by(self, session_id: str, run_id: str = "") -> list[dict[str, Any]]:
+        """Every row one agent session (or the conversation it is running) wrote.
+
+        Matched on the session *or* the run, because both are the same author: a pane
+        that resumed its conversation has a new session id and the same run, and a
+        pane that rolled its conversation has the same session id and a new run.
+        """
+
+        def op() -> list[dict[str, Any]]:
+            if run_id:
+                rows = self._db.execute(
+                    "SELECT * FROM schedules WHERE author_kind=? AND"
+                    " (author_session_id=? OR author_run_id=?) ORDER BY created_at",
+                    (AUTHOR_AGENT, session_id, run_id),
+                ).fetchall()
+            else:
+                rows = self._db.execute(
+                    "SELECT * FROM schedules WHERE author_kind=? AND author_session_id=?"
+                    " ORDER BY created_at",
+                    (AUTHOR_AGENT, session_id),
+                ).fetchall()
+            return [_row_to_schedule(row) for row in rows]
+
+        return await self._run(op)
+
+    async def approval_requests(
+        self, *, project_id: str | None = None, decided_since: float | None = None
+    ) -> list[dict[str, Any]]:
+        """Agent schedules waiting on a person, plus the ones decided recently.
+
+        The Fleet Queue reads this. Recent decisions are included so a card does not
+        vanish the instant it is pressed on another device, which reads as the
+        approval having failed.
+        """
+
+        def op() -> list[dict[str, Any]]:
+            clauses = ["(approval_state=?"]
+            params: list[Any] = [APPROVAL_PENDING]
+            if decided_since is not None:
+                clauses[0] += " OR (approval_state IN (?,?) AND decided_at>=?)"
+                params.extend([APPROVAL_APPROVED, APPROVAL_DISMISSED, decided_since])
+            clauses[0] += ")"
+            if project_id:
+                clauses.append("project_id=?")
+                params.append(project_id)
+            rows = self._db.execute(
+                "SELECT * FROM schedules WHERE author_kind='agent' AND "
+                + " AND ".join(clauses)
+                + " ORDER BY created_at DESC LIMIT 200",
+                params,
+            ).fetchall()
+            return [_row_to_schedule(row) for row in rows]
+
+        return await self._run(op)
 
     async def delete(self, schedule_id: str) -> bool:
         def op() -> bool:
@@ -506,7 +822,15 @@ class ScheduleStore:
         session_id: str | None = None,
         queued_messages: int = 0,
         now: float | None = None,
+        track_session: bool = True,
     ) -> dict[str, Any] | None:
+        """Settle a run row and mirror its outcome onto the schedule.
+
+        `track_session` is False for a resume that delivered into a pane it did not
+        start: the run row still names that pane, but `last_session_id` is what the
+        overlap and concurrency guards count as *this schedule's* live session, and a
+        pane somebody else opened is not one.
+        """
         moment = time.time() if now is None else now
 
         def op() -> dict[str, Any] | None:
@@ -519,17 +843,15 @@ class ScheduleStore:
                 "SELECT * FROM schedule_runs WHERE id=?", (run_id,)
             ).fetchone()
             if row is not None:
+                tracked = "last_session_id=?," if track_session else ""
+                params: list[Any] = [float(row["started_at"]), outcome, reason]
+                if track_session:
+                    params.append(session_id)
+                params.extend([moment, str(row["schedule_id"])])
                 self._db.execute(
                     "UPDATE schedules SET last_fire_at=?,last_outcome=?,last_reason=?,"
-                    "last_session_id=?,updated_at=? WHERE id=?",
-                    (
-                        float(row["started_at"]),
-                        outcome,
-                        reason,
-                        session_id,
-                        moment,
-                        str(row["schedule_id"]),
-                    ),
+                    f"{tracked}updated_at=? WHERE id=?",
+                    params,
                 )
             self._db.commit()
             return _row_to_run(row) if row is not None else None
@@ -566,14 +888,16 @@ class ScheduleStore:
     async def runs_since(self, schedule_id: str, since: float) -> int:
         """Spawned runs for one schedule since an instant, for the daily cap.
 
-        Counts only `spawned`: a skip or a failure cost nothing and must not
-        consume the budget that exists to bound what actually starts.
+        Counts what started a turn - `spawned`, and `delivered` (a prompt queued into
+        a conversation that was already open still makes an agent work). A skip or a
+        failure cost nothing and must not consume the budget that exists to bound
+        what actually runs.
         """
 
         def op() -> int:
             row = self._db.execute(
                 "SELECT COUNT(*) AS total FROM schedule_runs WHERE schedule_id=?"
-                " AND started_at>=? AND outcome IN ('spawned','started')",
+                " AND started_at>=? AND outcome IN ('spawned','delivered','started')",
                 (schedule_id, since),
             ).fetchone()
             return int(row["total"] if row else 0)

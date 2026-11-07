@@ -50,6 +50,15 @@ const AUTHORITY_COPY:{setting:string;levels:Record<string,string>;note:string}[]
     get note() { return t("AutomationAuthority.224c4244ab") },
   },
   {
+    setting: 'schedule_grant',
+    levels:{
+      get draft() { return t("AutomationAuthority.505b3bb691") },
+      get limited() { return t("AutomationAuthority.scheduleLimited") },
+      get granted() { return t("AutomationAuthority.002c7c6846") },
+    },
+    get note() { return t("AutomationAuthority.scheduleNote") },
+  },
+  {
     setting: 'land_grant',
     levels:{get draft() { return t("AutomationAuthority.505b3bb691") },get granted() { return t("AutomationAuthority.002c7c6846") }},
     get note() { return t("AutomationAuthority.d414c23cc1") },

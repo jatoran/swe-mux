@@ -3,9 +3,10 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 import {
-  CRON_PRESETS, TARGET_KIND_COPY, actionLabel, cadenceLabel, draftFromSchedule, draftToBody,
-  durationLabel, emptyDraft, needsAttention, orderSchedules, outcomeLabel, presetForCron,
-  resumeDraft, targetIsMissing, untilLabel, type Schedule,
+  CRON_PRESETS, TARGET_KIND_COPY, actionLabel, authorLabel, cadenceLabel, draftFromSchedule,
+  draftToBody, durationLabel, emptyDraft, frequencyLabel, inactiveLabel, isAwaitingApproval,
+  needsAttention, orderSchedules, outcomeLabel, presetForCron, resumeDraft, targetIsMissing,
+  untilLabel, type Schedule,
 } from '../src/schedules.ts'
 
 const schedule = (overrides: Partial<Schedule> = {}): Schedule => ({
@@ -46,6 +47,18 @@ const schedule = (overrides: Partial<Schedule> = {}): Schedule => ({
   target_cut_mode: '',
   context_ceiling_pct: 0,
   target: null,
+  model: '',
+  expires_at: null,
+  when_live: 'skip',
+  author_kind: 'user',
+  author_session_id: '',
+  author_run_id: '',
+  author_name: '',
+  request_reason: '',
+  approval_state: '',
+  approval_reason: '',
+  decided_by: '',
+  fires_per_day: 1,
   ...overrides,
 })
 
@@ -69,6 +82,39 @@ test('the draft round-trips through a schedule without changing its trigger', ()
   // A cron field left over from another trigger must not travel: the daemon would
   // then hold two contradictory definitions of when to fire.
   assert.equal(body.cron, undefined)
+})
+
+test('editing an agent schedule keeps its model, its end date and its live policy', () => {
+  // A full replacement that dropped any of these would silently change what an agent's
+  // schedule does the moment a person opened and saved it.
+  // Minute-aligned, because the editor's `datetime-local` field holds minutes.
+  const spawn = draftToBody(draftFromSchedule(schedule({ model: 'opus', expires_at: 1_899_999_960 })))
+  assert.equal(spawn.model, 'opus')
+  assert.equal(spawn.expires_at, 1_899_999_960)
+  const resume = draftToBody(draftFromSchedule(resuming({ when_live: 'deliver' })))
+  assert.equal(resume.when_live, 'deliver')
+  assert.equal(resume.model, undefined)
+  // Clearing the end date in the editor sends none, which is "no end".
+  assert.equal(draftToBody({ ...draftFromSchedule(schedule({ expires_at: 1_900_000_000 })), expires_local: '' }).expires_at, undefined)
+  // A model names one harness's vocabulary, so it never travels without a backend.
+  assert.equal(draftToBody({ ...emptyDraft(), backend: '', model: 'opus' }).model, undefined)
+})
+
+test('a pending agent request needs attention and reads as awaiting approval', () => {
+  const pending = schedule({
+    enabled: false, author_kind: 'agent', author_name: 'planner',
+    approval_state: 'pending', disabled_reason: 'awaiting_approval',
+  })
+  assert.deepEqual(needsAttention([pending]).map(item => item.id), ['sch_1'])
+  assert.equal(isAwaitingApproval(pending), true)
+  assert.equal(inactiveLabel(pending), 'awaiting approval')
+  assert.equal(authorLabel(pending), 'set up by agent planner')
+  assert.equal(authorLabel(schedule()), '')
+  assert.equal(inactiveLabel(schedule({ enabled: false, disabled_reason: 'expired' })), 'expired')
+  assert.equal(inactiveLabel(schedule({ enabled: false, disabled_reason: 'paused' })), 'paused')
+  assert.equal(frequencyLabel(1), 'up to 1 time a day')
+  assert.equal(frequencyLabel(24), 'up to 24 times a day')
+  assert.equal(frequencyLabel(97), 'more than 96 times a day')
 })
 
 test('a cron draft sends only its expression, and blank follow-ups are dropped', () => {

@@ -278,6 +278,19 @@ its own is the default and nothing widens implicitly.
   fan-out hazard the draft path was built for ("an agent holding real spawn authority turns
   one prompt injection into unbounded fan-out") is now answered by the budget and the audit
   trail rather than by a human per request; the per-Project lowering is the way back.
+- **A schedule is a deferred spawn or a deferred message, under its own grant.**
+  `request_schedule` answers to the target Project's `schedule_grant` (default `limited`), and
+  a request that waits is the schedule row itself in the Fleet Queue's `schedule_requests`,
+  not an observation (`scheduled-runs.md`, "Agent-authored schedules"). What it says when it
+  fires follows the receiver-side consent rule rather than adding a third form of it: a resume
+  of the **author's own** conversation is staged armed by naming the schedule in
+  `solicited_by` - the conversation asked for exactly this message, like a settle watch - and a
+  resume of **another** conversation is the authoring agent's `agent` message, armed only under
+  that conversation's `accept_agent_messages` grant, like `notify`. Either way the text is
+  headed by a daemon-written line naming the schedule and its author, the fullest disclosure,
+  because it arrives long after anyone could ask the author what it meant. A person's decision
+  on an agent's pending request reaches the agent the same way: a `rule` notice armed by
+  `solicited_by`, only while its conversation is still the one that asked.
 - **Session control acts the same way under the same grant** (Phase 7.6, CP §7.6). A
   `mux.interrupt`/`mux.end_session` call whose Project sits at a `draft` grant appends
   a typed `control_request` item to the same `observations.json` (action, target, reason,

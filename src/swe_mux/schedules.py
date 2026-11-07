@@ -1,10 +1,11 @@
 """Trigger arithmetic and validation for scheduled agent runs.
 
-A schedule is a *user-authored deferred spawn*: the same `SpawnRequest` the Run
-menu builds, plus a trigger and an owner. That framing is what keeps this out of
-the decision-gated "model-authored spawn" territory in `ROADMAP.md` — the human
-who wrote the schedule is the authority, exactly as if they had pressed Run later
-themselves.
+A schedule is a *deferred spawn or resume*: the same `SpawnRequest` the Run menu
+builds, plus a trigger and an author. A person's schedule carries their authority,
+exactly as if they had pressed Run later themselves. An agent's schedule carries the
+authority its target Project granted agents (`schedule_grant`), decided by
+`agent_schedule_verdict` - the same grant model an agent's immediate spawn already
+answers to, with persistence bounded on top because a schedule outlives its author.
 
 This module is deliberately pure. It owns the answer to "when does this next
 fire", nothing else: no storage, no spawning, no I/O. `schedule_store.py`
@@ -53,10 +54,18 @@ the *policy* for a fire time already in the past belongs to the schedule
 (``catch_up``) and is applied by `scheduler.py`, which either fires once for the
 missed occurrence or records that it was skipped. Either way the window is
 visible; nothing is silently dropped.
+
+**Agent-authored schedules** (`schedule_authoring.py`) are decided here too, because
+the decision is a pure function of the definition and the Project's level:
+`fires_per_day` measures how often a trigger actually fires, and
+`agent_schedule_verdict` says whether an agent may arm it directly or a human has to
+approve it first. Both run at write time and again at every fire, so lowering a
+Project's `schedule_grant` reaches schedules that already exist.
 """
 
 from __future__ import annotations
 
+import math
 import re
 import time
 from dataclasses import dataclass, field
@@ -70,12 +79,24 @@ TriggerKind = Literal["once", "interval", "cron"]
 OverlapPolicy = Literal["skip", "allow"]
 ScheduleAction = Literal["spawn", "resume"]
 TargetKind = Literal["run", "latest_of_session", "fork_point"]
+WhenLive = Literal["skip", "deliver"]
 
 TRIGGER_KINDS: tuple[str, ...] = ("once", "interval", "cron")
 OVERLAP_POLICIES: tuple[str, ...] = ("skip", "allow")
 SCHEDULE_ACTIONS: tuple[str, ...] = ("spawn", "resume")
 TARGET_KINDS: tuple[str, ...] = ("run", "latest_of_session", "fork_point")
 CUT_MODES: tuple[str, ...] = ("before", "after")
+#: What a resume does when its conversation is already open in a mux pane at fire
+#: time. ``skip`` records a quiet skip (a CLI opens a conversation once, so a second
+#: pane is not an option). ``deliver`` queues the prompt into the pane that already
+#: holds the conversation - the same conversation, so it is the resume the author
+#: asked for, arriving through the ordinary prompt queue instead of a new pane.
+WHEN_LIVE_POLICIES: tuple[str, ...] = ("skip", "deliver")
+
+#: The three `schedule_grant` levels, narrowest first (`agent_authority.py`).
+SCHEDULE_GRANT_DRAFT = "draft"
+SCHEDULE_GRANT_LIMITED = "limited"
+SCHEDULE_GRANT_GRANTED = "granted"
 
 # Bounds. Every one of these is a "a typo must not become a standing cost"
 # limit rather than a capability statement.
@@ -106,6 +127,19 @@ MAX_RESUME_ONCE_HORIZON_SECONDS = 21 * 86_400.0
 # accumulated conversation buys a turn whose early context has already been compacted
 # away; see the `context_ceiling_pct` field.
 DEFAULT_CONTEXT_CEILING_PCT = 0.7
+# How far ahead a schedule's end date may be set. A year and a day, so "stop after a
+# year" is expressible without arithmetic about leap years.
+MAX_EXPIRY_HORIZON_SECONDS = 366 * 86_400.0
+# How a trigger's frequency is measured: the most fires inside any rolling 24 hours,
+# over the next eight days. Eight rather than one so a weekday-only or a
+# Monday-heavy expression is judged on its busiest day rather than on today.
+FREQUENCY_WINDOW_SECONDS = 86_400.0
+FREQUENCY_HORIZON_SECONDS = 8 * 86_400.0
+# The measurement stops counting past this, which is also what bounds its cost: a
+# trigger firing more than every fifteen minutes is "more than 96 a day" for every
+# purpose the number is used for, and walking `* * * * *` across eight days to say
+# 1440 instead would cost eleven thousand cron evaluations to state the obvious.
+FREQUENCY_COUNT_CEILING = 96
 
 
 class ScheduleError(ValueError):
@@ -411,6 +445,21 @@ class ScheduleSpec:
     #: For ``latest_of_session``: refuse the fire when the conversation is already
     #: this full. 0 disables the guard.
     context_ceiling_pct: float = 0.0
+    #: A spawn's model, in the harness's own spelling (`backends.md`). Empty leaves
+    #: the choice to the launch profile and then to the Project's default model
+    #: table, exactly as a Run-menu spawn would. Refused on a resume: the
+    #: conversation's own CLI already chose.
+    model: str = ""
+    #: When this schedule stops being armed, as epoch seconds. Disarmed by the sweep
+    #: with reason ``expired``; never deleted, so its run history stays readable.
+    expires_at: float | None = None
+    #: A resume's answer to "the conversation is already open". See
+    #: `WHEN_LIVE_POLICIES`. Always ``skip`` on a spawn, which has no conversation.
+    when_live: WhenLive = "skip"
+
+    @property
+    def recurring(self) -> bool:
+        return self.trigger_kind != "once"
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -435,6 +484,9 @@ class ScheduleSpec:
             "target_cut_message_id": self.target_cut_message_id,
             "target_cut_mode": self.target_cut_mode,
             "context_ceiling_pct": self.context_ceiling_pct,
+            "model": self.model,
+            "expires_at": self.expires_at,
+            "when_live": self.when_live,
         }
 
 
@@ -642,6 +694,7 @@ def parse_spec(body: dict[str, Any], *, now: float | None = None) -> ScheduleSpe
             ("backend", backend),
             ("profile_id", body.get("profile_id")),
             ("cwd", body.get("cwd")),
+            ("model", body.get("model")),
         ):
             if str(value or "").strip():
                 raise ScheduleError(
@@ -700,6 +753,23 @@ def parse_spec(body: dict[str, Any], *, now: float | None = None) -> ScheduleSpe
             "daily_run_cap must be between 0 (the global cap only) and 500",
             fields={"daily_run_cap": "must be between 0 and 500"},
         )
+    when_live = str(body.get("when_live") or "skip").strip()
+    if when_live not in WHEN_LIVE_POLICIES:
+        raise ScheduleError(
+            "invalid_when_live",
+            "when_live must be skip or deliver",
+            fields={"when_live": "must be skip or deliver"},
+        )
+    if when_live != "skip" and not resuming:
+        # Refused rather than ignored, for the same reason a resume refuses a backend:
+        # a spawn opens a conversation nobody holds, so the option would read as a
+        # policy and do nothing.
+        raise ScheduleError(
+            "invalid_when_live",
+            "when_live only applies to a resume; a spawn always opens a new conversation",
+            fields={"when_live": "only applies to a resume"},
+        )
+    expires_at = _parse_expiry(body.get("expires_at"), moment=moment, run_at=run_at)
     return ScheduleSpec(
         label=_text(body.get("label"), "label", MAX_LABEL_CHARS),
         prompt=_text(body.get("prompt"), "prompt", MAX_PROMPT_CHARS),
@@ -724,6 +794,156 @@ def parse_spec(body: dict[str, Any], *, now: float | None = None) -> ScheduleSpe
         target_cut_message_id=target.cut_message_id,
         target_cut_mode=target.cut_mode,
         context_ceiling_pct=target.context_ceiling_pct,
+        model=_text(body.get("model"), "model", 100, required=False),
+        expires_at=expires_at,
+        when_live=when_live,  # type: ignore[arg-type]
+    )
+
+
+def _parse_expiry(raw: Any, *, moment: float, run_at: float | None) -> float | None:
+    """An optional end date: in the future, inside the horizon, and after the fire.
+
+    A past end date is refused rather than accepted-and-immediately-expired: a save
+    that produces a schedule which disarms on the next sweep reads as a schedule
+    that silently does nothing, which is the failure this feature must not have.
+    """
+    if raw is None or raw == "" or raw == 0:
+        return None
+    if not isinstance(raw, int | float) or isinstance(raw, bool):
+        raise ScheduleError(
+            "invalid_expires_at",
+            "expires_at must be epoch seconds",
+            fields={"expires_at": "must be epoch seconds"},
+        )
+    value = float(raw)
+    if value <= moment:
+        raise ScheduleError(
+            "invalid_expires_at",
+            "expires_at is already in the past; move the end date or clear it",
+            fields={"expires_at": "already in the past"},
+        )
+    if value > moment + MAX_EXPIRY_HORIZON_SECONDS:
+        raise ScheduleError(
+            "invalid_expires_at",
+            f"expires_at is beyond the {int(MAX_EXPIRY_HORIZON_SECONDS // 86_400)}-day horizon",
+            fields={"expires_at": "too far in the future"},
+        )
+    if run_at is not None and value <= run_at:
+        raise ScheduleError(
+            "invalid_expires_at",
+            "expires_at falls before the one time this schedule would fire",
+            fields={"expires_at": "before the fire time"},
+        )
+    return value
+
+
+def fires_per_day(spec: ScheduleSpec, *, now: float) -> int:
+    """The most times this trigger fires inside any rolling 24 hours.
+
+    Measured, not estimated: the cron case walks the real occurrences the scheduler
+    would produce over the next eight days, through the same wall-clock arithmetic,
+    so a weekday-only expression is judged on a weekday and a DST transition is
+    counted the way it will actually fire. Counting stops past
+    `FREQUENCY_COUNT_CEILING`, so the answer for anything busier than every fifteen
+    minutes is "more than that" rather than an exact figure nobody acts on.
+
+    A ``once`` schedule fires at most once, ever, and answers 1.
+    """
+    if spec.trigger_kind == "once":
+        return 1
+    if spec.trigger_kind == "interval":
+        if not spec.interval_seconds:
+            return 0
+        # The window is half-open on its far edge, so an exact divisor of a day
+        # counts once per period: 12 h -> 2, 8 h -> 3.
+        return min(
+            FREQUENCY_COUNT_CEILING + 1,
+            math.ceil(FREQUENCY_WINDOW_SECONDS / float(spec.interval_seconds)),
+        )
+    expression = parse_cron(spec.cron)
+    wall = resolve_wall(spec.timezone)
+    horizon = now + FREQUENCY_HORIZON_SECONDS
+    occurrences: list[float] = []
+    start = 0
+    best = 0
+    cursor = now
+    # Every 24 hours of the horizon holds at most the ceiling before the walk stops,
+    # so this many steps always reaches the horizon or the ceiling first; the bound
+    # only makes that termination argument visible to a reader.
+    windows = math.ceil(FREQUENCY_HORIZON_SECONDS / FREQUENCY_WINDOW_SECONDS)
+    for _ in range((FREQUENCY_COUNT_CEILING + 1) * (windows + 1)):
+        following = next_cron_fire(expression, cursor, wall)
+        if following is None or following > horizon:
+            break
+        occurrences.append(following)
+        while occurrences[start] <= following - FREQUENCY_WINDOW_SECONDS:
+            start += 1
+        best = max(best, len(occurrences) - start)
+        if best > FREQUENCY_COUNT_CEILING:
+            break
+        cursor = following
+    return best
+
+
+@dataclass(frozen=True, slots=True)
+class AgentScheduleVerdict:
+    """Whether an agent may arm a schedule itself, and if not, why not.
+
+    `reason` is written for the human who will approve it and for the agent that
+    asked, so it names the rule and the number rather than the branch taken.
+    """
+
+    direct: bool
+    reason: str = ""
+
+
+def agent_schedule_verdict(
+    level: str,
+    spec: ScheduleSpec,
+    *,
+    frequency: int,
+    daily_limit: int,
+    opted_in: bool,
+) -> AgentScheduleVerdict:
+    """Decide an agent-authored schedule against its Project's `schedule_grant`.
+
+    - ``draft``: every agent schedule waits for a human.
+    - ``limited`` (the default): a one-off is armed directly, and so is a recurring
+      schedule that fires at most `daily_limit` times in any 24 hours. Anything busier
+      waits for a human, who sees the measured frequency on the card.
+    - ``granted``: armed directly. The install bounds (expiry, the per-Project cap, the
+      hourly budget, the concurrency ceiling) still apply; they are not this verdict.
+
+    A Project that has not opted into scheduled runs collapses to ``draft``, the way an
+    agent spawn collapses when `session_control` is off: the request still has
+    somewhere to go, and approving it is where a person turns the opt-in on. An
+    unknown level fails closed to the same place.
+    """
+    if not opted_in:
+        return AgentScheduleVerdict(
+            False,
+            "this Project has not opted into scheduled runs, so a person has to approve "
+            "it (and turn scheduled runs on) before it can fire",
+        )
+    if level == SCHEDULE_GRANT_GRANTED:
+        return AgentScheduleVerdict(True)
+    if level == SCHEDULE_GRANT_LIMITED:
+        if not spec.recurring:
+            return AgentScheduleVerdict(True)
+        if frequency <= daily_limit:
+            return AgentScheduleVerdict(True)
+        shown = (
+            f"more than {FREQUENCY_COUNT_CEILING}"
+            if frequency > FREQUENCY_COUNT_CEILING
+            else str(frequency)
+        )
+        return AgentScheduleVerdict(
+            False,
+            f"it fires up to {shown} times a day, and agents may arm a recurring "
+            f"schedule here only up to {daily_limit} a day without approval",
+        )
+    return AgentScheduleVerdict(
+        False, "this Project asks a person to approve every schedule an agent writes"
     )
 
 

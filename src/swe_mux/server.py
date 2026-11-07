@@ -201,6 +201,7 @@ from .routes.pty import SessionTerminalHost
 from .routes.support import _registered_identity
 from .runtime_config import CONFIG_WATCH_LOOP, watch_config
 from .scan_timeline import ScanContext, ScanTimelineService
+from .schedule_authoring import ScheduleAuthoringService
 from .schedule_store import ScheduleStore
 from .scheduler import ScheduleService
 from .schedules import ScheduleError
@@ -2656,9 +2657,29 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         # rollovers in the index and `resume` edges in the lineage table.
         history=history,
         automation_store=automation_store,
+        # Re-judges an agent-armed schedule at every fire against the same resolver
+        # the authoring service decided it with, so lowering a Project's level
+        # reaches schedules that already exist.
+        schedule_grant=authority_resolver(config, "schedule_grant"),
     )
     publish(app, {keys.SCHEDULES: schedules})
     publish(app, {keys.SCHEDULE_STORE: schedule_store})
+
+    # The one write path for schedules, for people and agents both: the HTTP route
+    # and `mux.request_schedule` are callers, every bound lives here.
+    schedule_authoring = ScheduleAuthoringService(
+        store=schedule_store,
+        projects=projects,
+        sessions=sessions,
+        config=config,
+        events=events,
+        automation_gate=_enabled_automations,
+        schedule_grant=authority_resolver(config, "schedule_grant"),
+        history=history,
+        enqueue=prompt_queue.enqueue,
+        delivery_brake=auto_delivery.install_brake,
+    )
+    publish(app, {keys.SCHEDULE_AUTHORING: schedule_authoring})
 
     def _session_project_root(session_id: str) -> tuple[Any, str] | None:
         session = sessions.sessions.get(session_id)
@@ -3026,6 +3047,9 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
                 attention_credit=lambda session_id: prompt_queue.store.credit_auto_attention(
                     session_id, by="mcp-activity"
                 ),
+                # `request_schedule`, `cancel_schedule` and `list_schedules` are callers
+                # over the one schedule write path the Schedule tab also uses.
+                schedule_authoring=schedule_authoring,
             ),
             keys.REAPER: reaper,
             keys.SUPERVISOR: supervisor_client,
@@ -3067,6 +3091,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
             keys.READINESS_WATCH: readiness_watch,
             keys.SCHEDULES: schedules,
             keys.SCHEDULE_STORE: schedule_store,
+            keys.SCHEDULE_AUTHORING: schedule_authoring,
             keys.AGENT_MESSAGING: agent_messaging,
             keys.AGENT_CONTEXT: agent_context,
             keys.SETTINGS_STORE: settings_store,

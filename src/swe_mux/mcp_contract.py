@@ -71,6 +71,10 @@ READ_TOOL_NAMES = (
     # Which checkout the targetless land tools would use. A pure read over the
     # caller's live cwd and its run-bound selection; it changes neither.
     "worktree_context",
+    # What is scheduled to run later in a scope, and the rules an agent schedule
+    # meets in the caller's Project. A read over the schedule store; it is what lets
+    # an agent plan a `request_schedule` that will be armed rather than filed.
+    "list_schedules",
 )
 
 WRITE_TOOL_NAMES = (
@@ -117,6 +121,16 @@ WRITE_TOOL_NAMES = (
     # never the default spelling of the safe one, and it carries the same
     # targetless scoping: no target argument at all.
     "request_verify",
+    # Schedule a spawn or a resume to happen later, under the *target* Project's
+    # `schedule_grant`: a one-off and a low-frequency recurring schedule arm directly
+    # at the default `limited`, anything busier is filed as a pending request a person
+    # approves. Every bound - frequency, lifetime, the per-Project cap, the hourly
+    # budget - lives in `schedule_authoring.py`; this name is only a transport.
+    "request_schedule",
+    # Withdraw a schedule the caller itself wrote. The narrowest write of the pair:
+    # it can only disarm a row already attributed to the caller's session or run,
+    # never a person's schedule or another agent's.
+    "cancel_schedule",
 )
 
 

@@ -266,6 +266,10 @@ export const SETTING_TARGETS = {
     surface: 'automation', setting: 'spawn_grant',
     get label() { return t("settingTargets.b926fdc36e") }, get where() { return t("settingTargets.37a381f097") },
   },
+  'project.scheduleGrant': {
+    surface: 'automation', setting: 'schedule_grant',
+    get label() { return t("settingTargets.scheduleGrant") }, get where() { return t("settingTargets.37a381f097") },
+  },
   'project.interjectGrant': {
     surface: 'automation', setting: 'interject_grant',
     get label() { return t("settingTargets.b36d9cc563") }, get where() { return t("settingTargets.37a381f097") },

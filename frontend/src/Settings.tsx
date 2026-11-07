@@ -169,6 +169,8 @@ type Config = {
   agent_interject_enabled:boolean;agent_interject_hourly_budget:number
   agent_interject_min_interval_seconds:number
   request_spawn_enabled:boolean;agent_spawn_hourly_budget:number
+  agent_schedule_hourly_budget:number;agent_schedule_daily_fire_limit:number
+  agent_schedules_per_project:number;agent_schedule_max_days:number
   session_control_enabled:boolean;session_control_hourly_budget:number
   session_control_graceful_timeout_s:number
   session_watch_enabled:boolean;session_watch_max_per_session:number;session_watch_max_minutes:number
@@ -2276,6 +2278,13 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <p>{t("Settings.c4e467b4a3")}</p>
           <label class="check" data-setting="request_spawn_enabled"><span>{t("Settings.dc57c727ca")}</span><input type="checkbox" checked={draft.request_spawn_enabled} onChange={e=>change('request_spawn_enabled',e.currentTarget.checked)} /><small>{t("Settings.370087f10d")}</small></label>
           <label data-setting="agent_spawn_hourly_budget">{rich("Settings.7d318e36e3", { value1: <input type="number" min="0" max="1000" value={draft.agent_spawn_hourly_budget} onInput={e=>change('agent_spawn_hourly_budget',Number(e.currentTarget.value))} />, value2: <small>{t("Settings.5e52f0eb53")}</small> })}</label>
+          {/* Agent-authored schedules. A Project's `schedule_grant` says whether an agent
+              may arm one at all; these bound what it may arm, and each exists because a
+              schedule outlives the agent that wrote it. */}
+          <label data-setting="agent_schedule_daily_fire_limit">{rich("Settings.agentScheduleFireLimit", { value1: <input type="number" min="1" max="96" value={draft.agent_schedule_daily_fire_limit} onInput={e=>change('agent_schedule_daily_fire_limit',Number(e.currentTarget.value))} />, value2: <small>{t("Settings.agentScheduleFireLimitHint")}</small> })}</label>
+          <label data-setting="agent_schedule_max_days">{rich("Settings.agentScheduleMaxDays", { value1: <input type="number" min="1" max="365" value={draft.agent_schedule_max_days} onInput={e=>change('agent_schedule_max_days',Number(e.currentTarget.value))} />, value2: <small>{t("Settings.agentScheduleMaxDaysHint")}</small> })}</label>
+          <label data-setting="agent_schedules_per_project">{rich("Settings.agentSchedulesPerProject", { value1: <input type="number" min="0" max="500" value={draft.agent_schedules_per_project} onInput={e=>change('agent_schedules_per_project',Number(e.currentTarget.value))} />, value2: <small>{t("Settings.agentSchedulesPerProjectHint")}</small> })}</label>
+          <label data-setting="agent_schedule_hourly_budget">{rich("Settings.agentScheduleBudget", { value1: <input type="number" min="0" max="1000" value={draft.agent_schedule_hourly_budget} onInput={e=>change('agent_schedule_hourly_budget',Number(e.currentTarget.value))} />, value2: <small>{t("Settings.agentScheduleBudgetHint")}</small> })}</label>
           <label class="check" data-setting="session_control_enabled"><span>{t("Settings.b02851d3ef")}</span><input type="checkbox" checked={draft.session_control_enabled} onChange={e=>change('session_control_enabled',e.currentTarget.checked)} /></label>
           <label data-setting="session_control_hourly_budget">{rich("Settings.eda25c1a19", { value1: <input type="number" min="0" max="1000" value={draft.session_control_hourly_budget} onInput={e=>change('session_control_hourly_budget',Number(e.currentTarget.value))} /> })}</label>
           <label data-setting="session_control_graceful_timeout_s">{rich("Settings.8007aa3154", { value1: <input type="number" min="1" max="120" step="1" value={draft.session_control_graceful_timeout_s} onInput={e=>change('session_control_graceful_timeout_s',Number(e.currentTarget.value))} /> })}</label>

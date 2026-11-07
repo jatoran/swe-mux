@@ -301,6 +301,8 @@ def op():
 A uniqueness violation is sometimes the *mechanism* rather than an error to swallow.
 `schedule_runs(schedule_id, fire_key)` is unique, and `ScheduleStore.claim_run` inserts that row before a scheduled session is spawned: the losing insert raises `IntegrityError`, rolls back, and is surfaced as a typed `ScheduleConflict` the caller treats as "already claimed" (`../../design/features/scheduled-runs.md`).
 That is what makes a fire idempotent across a daemon restart, which no in-memory guard can be.
+`ScheduleStore.set_approval` is the same idea for a decision rather than a fire: the update is conditional on the `approval_state` the caller read (`WHERE id=? AND approval_state IN (...)`), so two devices approving and dismissing one agent request at once cannot both win, and the loser answers "already decided" from a zero row count.
+Schema 3 adds its columns through `ALTER TABLE ADD COLUMN` with defaults that read as the old behaviour (a person's schedule, already armed, no end date), and creates the indexes over them after `_migrate`, because the schema script runs first and an older database does not have the columns yet.
 
 `LandStore` uses the same mechanism twice, through **partial** unique indexes scoped to a subset of states (`../../design/features/land-queue.md`).
 `land_requests_active(project_root, branch) WHERE state IN (<live states>)` makes enqueue itself the claim, so an agent asking twice for one branch gets a typed `LandConflict` rather than a second pipeline over one worktree.

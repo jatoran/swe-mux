@@ -468,14 +468,24 @@ Fields and invariants: `features/daemon-resilience.md`.
   pinned fork, and `context_ceiling_pct` for a rolling continuation.
   A fork stores the message it cuts at rather than a byte offset, so a conversation that moved
   past that message is refused by name instead of cut somewhere plausible.
-  `backend`, `profile_id` and `cwd` stay empty on a `resume` and are rejected at write time:
-  the conversation's history row and its adapter already fix all three.
+  `backend`, `profile_id`, `cwd` and `model` stay empty on a `resume` and are rejected at write
+  time: the conversation's history row and its adapter already fix all of them.
+  Schema 3 adds `model` (a spawn's), `expires_at` (disarmed by the sweep with
+  `disabled_reason = expired`), `when_live` (`skip|deliver`, a resume's answer to an already-open
+  conversation), and authorship: `author_kind` (`user|agent`), the authoring agent's
+  `author_session_id`, `author_run_id`, `author_name`, `author_project_id` and stated
+  `request_reason`, and `approval_state` (`''` for a person's; `granted|pending|approved|dismissed`
+  for an agent's) with `approval_reason`, `decided_by`, `decided_at` and the measured
+  `fires_per_day`.
+  A pending agent request **is** the row, disarmed with `disabled_reason = awaiting_approval`;
+  there is no second copy of the definition anywhere for an approval to drift from.
   **These rows are deliberately machine-local rather than portable Project config**: a
   schedule committed to a repository would arm itself in every clone and worktree, the same
   boundary Project Action trust draws.
   `schedule_runs` records one row per occurrence with `fire_key`, `due_at`, `outcome`
-  (`started|spawned|skipped|failed|missed`), `reason`, `session_id`, and `origin`
-  (`timer|manual`).
+  (`started|spawned|delivered|skipped|failed|missed`), `reason`, `session_id`, and `origin`
+  (`timer|manual`); `delivered` is a resume that queued its prompt into a pane already holding
+  the conversation.
   `(schedule_id, fire_key)` is **unique, and that index is the idempotency mechanism**: the
   row is inserted before the spawn, so a daemon that dies mid-fire cannot start the same
   occurrence twice on restart.

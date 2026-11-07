@@ -316,6 +316,7 @@ already had (`automation.md`, `projects.md`).
 |---|---|---|---|
 | `session_control_grant` | `granted` - acts directly | `draft`: a human approves each | `session_control` |
 | `spawn_grant` | `granted` - creates sessions directly | `draft` | `session_control` |
+| `schedule_grant` | `limited` - arms one-offs and recurring schedules up to the daily fire limit; busier ones wait | `draft`: a human approves each (`granted` arms all) | `scheduled_runs` |
 | `land_grant` | `draft` - a human approves each | - (`granted` raises it) | `land_queue` |
 | `land_verify_grant` | `granted` - gate edits made on this machine run | `draft`: every digest is approved by hand | `land_queue` |
 | `interject_grant` | `granted` - may write mid-turn | `off`: waits for the queue | (delivery readiness) |

@@ -224,15 +224,25 @@ async def queue_mailbox(request: web.Request) -> web.Response:
         limit = int(request.query.get("limit", "100") or 100)
     except ValueError as exc:
         raise QueueError("invalid_limit", "limit must be an integer", status=400) from exc
-    return json_response(
-        await request.app[keys.AGENT_MESSAGING].mailbox(
-            author=author,
-            role=role.strip() if role else None,
-            project_id=project_id,
-            target_session_id=target_session_id,
-            limit=limit,
-        )
+    view = await request.app[keys.AGENT_MESSAGING].mailbox(
+        author=author,
+        role=role.strip() if role else None,
+        project_id=project_id,
+        target_session_id=target_session_id,
+        limit=limit,
     )
+    # Agent schedule requests sit beside drafted spawns: both are an agent asking for
+    # a session a person has to say yes to. They are rows in the schedule store rather
+    # than observations, so they are read from the service that owns them. Scoped like
+    # the spawn requests - agent-authored, so never in the "human" view, and never
+    # under a per-target filter, since a request has no target session yet.
+    authoring = request.app.get(keys.SCHEDULE_AUTHORING)
+    view["schedule_requests"] = (
+        await authoring.approval_cards(project_id=project_id)
+        if authoring is not None and view.get("author") != "human" and not target_session_id
+        else []
+    )
+    return json_response(view)
 
 
 ROUTES: tuple[web.RouteDef, ...] = (

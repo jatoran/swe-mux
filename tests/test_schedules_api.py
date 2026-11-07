@@ -24,6 +24,7 @@ from swe_mux.routes.schedules import (
     preview_schedule,
     run_schedule_now,
 )
+from swe_mux.schedule_authoring import ScheduleAuthoringService
 from swe_mux.schedule_store import ScheduleStore
 from swe_mux.scheduler import ScheduleService
 from swe_mux.server import error_middleware
@@ -121,6 +122,17 @@ def build_app(tmp_path: Path, *, enabled: frozenset[str]) -> tuple[web.Applicati
         events=app[keys.EVENTS],
         automation_gate=gate,
         spawn_op=spawn,
+        enqueue=enqueue,
+    )
+    app[keys.SCHEDULE_AUTHORING] = ScheduleAuthoringService(
+        store=store,
+        projects=projects,
+        sessions=sessions,
+        config=config,
+        events=app[keys.EVENTS],
+        automation_gate=gate,
+        schedule_grant=lambda _root: "limited",
+        history=app[keys.HISTORY],
         enqueue=enqueue,
     )
     app.router.add_get("/api/schedules", list_schedules)

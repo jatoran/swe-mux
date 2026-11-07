@@ -75,6 +75,10 @@ def test_every_write_tool_is_covered_by_a_live_wire_test() -> None:
         # two share every bound and differ only in which step the pipeline stops at, so
         # a second agent spawn would prove nothing the first does not.
         "request_verify",
+        # Driven by the schedule canary: one agent asks for a one-off far enough ahead
+        # that nothing fires during the test, reads it back, and withdraws it.
+        "request_schedule",
+        "cancel_schedule",
     }
     covered_elsewhere = {"run_action"}
     assert set(WRITE_TOOL_NAMES) == driven_on_the_wire | covered_elsewhere
@@ -294,6 +298,56 @@ async def test_request_spawn_granted_creates_then_ends(backend: str, tmp_path: P
         )
         assert not end_error, ended
         assert ended["status"] == "ended", ended
+
+
+@pytest.mark.live_agent
+@pytest.mark.live_mcp
+@pytest.mark.skipif(not RUN_MCP, reason="set SWEMUX_RUN_LIVE_MCP_TESTS=1")
+@pytest.mark.parametrize("backend", CONTROL_HARNESSES)
+async def test_request_schedule_is_attributed_listed_and_withdrawn(
+    backend: str, tmp_path: Path
+) -> None:
+    """A real agent's token writes a schedule it can read back and withdraw.
+
+    Proves the wire facts the service tests cannot: the author recorded is the
+    session the bearer token belongs to, `list_schedules(mine)` finds it through that
+    same identity, and `cancel_schedule` is accepted from the author. The fire time is
+    hours away, so nothing starts during the test; whether the scratch Project arms it
+    or files it for approval depends on its opt-in, and both are legitimate answers.
+    """
+    async with isolated_daemon(tmp_path) as daemon:
+        project_id = await daemon.register_project()
+        caller_sid, _caller_pid, caller_token = await _spawn_agent(
+            daemon, project_id, backend, "caller", _IDLE_SEED
+        )
+
+        preview, preview_error = await daemon.call_tool(
+            caller_token,
+            "request_schedule",
+            {"prompt": "Check the build.", "cron": "0 9 * * *", "dry_run": True},
+        )
+        assert not preview_error, preview
+        assert preview["status"] == "dry_run", preview
+
+        made, is_error = await daemon.call_tool(
+            caller_token,
+            "request_schedule",
+            {"prompt": "Check the build.", "in_minutes": 600, "reason": "wire canary"},
+        )
+        assert not is_error, made
+        assert made["status"] in {"scheduled", "awaiting_approval"}, made
+        assert made["author"]["session_id"] == caller_sid, made
+        schedule_id = str(made["schedule_id"])
+
+        listed, list_error = await daemon.call_tool(caller_token, "list_schedules", {"mine": True})
+        assert not list_error, listed
+        assert [item["schedule_id"] for item in listed["schedules"]] == [schedule_id], listed
+
+        cancelled, cancel_error = await daemon.call_tool(
+            caller_token, "cancel_schedule", {"schedule_id": schedule_id, "reason": "cleanup"}
+        )
+        assert not cancel_error, cancelled
+        assert cancelled["status"] == "cancelled", cancelled
 
 
 @pytest.mark.live_agent

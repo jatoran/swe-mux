@@ -172,9 +172,9 @@ Also holds approval of a control request and of a land request.
 
 ### `routes/schedules.py`
 
-Scheduled runs, previews, and run history.
+Scheduled runs, previews, run history, and the decision on an agent's pending request (`POST /api/schedules/{id}/decide`).
 
-**Not:** firing one (`scheduler.py`) or the trigger arithmetic (`schedules.py`).
+**Not:** firing one (`scheduler.py`), the trigger arithmetic (`schedules.py`), or the write rules - a create and a decision are calls into `schedule_authoring.py`, the one write path an agent's `mux.request_schedule` also uses.
 
 ## Sessions
 

@@ -81,6 +81,7 @@ if TYPE_CHECKING:
     from .push import PushStore
     from .readiness_watch import ReadinessWatcher
     from .scan_timeline import ScanTimelineService
+    from .schedule_authoring import ScheduleAuthoringService
     from .schedule_store import ScheduleStore
     from .scheduler import ScheduleService
     from .secret_store import PlatformSecretStore
@@ -209,6 +210,7 @@ PUSH_STORE: web.AppKey[PushStore] = web.AppKey("push_store")
 READINESS_WATCH: web.AppKey[ReadinessWatcher] = web.AppKey("readiness_watch")
 RUNTIME_INVENTORIES: web.AppKey[LiveSnapshotStore] = web.AppKey("runtime_inventories")
 SCAN_TIMELINE: web.AppKey[ScanTimelineService] = web.AppKey("scan_timeline")
+SCHEDULE_AUTHORING: web.AppKey[ScheduleAuthoringService] = web.AppKey("schedule_authoring")
 SCHEDULE_STORE: web.AppKey[ScheduleStore] = web.AppKey("schedule_store")
 SCHEDULES: web.AppKey[ScheduleService] = web.AppKey("schedules")
 SECRET_STORE: web.AppKey[PlatformSecretStore] = web.AppKey("secret_store")

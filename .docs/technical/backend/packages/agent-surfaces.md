@@ -219,7 +219,7 @@ Also the `dry_run` projection (every bound run, nothing staged, no budget spent)
 
 ## Scheduled runs
 
-A schedule is a *user-authored deferred press of a button the author could have pressed themselves*.
+A schedule is a *deferred press of a button its author could have pressed*, and its author is either a person or, through `mux.request_schedule`, an agent answering to its target Project's `schedule_grant`.
 So it goes through the ordinary spawn path, the ordinary resume path (`session_resume.py`, shared with the History Resume button), and the ordinary prompt queue, and never grows a second authority.
 A resume names its conversation by history *run* id rather than session id, because a session is exactly the thing that drifts.
 The definitions stay machine-local, because a schedule committed to a repository would arm itself in every clone and worktree.
@@ -232,16 +232,31 @@ Pure trigger arithmetic and validation.
 - The wall-clock abstraction with its host-local and named-IANA implementations.
 - The two decided DST edges: a spring-forward gap fires once, a fall-back repeat fires once.
 - The `spawn`/`resume` action and its three target kinds.
-- Bounds on every field, including the shorter `once` horizon a resume gets, because the harnesses prune their own transcripts.
+- Bounds on every field, including the shorter `once` horizon a resume gets, because the harnesses prune their own transcripts, and the end date and `when_live` policy.
+- `fires_per_day`, the measured frequency of a trigger, and `agent_schedule_verdict`, the pure decision of whether an agent may arm a schedule at its Project's `schedule_grant`.
 - The typed `ScheduleError` with its machine code and field map.
 
-**Not:** storage, spawning, resuming, permission, or any I/O.
+**Not:** storage, spawning, resuming, permission lookups, or any I/O.
 
 ### `schedule_store.py`
 
-Machine-local persistence for schedule definitions and run history on the shared single-thread store pattern, the unique `(schedule_id, fire_key)` claim that makes a fire idempotent across a daemon restart, revision-checked replacement, and run-history retention.
+Machine-local persistence for schedule definitions and run history on the shared single-thread store pattern.
+It owns the unique `(schedule_id, fire_key)` claim that makes a fire idempotent across a daemon restart, revision-checked replacement, and run-history retention.
+It also owns authorship, the conditional approval update, expiry, and the counts the agent bounds read (requests per author per hour, standing agent schedules per Project).
 
 **Not:** when to fire, whether a fire is allowed, or what a fire does.
+
+### `schedule_authoring.py`
+
+The one write path for schedules, for both authors.
+
+- A person's create, armed on save.
+- An agent's request: argument translation (`at`/`in_minutes`/`cron`/`every_minutes`, `self` and other resume targets), the verdict at the target Project's level, the lifetime, the per-Project cap, the hourly budget, duplicate suppression, model validation against the harness, and `dry_run`.
+- Approval and dismissal, and the decision notice to the agent that asked.
+- An agent's cancellation of its own schedule, and the agent-facing listing with the policy block.
+- The Fleet Queue's request cards.
+
+**Not:** firing, the fire-time re-check (`scheduler.py`), HTTP, or the MCP transport (`mcp.py`).
 
 ### `scheduler.py`
 
@@ -250,8 +265,9 @@ The sweep and every fire-time guard.
 - Advance-the-window-first, then claim-then-act.
 - The install switch and the per-Project `scheduled_runs` opt-in, checked at fire time rather than write time.
 - The missed-window policy: `catch_up` replays once, otherwise `missed`.
+- The expiry sweep, and the re-check of an agent-armed schedule against its Project's grant as it stands, which turns it back into a pending request when the level was lowered.
 - Overlap, the per-schedule daily cap, and the install-wide concurrency ceiling.
-- The resume path's target resolution and context ceiling, and the transient-versus-permanent classification of a refused resume.
-- Message staging, and the outcome and notification record.
+- The resume path's target resolution and context ceiling, delivery into a pane already holding the conversation (`when_live = deliver`), and the transient-versus-permanent classification of a refused resume.
+- Message staging - including the attribution header on agent-authored text and how each author's messages may be armed - and the outcome and notification record.
 
 **Not:** the spawn itself (injected `_spawn_from_body`), the resume itself (`session_resume.resume_run`), delivery (injected `PromptQueueService.enqueue`), trigger arithmetic (`schedules.py`), or HTTP.

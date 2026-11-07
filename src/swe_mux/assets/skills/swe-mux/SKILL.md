@@ -1,6 +1,6 @@
 ---
 name: swe-mux
-description: "Observe and coordinate with the swe-mux agent fleet this session runs inside: sibling sessions, live status, transcripts, history search, Project notes, bounded messages, settle waits. Use only when the user names swe-mux or mux, or asks about sibling sessions, the fleet, or another agent's work. Do not use merely because a task could benefit from delegation or a background terminal. Requires MUX_SESSION_ID."
+description: "Observe and coordinate with the swe-mux agent fleet this session runs inside: sibling sessions, live status, transcripts, history search, Project notes, bounded messages, settle waits, scheduled runs. Use only when the user names swe-mux or mux, asks about sibling sessions, the fleet, or another agent's work, or asks for agent work to run later or on a schedule. Do not use merely because a task could benefit from delegation or a background terminal. Requires MUX_SESSION_ID."
 metadata:
   managed-by: swe-mux
 ---
@@ -10,7 +10,8 @@ metadata:
 swe-mux runs coding agents in real terminals and gives every session a bounded view of its
 fleet: sibling sessions and their live status, transcripts, indexed history search, Project
 notes, message queues a human can supervise, and bounded acts - messaging a sibling, waiting
-for one to settle, requesting a spawn or a land.
+for one to settle, requesting a spawn or a land, and scheduling a run for later (a new
+session, or this conversation picked up again) under the target Project's own rules.
 
 Before acting on anything here, verify this agent is inside a swe-mux pane:
 
@@ -53,3 +54,8 @@ spawning sessions, reloading or updating the daemon - and bypasses the queues, a
 and provenance that make agent-to-agent actions reviewable. The daemon refuses the
 session-acting ones from an agent pane and names the agent surface instead. Do not run them
 unless the human operator explicitly asked for exactly that.
+
+The same holds for the daemon's HTTP API (`http://127.0.0.1:<port>/api/...`): it is the
+operator's interface, so anything written through it is recorded as the operator's act and
+skips every agent bound. When a capability exists as a fleet tool - scheduling included -
+use the tool; when it does not, say so rather than reaching for the HTTP API.

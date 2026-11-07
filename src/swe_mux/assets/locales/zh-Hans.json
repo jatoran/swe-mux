@@ -1592,5 +1592,12 @@
   "keybinding.warning.contested": "同时也是浏览器的“{action}”快捷键",
   "keybinding.warning.terminal": "Shell 将此按键视为“{action}”；可将绑定限定在终端之外，以保留两种用途",
   "keybinding.warning.altgr": "在多数非美式键盘布局中，AltGr 会产生 Ctrl+Alt，因此输入文字时也可能触发此绑定",
-  "keybinding.preset.invalidMessage": "快捷键预设的 {field} 字段引用了未知消息 {reference}"
+  "keybinding.preset.invalidMessage": "快捷键预设的 {field} 字段引用了未知消息 {reference}",
+  "agent_authority.schedule_grant": "在此安排计划运行",
+  "project_files.schedule_grant_invalid": "schedule_grant 必须为 draft、limited 或 granted",
+  "config.agent_schedule_budget": "每小时计划请求次数必须介于 0 和 1000 之间",
+  "config.agent_schedule_fire_limit": "每天触发次数必须介于 1 和 96 之间",
+  "config.agent_schedules_cap": "计划数量必须介于 0 和 500 之间",
+  "config.agent_schedule_max_days": "天数必须介于 1 和 365 之间",
+  "schedules.rearm_expired": "此计划已过结束日期；请先修改或清除结束日期，再重新启用。"
 }

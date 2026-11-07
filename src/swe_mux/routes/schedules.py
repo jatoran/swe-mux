@@ -17,18 +17,26 @@ from .. import (
 from ..config import Config
 from ..errors import NotFound
 from ..http_support import json_response
-from ..schedule_store import ScheduleStore
+from ..schedule_authoring import ScheduleAuthoringService
+from ..schedule_store import APPROVAL_PENDING, ScheduleStore
 from ..scheduler import ScheduleService, spec_from_row
-from ..schedules import first_occurrence, next_occurrence, parse_spec
+from ..schedules import fires_per_day, first_occurrence, next_occurrence, parse_spec
 from ..session_resume import resolve_latest_run
 from ..ui_messages import ui_message
-from .support import _observations_project
+from .support import _human_sender_kind, _observations_project
 
 log = logging.getLogger(__name__)
 
 
 def _schedule_service(request: web.Request) -> ScheduleService:
     service = request.app.get(keys.SCHEDULES)
+    if service is None:  # pragma: no cover - only a partially built app
+        raise web.HTTPServiceUnavailable(text="scheduled runs are unavailable")
+    return service
+
+
+def _authoring(request: web.Request) -> ScheduleAuthoringService:
+    service = request.app.get(keys.SCHEDULE_AUTHORING)
     if service is None:  # pragma: no cover - only a partially built app
         raise web.HTTPServiceUnavailable(text="scheduled runs are unavailable")
     return service
@@ -161,24 +169,8 @@ async def create_project_schedule(request: web.Request) -> web.Response:
     the response says so through `blocked`.
     """
     project = _observations_project(request)
-    store: ScheduleStore = request.app[keys.SCHEDULE_STORE]
     body = await request.json()
-    spec = parse_spec(body)
-    now = time.time()
-    schedule = await store.create(
-        project_id=project.id,
-        project_root=str(project.root),
-        spec=spec,
-        next_fire_at=first_occurrence(spec, now=now),
-        now=now,
-    )
-    await request.app[keys.EVENTS].emit(
-        "schedule_changed",
-        source="user",
-        action="created",
-        schedule_id=schedule["id"],
-        project_id=project.id,
-    )
+    schedule = await _authoring(request).create_for_person(project, body)
     return json_response(await _schedule_view(request, schedule), 201)
 
 
@@ -203,6 +195,20 @@ async def patch_schedule(request: web.Request) -> web.Response:
     if set(body) <= {"enabled", "revision"} and "enabled" in body:
         spec = spec_from_row(current)
         enabled = bool(body["enabled"])
+        if enabled and str(current.get("approval_state")) == APPROVAL_PENDING:
+            # Arming an agent's pending request from the tab is approving it, and goes
+            # through the one approval path so the decision is recorded and the agent
+            # that asked is told.
+            approved = await _authoring(request).decide(
+                schedule_id, "approve", decided_by=_human_sender_kind(request)
+            )
+            return json_response(await _schedule_view(request, approved))
+        if enabled and spec.expires_at is not None and spec.expires_at <= now:
+            # Re-arming an expired row would disarm it again on the next sweep, which
+            # reads as a switch that does nothing; the end date is what needs moving.
+            return json_response(
+                {"error": ui_message("schedules.rearm_expired"), "code": "expired"}, 409
+            )
         updated = await store.set_enabled(
             schedule_id,
             enabled,
@@ -218,6 +224,7 @@ async def patch_schedule(request: web.Request) -> web.Response:
             next_fire_at=first_occurrence(spec, now=now),
             revision=revision,
             now=now,
+            fires_per_day=fires_per_day(spec, now=now),
         )
         if updated is None:
             return json_response(
@@ -277,6 +284,21 @@ async def run_schedule_now(request: web.Request) -> web.Response:
     )
 
 
+async def decide_schedule(request: web.Request) -> web.Response:
+    """Approve or dismiss an agent's pending schedule request.
+
+    The Fleet Queue and the Schedule tab both call this; a decision taken on one
+    device answers `already_decided` on the other rather than winning twice.
+    """
+    schedule_id = request.match_info["schedule_id"]
+    body = await request.json()
+    decision = str(body.get("decision") or "").strip()
+    updated = await _authoring(request).decide(
+        schedule_id, decision, decided_by=_human_sender_kind(request)
+    )
+    return json_response(await _schedule_view(request, updated))
+
+
 async def list_schedule_runs(request: web.Request) -> web.Response:
     store: ScheduleStore = request.app[keys.SCHEDULE_STORE]
     schedule_id = request.match_info["schedule_id"]
@@ -318,5 +340,8 @@ ROUTES: tuple[web.RouteDef, ...] = (
     web.patch("/api/schedules/{schedule_id}", patch_schedule),
     web.delete("/api/schedules/{schedule_id}", delete_schedule),
     web.post("/api/schedules/{schedule_id}/run", run_schedule_now),
+    # Approving or dismissing an agent's pending request: the human act that arms
+    # it, or the one that says no. Reachable from the phone like every decision.
+    web.post("/api/schedules/{schedule_id}/decide", decide_schedule),
     web.get("/api/schedules/{schedule_id}/runs", list_schedule_runs),
 )

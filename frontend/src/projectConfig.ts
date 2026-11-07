@@ -174,6 +174,7 @@ const CONFLICT_LABELS: Record<string, string> = {
   get title_refinements() { return t("projectConfig.89d18222b3") },
   get session_control_grant() { return t("projectConfig.7d8b4b858d") },
   get spawn_grant() { return t("projectConfig.49433a2ce7") },
+  get schedule_grant() { return t("projectConfig.scheduleGrant") },
   get land_grant() { return t("projectConfig.962aba3835") },
   get land_verify_grant() { return t("projectConfig.6aa15e32b7") },
   get interject_grant() { return t("projectConfig.9dcff33c40") },
