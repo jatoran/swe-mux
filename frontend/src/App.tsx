@@ -253,6 +253,7 @@ import {
   DROP_LIST_MARGIN, edgeAutoScrollDelta, listDropTargetForPoint, MOBILE_HOLD_DRAG, MOBILE_HOLD_MOVE_DRAG, POINTER_MOVE_DRAG, pointerDragMoveDecision,
   reorderForHover, reorderTargetFromContainer, type DropSide, type ListDropTarget, type PointerDragActivation, type ReorderAxis, type ReorderTarget,
 } from './dragReorder'
+import { guardHeldPointer } from './holdMenuGuard.ts'
 import { claimPointerDrag, markPointerDragClaims, pointerDragOwnsPointer } from './pointerDragClaim'
 import { relativeStackTab } from './workspaceTabs'
 import {
@@ -1561,6 +1562,7 @@ export function App() {
       // A `hold` opens its menu here (via onStart) and shows no ghost yet — the drag begins
       // only once the finger travels past DRAG_BEGIN, which dismisses that menu. Every other
       // mode is a drag from the first instant it activates.
+      if(activation.mode==='hold')guardHeldPointer(pointerId)
       onStart()
       if(activation.mode!=='hold')beginDragVisual(clientX,clientY)
     }
@@ -1797,9 +1799,9 @@ if(keyboard.key==='Escape'){keyboard.preventDefault();finish(false)}}
   const beginLongPress = (event: JSX.TargetedPointerEvent<HTMLElement>, open: (x:number,y:number)=>void) => {
     if (event.pointerType !== 'touch') return
     cancelLongPress()
-    const {clientX,clientY}=event
-    longPressOrigin.current={pointerId:event.pointerId,x:clientX,y:clientY}
-    longPressTimer.current=window.setTimeout(()=>{navigator.vibrate?.(20);open(clientX,clientY);longPressTimer.current=null},550)
+    const {clientX,clientY,pointerId}=event
+    longPressOrigin.current={pointerId,x:clientX,y:clientY}
+    longPressTimer.current=window.setTimeout(()=>{guardHeldPointer(pointerId);navigator.vibrate?.(20);open(clientX,clientY);longPressTimer.current=null},550)
   }
 
   // Every enabled launch profile, shells and agents together. Surfaces that mean

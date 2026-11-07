@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'preact/hooks'
 import type { JSX } from 'preact'
+import { guardHeldPointer } from './holdMenuGuard.ts'
 
 /**
  * The three ways into a context menu on a chip that lives inside an `OverflowRail`.
@@ -85,6 +86,7 @@ export function useRailLongPress(holdMs = LONG_PRESS_MS): RailLongPress {
         timer.current = null
         suppress.current = true
         cancel()
+        guardHeldPointer(pointerId)
         navigator.vibrate?.(20)
         stamp(open, clientX, clientY)
       }, holdMs)

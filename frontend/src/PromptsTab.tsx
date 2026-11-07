@@ -6,6 +6,7 @@ import type { JSX } from 'preact'
 import { api } from './api'
 import { agentTargetName, agentTargets } from './agentTargets'
 import { wordReasons } from './deliveryReadiness'
+import { guardHeldPointer } from './holdMenuGuard.ts'
 import { clampContextMenuLeft, fitScrollingMenuInViewport } from './menuPosition'
 import { subscribeToPromptLibraryChanges } from './promptLibraryEvents'
 import { promptTemplateExcerpt, promptTemplateRef, renderPromptTemplate, type PromptTemplate } from './promptTemplates'
@@ -244,11 +245,12 @@ export function PromptsTab({ project, backend, onInsert, onDone, onManage, showM
     touchPress.current = event.pointerType === 'touch'
     if (!touchPress.current) return
     cancelLongPress()
-    const { clientX, clientY } = event
+    const { clientX, clientY, pointerId } = event
     pressOrigin.current = { x: clientX, y: clientY }
     longPress.current = window.setTimeout(() => {
       longPress.current = null
       suppressClick.current = true
+      guardHeldPointer(pointerId)
       navigator.vibrate?.(20)
       openMenu(item, clientX, clientY)
     }, LONG_PRESS_MS)

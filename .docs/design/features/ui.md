@@ -468,13 +468,18 @@ Its rules, and what each one is defending:
   Desktop right-click and mobile long-press target the named tab or session without changing the active Project, pane-active tab, focused view, or active terminal.
   The click synthesized after a sidebar long-press is consumed; normal click/tap remains the activation gesture.
   Menu actions operate on the captured target without selecting it unless the action explicitly opens or focuses that target.
-- Mobile Project long-press is not a context-menu gesture.
-  A 350 ms hold with no movement beyond 16 px picks up the Project; earlier vertical movement remains native sidebar scrolling and shows no reorder feedback.
+- **The finger that opened a menu cannot press anything in it.**
+  A hold opens its menu at the finger, so that finger can be resting on a row when the menu renders, and lifting it delivers a click there: long-press a Project low on the screen and land in Rename.
+  Holding longer does not avoid it (measured at 420 ms and 1500 ms), so `holdMenuGuard.ts` is keyed to the gesture rather than to a time since the menu opened: it swallows clicks while that pointer is down and for a moment after it lifts.
+  Any new press ends it at once, so a deliberate tap works however quickly it follows, and keyboard or scripted activation passes straight through.
+  Every driver that opens a menu from a touch hold arms it before the menu renders.
+- A mobile Project long-press is both a context-menu gesture and a pickup.
+  A 350 ms hold with no movement beyond 16 px opens the Project menu and picks up the Project; earlier vertical movement remains native sidebar scrolling and shows no reorder feedback.
   The slop is wide because past it the gesture is *cancelled* rather than deferred, so a narrow one turns a resting finger's jitter into a pickup that silently never happens.
-  Pickup closes open menus, claims the pointer, gives short haptic feedback, lifts the row, and enables insertion preview plus edge auto-scroll inside its current section.
+  Pickup claims the pointer, gives short haptic feedback, and leaves the menu open for as long as the finger stays put; moving past 12 px dismisses the menu, lifts the row, and enables insertion preview plus edge auto-scroll inside its current section.
   Once picked up it also **cancels `touchmove` for the rest of the drag**, without which the sidebar scrolled under the finger and the scroll cancelled the pointer — the row lifted and then nothing happened, which is what "mobile reordering does not work" looked like (`workspace-layout.md` § pointer drag contract).
-  `⋮` opens the Project context menu on tap, while desktop right-click retains the same menu.
-  Mobile sessions and every other sidebar row never start a sidebar drag; session long-press remains context-menu-only.
+  `⋮` opens the same menu on tap, and desktop right-click retains it.
+  Sessions follow the same hold-for-menu, move-to-drag gesture.
 - Both sidebar lists preview a drop as the **landing slot** — a dashed outline of the dragged row, labelled with its name, over the gap it would fall into — rather than as a line at the pointer.
   What a drag is asking is "which two rows does this end up between", and an outline the shape of the row answers it where a line marks only where the finger is.
   Sessions add a second, deliberately different preview for the other thing a drop can mean: landing on a row rather than between two merges the pair into one tabbed pane, and shows a blue row highlight instead of the green slot, because the two targets sit a few pixels apart and must not read as one.

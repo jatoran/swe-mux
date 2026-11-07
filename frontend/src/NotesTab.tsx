@@ -8,6 +8,7 @@ import { byProjectName } from './projectOptions'
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import { useDismissLevel, useModalFocus } from './modalFocus'
 import { dismissStack } from './dismissStack.ts'
+import { guardHeldPointer } from './holdMenuGuard.ts'
 import { OverflowRail } from './RailScroller'
 import {
   SCRATCHPAD_TAB_ID,
@@ -282,6 +283,7 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
     longPress.current=window.setTimeout(()=>{
       longPress.current=null;suppressClick.current=true
       cancelLongPress()
+      guardHeldPointer(pointerId)
       navigator.vibrate?.(20)
       openMenu(note,clientX,clientY)
     },LONG_PRESS_MS)

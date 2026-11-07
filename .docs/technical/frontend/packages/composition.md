@@ -204,6 +204,7 @@ One constant rather than a per-surface value is the point: a surface that picks 
 A `groupable` predicate turns a row that cannot be grouped with into pure insertion over its whole height, rather than a middle band that quietly does nothing.
 `DROP_LIST_MARGIN` is how far outside a list the pointer may stray before the drop resolves to nothing, which keeps a session drag from committing to a Project the pointer has left.
 `pointerDragClaim.ts` is deliberately process-wide: a running drag claims the pointer there so the mobile gesture recognizer stands down, which is arbitration between two window-level listeners and has nowhere else to live.
+`holdMenuGuard.ts` is process-wide for a smaller reason: only one finger can be holding a menu open, and the click it must swallow can land anywhere. Every driver that opens a menu from a touch hold arms it, before the menu renders.
 
 ### Sidebar ordering and attention
 
@@ -211,7 +212,7 @@ A `groupable` predicate turns a row that cannot be grouped with into pure insert
 Its device-local persistence holds only the two sort modes and Group fold state; Recently used ranks the daemon-owned `Project.last_used_at` timestamps.
 Both levels take the same contract - manual order in, stable sort out - so `custom` is a pass-through and the hand arrangement is every mode's tie-break.
 `projectRecency.ts` reports successful prompt submissions from terminal, Queue, and voice surfaces, and `App.tsx` records successful user-initiated session starts through the same daemon endpoint and applies monotone `project_used` events from every client.
-Those events include the daemon's own stamps for sessions an agent started through mux, which no browser can report, so the sidebar moves without a client write.
+Those events include the daemon's own stamps for a session coming to life for any other reason, which no browser can report, so the sidebar moves without a client write.
 Opening or focusing any surface is never a recency signal.
 `bucketRecency` makes a Group as recent as its most recently used Project, and `mergeVisibleOrder` folds a permutation of the rendered rows back into the full list so hidden Projects and empty Groups keep their slots.
 

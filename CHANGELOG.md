@@ -15,6 +15,21 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+### Changed
+
+- **Recently used now follows activity in a Project's sessions, whatever caused it.**
+  A Project moves up when one of its sessions starts, wakes for a new turn, resumes after an approval, or receives a message from another session, as well as when you use it yourself.
+  That covers scheduled runs, loops and background tasks waking an agent, and any other session started through mux.
+  A message still waiting for your approval does not count until it is delivered, and plain shells count when they start rather than per command.
+- **A new Project now appears at the top of Recently used**, instead of below every Project that had any recorded use.
+  So does a removed Project you add back.
+
+### Fixed
+
+- **Long-pressing on a phone can no longer press a menu row by itself.**
+  A menu opens under your finger, so lifting that finger could immediately run whichever row it had landed on, most often Rename on a Project low on the screen.
+  This applies to every menu opened by a long press.
+
 ## [0.4.2] - 2026-11-06
 
 ### Fixed

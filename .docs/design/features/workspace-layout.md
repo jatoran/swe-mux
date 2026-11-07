@@ -250,6 +250,9 @@ PaneLeaf = terminal | note | preview | history | queue
   and the swipe that toggles a panel are the same motion over the same pixels, so only the drag
   knows which one is happening. Claiming at the threshold rather than at pointer-down keeps a
   swipe that merely *starts* on a draggable tab working. See `ui.md` § touch gestures.
+- A `hold` that opens a menu arms `holdMenuGuard.ts` before it does, because the finger still on
+  the screen would otherwise press whatever menu row rendered under it on the way up. The drag
+  itself is unaffected: moving past 12 px dismisses the menu and lifts the row as before.
 - The Settings → Actions editor (`ui.md` § Action rail) reuses this contract with one deliberate departure, forced by reparenting.
   It does drive Preact render state on every move, because the preview *is* the config a drop would commit; that is affordable only because the modal has a bounded number of chips, and it is not a licence to do the same on the workspace.
   Everything else holds, and holds because it is the **same** contract rather than a second copy of it: 5px for pointers, the shared `MOBILE_HOLD_DRAG` hold-to-lift for touch (350ms, 16px slop), capture on `document.body`, the `touchmove` cancel, the native-`contextmenu` suppression, one ghost, pointer-drag claim, and cancel on Escape/pointer-cancel/blur.
