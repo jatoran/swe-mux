@@ -7028,7 +7028,7 @@
   "projectConfig.fd347d09cf": "审批上限",
   "projectConfigState.5bdb9c7aa1": "尚未读取此项目的 .swe-mux/config.toml。",
   "projectGroups.ed51cfeff0": "未知项目",
-  "projectSort.0175554500": "最近提交提示词或启动会话的优先",
+  "projectSort.0175554500": "最近有会话活动的优先",
   "projectSort.1e092356e2": "最早注册的项目优先",
   "projectSort.1e7cf8df9b": "最近使用",
   "projectSort.3634933710": "手动排序",

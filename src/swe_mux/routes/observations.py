@@ -24,7 +24,6 @@ from ..project_files import (
     update_observation_request,
     write_observations,
 )
-from ..projects import mark_session_start_used
 from ..prompt_queue import QueueError
 from ..ui_messages import error_text, ui_message
 from . import sessions, terminal
@@ -321,13 +320,6 @@ async def decide_observation_request(request: web.Request) -> web.Response:
     if cwd:
         spawn_body["cwd"] = cwd
     session = await sessions._spawn_from_body(request.app, spawn_body)
-    await mark_session_start_used(
-        request.app[keys.PROJECTS],
-        request.app[keys.EVENTS],
-        project.id,
-        reason="spawn_request_approved",
-        source="user",
-    )
     pane_hint = str(spawn_request.get("pane") or "")
     if pane_hint in {"split_horizontal", "split_vertical"}:
         # The requester's deferred placement ask, honoured only now that a

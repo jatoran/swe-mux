@@ -114,45 +114,6 @@ async def test_approving_a_request_that_named_no_model_carries_none(
     assert "model" not in bodies[0]
 
 
-@pytest.mark.asyncio
-async def test_approving_counts_as_use_of_the_project_the_session_started_in(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Under a `draft` grant this is how an agent's cross-Project spawn starts, so it
-    has to move that Project under Recently used exactly as a granted one does."""
-    root = tmp_path / "work"
-    root.mkdir()
-    project = ProjectRecord(id="p1", name="Work", root=str(root), position=0)
-    observation_id = await _draft(root, project, prompt="run it", backend="claude")
-
-    async def fake_spawn(_app: Any, _body: dict[str, Any]) -> Any:
-        return SimpleNamespace(
-            record=SimpleNamespace(id="new-1", snapshot=lambda: {"id": "new-1"})
-        )
-
-    async def touch_used(project_id: str) -> Any:
-        project.last_used_at = 2000.0
-        return project
-
-    monkeypatch.setattr(session_routes, "_spawn_from_body", fake_spawn)
-    request = _request(root, observation_id, project)
-    request.app[keys.PROJECTS].touch_used = touch_used
-
-    await observation_routes.decide_observation_request(cast(Any, request))
-
-    used = [
-        payload for name, payload in request.app[keys.EVENTS].emitted if name == "project_used"
-    ]
-    assert used == [
-        {
-            "source": "user",
-            "project_id": "p1",
-            "last_used_at": 2000.0,
-            "reason": "spawn_request_approved",
-        }
-    ]
-
-
 class _WatchStub:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []

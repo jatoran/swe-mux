@@ -138,7 +138,7 @@ Fields and invariants: `features/daemon-resilience.md`.
   `position`; `projects.created_at` dates the registration, and `0` means unknown — databases
   written before the column are backfilled from the earliest session ever spawned in the
   Project, and one that never ran a session keeps `0` rather than being dated at upgrade time.
-  `projects.last_used_at` is the shared prompt-submit/session-start recency stamp used by Recently used sorting, counting sessions an agent started through mux; `0` means unmeasured.
+  `projects.last_used_at` is the shared recency stamp used by Recently used sorting: registration, a person's prompt submit or session start, and any of the Project's sessions coming to life; `0` means unmeasured.
   Existing databases seed it from the latest non-imported session start because older exact prompt-submit evidence does not exist.
   General `last_activity` remains derived per request from `history` and is not a recency-sort input.
   `projects.git_compare_ref` is a nullable exact ref override for Git review display, migrated additively for existing databases and preserved by unrelated Project patches.

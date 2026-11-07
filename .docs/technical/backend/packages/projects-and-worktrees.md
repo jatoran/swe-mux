@@ -13,6 +13,13 @@ Project and Group validation and lifecycle, including tombstoned removal, same-r
 
 **Not:** Git-derived identity, or file content.
 
+### `project_activity.py`
+
+The event-bus consumer that advances a Project's Recently used stamp when one of its sessions comes to life: a start, a root turn opening, `working` reached from another state, or a delivered queue message.
+It coalesces the several reports one activation makes, and dates a turn from when it began so a re-adopted turn cannot reorder the sidebar after a restart.
+
+**Not:** the stamp itself, which `projects.py` owns, or what a browser reports for itself through `POST /api/projects/{project_id}/used`.
+
 ### `leaf_names.py`
 
 The shared Windows-safe filesystem-leaf validator - invalid characters, reserved device stems, caller-supplied control-directory refusals - and the deterministic name-to-folder normalization mirrored by the frontend's `suggestFolderName`.

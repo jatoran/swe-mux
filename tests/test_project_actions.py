@@ -4,7 +4,7 @@ import json
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from aiohttp import web
@@ -19,7 +19,6 @@ from swe_mux.project_actions import (
     loads_jsonc,
     process_invocation,
 )
-from swe_mux.routes import project_actions as project_action_routes
 from swe_mux.routes.project_actions import list_project_actions, run_project_action
 from swe_mux.server import error_middleware
 
@@ -336,57 +335,3 @@ async def test_action_api_discovers_but_refuses_untrusted_execution(tmp_path: Pa
     assert [item["id"] for item in catalog["actions"]] == ["package:dev"]
     assert run_response.status == 409
     assert refused["code"] == "project_actions_trust_required"
-
-
-@pytest.mark.parametrize(
-    ("origin", "stamped"),
-    [("agent", ["agent"]), ("assistant", ["assistant"]), ("user", [])],
-)
-async def test_an_action_counts_as_use_only_when_no_browser_will_report_it(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, origin: str, stamped: list[str]
-) -> None:
-    """The Run menu marks its own start, so stamping that too would be a second writer."""
-    root = tmp_path / "project"
-    root.mkdir()
-    (root / "package.json").write_text('{"scripts":{"dev":"vite"}}', encoding="utf-8")
-    project = SimpleNamespace(
-        id="project-one", root=str(root), name="Project One", last_used_at=0.0
-    )
-    service = ProjectActionService(tmp_path / "data")
-    service.trust(str(root), service.catalog(str(root)).fingerprint)
-    used: list[str] = []
-    emitted: list[tuple[str, dict[str, Any]]] = []
-
-    async def touch_used(project_id: str) -> Any:
-        used.append(project_id)
-        return project
-
-    async def emit(name: str, **payload: Any) -> None:
-        emitted.append((name, payload))
-
-    async def profile_id(_app: Any, _project: Any) -> str:
-        return "default"
-
-    async def spawn(_app: Any, _body: dict[str, Any]) -> Any:
-        return SimpleNamespace(
-            record=SimpleNamespace(id="task-1", snapshot=lambda: {"id": "task-1"}),
-            publish_update=lambda: None,
-        )
-
-    monkeypatch.setattr(project_action_routes, "_project_profile_id_for", profile_id)
-    monkeypatch.setattr(project_action_routes.session_routes, "_spawn_from_body", spawn)
-    app: dict[Any, Any] = {
-        keys.PROJECT_ACTIONS: service,
-        keys.CONFIG: Config(data_dir=tmp_path / "data"),
-        keys.PROJECTS: SimpleNamespace(projects={project.id: project}, touch_used=touch_used),
-        keys.EVENTS: SimpleNamespace(emit=emit),
-    }
-
-    await project_action_routes._start_project_action(
-        cast(Any, app), cast(Any, project), "package:dev", {}, origin=origin
-    )
-
-    assert [
-        payload["source"] for name, payload in emitted if name == "project_used"
-    ] == stamped
-    assert len(used) == len(stamped)

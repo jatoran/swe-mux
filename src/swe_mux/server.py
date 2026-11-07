@@ -157,6 +157,7 @@ from .project_actions import (
     ProjectActionService,
     preview_action_run,
 )
+from .project_activity import ProjectActivityService
 from .project_context import ProjectContext, ProjectContextService
 from .project_files import (
     ProjectConfigConflict,
@@ -1927,6 +1928,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     # commit's changed files are matched against. Without it (or with Tier 0 off
     # for a Project) committer attribution still works and contributors stay empty.
     git_provenance_service = GitProvenanceService(history, sessions, events, tier0)
+    project_activity = ProjectActivityService(projects, sessions, events)
     hooks = MetaHookEngine(config.data_dir / "hooks.toml", events, sessions)
     # Pruned by `RETENTION_LOOP` a minute after start, not here.
     automation_store = AutomationStore(config.database_path)
@@ -2812,6 +2814,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     scan_timeline.start()
     timeline.mark("start-loops")
     git_provenance_service.start()
+    project_activity.start()
     git_monitor.start()
     hooks.start()
     automation.start()
@@ -3028,6 +3031,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
             keys.SUPERVISOR: supervisor_client,
             keys.GIT_MONITOR: git_monitor,
             keys.GIT_PROVENANCE: git_provenance_service,
+            keys.PROJECT_ACTIVITY: project_activity,
             keys.HOOKS: hooks,
             keys.AUTOMATION: automation,
             keys.AUTOMATION_STORE: automation_store,
@@ -3226,6 +3230,7 @@ async def _teardown_runtime(app: web.Application) -> None:  # noqa: PLR0912, PLR
         keys.GHOST_WINDOWS,
         keys.GIT_MONITOR,
         keys.GIT_PROVENANCE,
+        keys.PROJECT_ACTIVITY,
         keys.STALL_WATCHDOG,
     ):
         await _stop_handle(app, key)

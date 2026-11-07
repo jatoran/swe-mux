@@ -344,19 +344,58 @@ async def test_project_use_is_monotone_shared_and_survives_unrelated_updates(
     root = tmp_path / "repo"
     root.mkdir()
     project = await projects.create("Main", str(root))
-    assert project.last_used_at == 0.0
 
-    touched = await projects.touch_used(project.id, used_at=2_000.0)
-    assert touched.last_used_at == 2_000.0
-    assert (await projects.touch_used(project.id, used_at=1_000.0)).last_used_at == 2_000.0
-    assert (await projects.update(project.id, name="Renamed")).last_used_at == 2_000.0
+    future = project.last_used_at + 2_000.0
+    touched = await projects.touch_used(project.id, used_at=future)
+    assert touched.last_used_at == future
+    assert (await projects.touch_used(project.id, used_at=future - 1_000.0)).last_used_at == future
+    assert (await projects.update(project.id, name="Renamed")).last_used_at == future
     history.close()
 
     reopened_history = HistoryIndex(tmp_path / "mux.db")
     reopened = ProjectManager(reopened_history)
     await reopened.start()
-    assert reopened.projects[project.id].last_used_at == 2_000.0
+    assert reopened.projects[project.id].last_used_at == future
     reopened_history.close()
+
+
+async def test_a_new_project_counts_as_just_used(tmp_path: Path) -> None:
+    """Recently used sorted a new Project below every Project with any recorded use, so
+    the one just added was the one furthest down the list."""
+    history = HistoryIndex(tmp_path / "mux.db")
+    projects = ProjectManager(history)
+    await projects.start()
+    root = tmp_path / "repo"
+    root.mkdir()
+
+    project = await projects.create("Main", str(root))
+
+    assert project.last_used_at == project.created_at > 0
+    history.close()
+    reopened_history = HistoryIndex(tmp_path / "mux.db")
+    reopened = ProjectManager(reopened_history)
+    await reopened.start()
+    assert reopened.projects[project.id].last_used_at == project.last_used_at
+    reopened_history.close()
+
+
+async def test_adding_a_project_back_counts_as_just_used(tmp_path: Path) -> None:
+    """Same list, same complaint: its old stamp would leave it wherever it last ranked."""
+    history = HistoryIndex(tmp_path / "mux.db")
+    projects = ProjectManager(history)
+    await projects.start()
+    root = tmp_path / "repo"
+    root.mkdir()
+    project = await projects.create("Main", str(root))
+    project.last_used_at = 1_000.0
+    await history.upsert_project(project)
+    await projects.remove(project.id)
+
+    restored = await projects.register("Main", str(root))
+
+    assert restored.restored is True
+    assert restored.project.last_used_at > 1_000.0
+    history.close()
 
 
 async def test_last_used_migration_seeds_from_latest_non_imported_session_start(

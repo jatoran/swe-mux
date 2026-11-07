@@ -153,13 +153,18 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
 - "Recently used" reads the daemon-persisted `ProjectRecord.last_used_at` timestamp, so mobile and desktop rank the same Project use.
   The sort-mode selection remains device-local; selecting Recently used on one browser does not change another browser's selected mode.
   A successful explicit prompt submission or user-initiated session start advances the timestamp through `POST /api/projects/{project_id}/used`.
-  A session an agent starts through mux advances the target Project's timestamp from the daemon, because no browser saw that start: a granted `request_spawn` once its pane has survived the settle window, an approved drafted spawn, a Project Action run by an agent or the assistant, and the assistant's daemon-side spawn.
-  A drafted spawn nobody approved, and a pane that died while settling, started nothing and do not count.
-  That stamp is best effort, because the session already exists: a failed write is logged as `project_used_not_recorded` and never reported as a failed start, which would make an agent retry and start a second session.
+  Registering a Project stamps it, and so does adding back one that was removed, because under this sort the Project just added is the one being looked for.
+  A session coming to life advances its Project's timestamp from the daemon, for any reason and whoever caused it, because most of those have no browser involved (`project_activity.py`).
+  That means a session starting (whether a person, an agent, a Project Action, or a scheduled run started it), a root turn opening (a loop firing, a background task waking the agent), `working` being reached from any other state (an answered approval), or a queued message being delivered, which is the only signal for one landing mid-turn.
+  The moment of *becoming* active is what counts, so a turn that runs for an hour holds the stamp it opened with, and finishing a turn, ending a session, and a subagent's turn change nothing.
+  A message still waiting for approval has not reached the session and changes nothing until it is delivered, and a shell counts when it starts rather than per command, because it has no turns to observe.
+  A pane that dies during startup still counts, since the session did start.
+  One activation reports up to three times (a delivered message opens a turn, which reports both a state change and a turn start), so anything within five seconds of the Project's existing stamp is dropped rather than written and fanned out again.
+  A turn's stamp is dated from when the turn began, which a session working across a restart re-adopts along with its `turn_started`, so a daemon restart or a redeploy does not reorder the sidebar.
+  The stamp is best effort and runs on its own bus subscription: a failed write is logged as `project_used_not_recorded` and cannot reach the start or delivery that caused it.
   The daemon emits `project_used` with the resulting timestamp so every connected client updates without a fleet refetch.
-  Opening or focusing a Project, session, note, file, preview, Queue, or other resource never changes it.
-  Agent output, state transitions, session completion, session removal, history timestamps, scheduled runs, and background automation never change it.
-  A Project without a recorded action is unmeasured and retains manual-order tie-breaking.
+  Opening or focusing a Project, session, note, file, preview, Queue, or other resource never changes it, and neither does background automation that drives no session.
+  A Project without a recorded action, which now means one registered before this stamp existed and never used since, is unmeasured and retains manual-order tie-breaking.
   The timestamp survives browser storage loss, a daemon restart, and a desktop redeploy.
   Existing databases seed the new field from the latest non-imported session start because no older exact prompt-submit record exists.
 - Device-local Group fold state is pruned against the registered Groups, so a Group id that is deleted and later reused cannot inherit a fold the user never applied.
@@ -318,7 +323,7 @@ reordering takes the same contract, including the `expected_order` guard that an
 order_conflict` when a second device already moved something — two devices each writing a full
 permutation would otherwise let the loser silently win.
 
-Project payloads carry `created_at` (registration), daemon-persisted `last_used_at` (user use, or a session an agent started through mux), derived `last_activity` (latest session activity from history), `history_count`, and `root_available`.
+Project payloads carry `created_at` (registration), daemon-persisted `last_used_at` (registration, user use, or one of its sessions coming to life), derived `last_activity` (latest session activity from history), `history_count`, and `root_available`.
 Time fields use epoch seconds with `0` when unknown.
 `POST /api/projects` returns `restored=true` and HTTP 200 when the canonical root revives a tombstoned Project; a new registration returns `restored=false` and HTTP 201.
 `DELETE /api/projects/{id}` tombstones the registration and returns `history_preserved`; a live-session conflict is HTTP 409 with `code=project_has_live_sessions` plus the blocking session identities.

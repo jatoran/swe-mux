@@ -7028,7 +7028,7 @@
   "projectConfig.fd347d09cf": "the approval ceiling",
   "projectConfigState.5bdb9c7aa1": "This Project’s .swe-mux/config.toml has not been read yet.",
   "projectGroups.ed51cfeff0": "Unknown project",
-  "projectSort.0175554500": "Latest prompt submit or session start first",
+  "projectSort.0175554500": "Latest session activity first",
   "projectSort.1e092356e2": "Longest-registered Project first",
   "projectSort.1e7cf8df9b": "Recently used",
   "projectSort.3634933710": "Manual order",

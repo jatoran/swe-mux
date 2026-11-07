@@ -71,6 +71,7 @@ if TYPE_CHECKING:
     from .process_reaper import ProcessReaper
     from .processes import PreviewRegistry, ProcessInspector
     from .project_actions import ProjectActionService
+    from .project_activity import ProjectActivityService
     from .project_context import ProjectContextService
     from .project_watcher import ProjectFileWatcher
     from .projects import ProjectManager
@@ -189,6 +190,7 @@ FLEET: web.AppKey[FleetIntelligence] = web.AppKey("fleet")
 GHOST_WINDOWS: web.AppKey[GhostWindowSweeper] = web.AppKey("ghost_windows")
 GIT_MONITOR: web.AppKey[GitMonitor] = web.AppKey("git_monitor")
 GIT_PROVENANCE: web.AppKey[GitProvenanceService] = web.AppKey("git_provenance")
+PROJECT_ACTIVITY: web.AppKey[ProjectActivityService] = web.AppKey("project_activity")
 HOOKS: web.AppKey[MetaHookEngine] = web.AppKey("hooks")
 LAND_QUEUE: web.AppKey[LandQueueService] = web.AppKey("land_queue")
 LAND_STORE: web.AppKey[LandStore] = web.AppKey("land_store")

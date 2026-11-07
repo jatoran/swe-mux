@@ -222,6 +222,8 @@ class ProjectManager:
             )
             removed.group_id = group_id
             removed.sidebar_visible = True
+            # Adding a Project back is as recent an act as adding one for the first time.
+            removed.last_used_at = max(removed.last_used_at, time.time())
             self.projects[removed.id] = removed
             await self.history.upsert_project(removed)
             log.info(
@@ -230,6 +232,9 @@ class ProjectManager:
                 removed.root,
             )
             return ProjectRegistrationResult(removed, restored=True)
+        # Stamped as used, so Recently used shows a new Project at the top rather than below
+        # every Project with any recorded use.
+        registered_at = time.time()
         project = ProjectRecord(
             id=str(uuid.uuid4()),
             name=label,
@@ -237,7 +242,8 @@ class ProjectManager:
             position=max((item.position for item in self.projects.values()), default=-1) + 1,
             group_id=group_id,
             layout=normalize_layout(None),
-            created_at=time.time(),
+            created_at=registered_at,
+            last_used_at=registered_at,
         )
         self.projects[project.id] = project
         await self.history.upsert_project(project)
@@ -463,10 +469,16 @@ class ProjectManager:
 
 
 async def mark_project_used(
-    projects: ProjectManager, events: Any, project_id: str, *, reason: str, source: str
+    projects: ProjectManager,
+    events: Any,
+    project_id: str,
+    *,
+    reason: str,
+    source: str,
+    used_at: float | None = None,
 ) -> ProjectRecord:
     """Advance a Project's Recently used stamp and tell every connected client."""
-    project = await projects.touch_used(project_id)
+    project = await projects.touch_used(project_id, used_at=used_at)
     await events.emit(
         "project_used",
         source=source,
@@ -482,25 +494,3 @@ async def mark_project_used(
         project.last_used_at,
     )
     return project
-
-
-async def mark_session_start_used(
-    projects: Any, events: Any, project_id: str, *, reason: str, source: str
-) -> None:
-    """Count a session the daemon started for an agent, from a path with no browser.
-
-    A browser reports its own launches. The daemon is the only party that sees a
-    session an agent started through mux, so it stamps the target Project itself.
-    Best effort, because the session already exists: a failed sort stamp must not
-    report that start as a failure to the caller, who would retry and start another.
-    """
-    try:
-        await mark_project_used(projects, events, project_id, reason=reason, source=source)
-    except Exception:  # noqa: BLE001 - the session is up; only the sort stamp was lost
-        log.warning(
-            "project_used_not_recorded project_id=%s reason=%s source=%s",
-            project_id,
-            reason,
-            source,
-            exc_info=True,
-        )
