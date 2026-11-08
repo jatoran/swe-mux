@@ -49,6 +49,13 @@ The checkout resolution, the lock claim, and the detached spawn moved to `redepl
 
 **Not:** the restart's successor-spawn policy beyond spawning it, or the redeploy build itself (`packaging/redeploy_desktop.py`).
 
+### `routes/desktop_integration.py`
+
+What a PyPI install can add later (shortcut status and writes, whether the tray can import), and the session-link hand-off for a browser tab a link opened.
+`handoff_refusal` is the one place that decides whether a tab should try `swe-mux://`: Windows, a client that is this machine (`peer_is_this_host` over `network_usage.request_peer`), and an installed handler.
+
+**Not:** writing the link type (`desktop_links.register_link_protocol`, run by the shell) or applying a link in the page (`frontend/src/sessionLinks.ts`).
+
 ### `routes/maintenance.py`
 
 `GET /api/maintenance/factory-reset` (what one would take, measured rather than described - the live sessions named, the entries it would move, the keepers, the worktrees it leaves, the last result) and `POST` (write the request, reap every session and stop the supervisor, spawn the successor, stop).

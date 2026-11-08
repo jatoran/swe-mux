@@ -92,6 +92,8 @@ single-writer telemetry store, which the daemon buffers for instead.
 - `desktop.py`: Windows single-instance shell, tray/window lifecycle, login startup, daemon
   supervision, and desktop control token.
 - `desktop_window_state.py`: versioned desktop geometry persistence and monitor-safe restore.
+- `desktop_links.py`: session links into the desktop app - the `swe-mux://` vocabulary, its
+  per-user registration, the second-launch mailbox, and the daemon's in-memory hand-off record.
 - `desktop_renderer.py`: WebView2 sandboxed-iframe isolation and recovery of a crashed or hung
   page into safe mode; `desktop_webview.py` holds the UI-thread access rules it shares with
   `desktop_permissions.py`.

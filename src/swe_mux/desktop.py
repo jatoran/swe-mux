@@ -21,8 +21,19 @@ from typing import Any, TextIO
 
 from .config import Config, load_config
 from .daemon_recovery import PROBE_TIMEOUT_SECONDS, DaemonRecovery, recovery_lock
+from .desktop_links import (
+    OPEN_LINK_FLAG,
+    SessionLink,
+    delivery_script,
+    drain_links,
+    page_url,
+    parse_session_link,
+    post_link,
+    register_link_protocol,
+)
 from .desktop_permissions import WebviewMicrophoneGrant
 from .desktop_renderer import BROWSER_ARGUMENTS_ENV, RendererGuard, configure_webview_isolation
+from .desktop_webview import await_webview_control, on_ui_thread
 from .desktop_window_state import (
     DEFAULT_WINDOW_HEIGHT,
     DEFAULT_WINDOW_WIDTH,
@@ -48,6 +59,8 @@ CONTROL_TOKEN_NAME = "desktop-control.token"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 RUN_VALUE = "swe-mux"
 ERROR_ALREADY_EXISTS = 183
+#: `AllowSetForegroundWindow(ASFW_ANY)`: lets the running instance take the foreground.
+ASFW_ANY = 0xFFFFFFFF
 WAIT_OBJECT_0 = 0
 WAIT_TIMEOUT = 258
 MB_OK = 0x00000000
@@ -70,6 +83,12 @@ DAEMON_HEALTH_TIMEOUT_SECONDS = 300.0
 # Cadence of the post-start health poll that loads the window once a daemon that
 # outlived the budget finally answers.
 DAEMON_HEALTH_POLL_SECONDS = 0.5
+# How long a link delivery waits for pywebview to have built its WebView2 control. The
+# running window has one already; this only matters for a link that arrives while the
+# shell is still starting, and the fallback after it is a plain navigation.
+LINK_CONTROL_WAIT_SECONDS = 15.0
+# How long a link delivery waits for the UI thread to run the posted script.
+LINK_UI_WAIT_SECONDS = 5.0
 # The tray-menu restart waits far less, and for a different reason: pystray runs
 # a menu action on its message thread, so waiting there freezes the tray. It also
 # has nothing to wait for - the window already exists and its SPA reconnects to
@@ -365,8 +384,18 @@ class WindowsSingleInstance:
             raise ctypes.WinError(ctypes.get_last_error())
 
     def signal_existing(self) -> None:
-        if self.event:
-            self.kernel32.SetEvent(self.event)
+        """Wake the running instance, and let it take the foreground when it does.
+
+        Windows gives foreground rights to the process the user just started (from a
+        shortcut, or from a browser opening a ``swe-mux://`` link), not to the instance
+        that was already running, which would otherwise only flash in the taskbar.
+        Passing them on is best effort: refused, the window still restores.
+        """
+        if not self.event:
+            return
+        with suppress(Exception):
+            ctypes.windll.user32.AllowSetForegroundWindow(ctypes.c_uint32(ASFW_ANY))
+        self.kernel32.SetEvent(self.event)
 
     def wait_for_activation(self, timeout_ms: int = 500) -> bool:
         return bool(
@@ -384,11 +413,17 @@ class WindowsSingleInstance:
 
 
 class DesktopRuntime:
-    def __init__(self, config: Config, *, hidden: bool = False) -> None:
+    def __init__(
+        self, config: Config, *, hidden: bool = False, initial_link: SessionLink | None = None
+    ) -> None:
         self.config = config
         configure_native_language(config.config_path)
         self.hidden = hidden
         self.url = local_url(config)
+        # A cold launch from a `swe-mux://` link opens straight onto the linked session; the
+        # page reads it from its own URL exactly as it reads a web link.
+        self.initial_link = initial_link
+        self.start_url = page_url(self.url, initial_link) if initial_link else self.url
         self.child: subprocess.Popen[bytes] | None = None
         self.window: Any = None
         self.icon: Any = None
@@ -874,6 +909,111 @@ class DesktopRuntime:
         while not self.stop.is_set():
             if self.instance.wait_for_activation():
                 self.show()
+                self.deliver_pending_links()
+
+    def deliver_pending_links(self) -> None:
+        """Hand every link a second launch left in the mailbox to the window, oldest first.
+
+        Each is applied by the page in order, so the last one is what stays focused, and
+        every one that carried a browser tab's hand-off id is reported back to that tab.
+        """
+        try:
+            drained = drain_links(self.config.data_dir)
+        except Exception as exc:  # noqa: BLE001 - a bad mailbox must not end activation
+            ledger(self.config.data_dir, f"desktop link mailbox unreadable: {exc}")
+            return
+        if drained.dropped:
+            summary = " ".join(
+                f"{reason}={count}" for reason, count in sorted(drained.dropped.items())
+            )
+            ledger(self.config.data_dir, f"desktop link mailbox dropped {summary}")
+        for link in drained.links:
+            self.deliver_link(link)
+
+    def deliver_link(self, link: SessionLink) -> None:
+        """Put `link` in front of the running page without reloading it, if it can.
+
+        `ExecuteScriptAsync` posted to the UI thread, for the reasons `desktop_permissions`
+        gives for its marker: `evaluate_js` blocks on pywebview's readiness and round-trips a
+        result nobody needs. The script itself falls back to navigating when the document is
+        not the app. Only when there is no WebView2 control to talk to at all does this
+        navigate from here instead, which reloads the page onto the link.
+        """
+        window = self.window
+        if window is None or self.exiting:
+            ledger(
+                self.config.data_dir,
+                f"desktop link dropped session={link.session_id} handoff={link.handoff or '-'}: "
+                "no window",
+            )
+            return
+        script = delivery_script(link, self.url)
+        try:
+            control = await_webview_control(window, wait_seconds=LINK_CONTROL_WAIT_SECONDS)
+        except Exception:  # noqa: BLE001 - the navigation fallback below still works
+            control = None
+        outcome: list[str] = []
+        ran = threading.Event()
+
+        def push() -> None:
+            try:
+                core = control.CoreWebView2 if control is not None else None
+                if core is None:
+                    outcome.append("no-core")
+                    return
+                core.ExecuteScriptAsync(script)
+                outcome.append("script")
+            except Exception as exc:  # noqa: BLE001 - reported on the caller's thread
+                outcome.append(f"error {type(exc).__name__}: {exc}")
+            finally:
+                ran.set()
+
+        if control is not None:
+            try:
+                # Posted, then waited on with a bound: a wedged UI thread must not take
+                # the activation loop (and every later launch's "bring forward") with it.
+                on_ui_thread(window.native, push, wait=False)
+            except Exception as exc:  # noqa: BLE001
+                outcome.append(f"error {type(exc).__name__}: {exc}")
+                ran.set()
+            if not ran.wait(LINK_UI_WAIT_SECONDS):
+                # Still queued on a busy UI thread; it runs the script when it gets there,
+                # so navigating as well would only reload the page under it.
+                outcome.append("queued")
+        via = outcome[0] if outcome else "no-control"
+        if via not in {"script", "queued"}:
+            try:
+                window.load_url(page_url(self.url, link))
+            except Exception as exc:  # noqa: BLE001
+                ledger(
+                    self.config.data_dir,
+                    f"desktop link failed session={link.session_id} "
+                    f"handoff={link.handoff or '-'}: {type(exc).__name__}: {exc}",
+                )
+                return
+            via = f"navigate ({via})"
+        ledger(
+            self.config.data_dir,
+            f"desktop link delivered session={link.session_id} "
+            f"handoff={link.handoff or '-'} via={via}",
+        )
+
+    def register_link_type(self) -> None:
+        """Keep the per-user `swe-mux://` registration pointing at this shell.
+
+        Every start, because the registration must name the executable that would answer
+        it: a redeploy, an update or a move changes that, and an entry naming a missing
+        program is what the daemon refuses to send a browser tab to. Writes only when
+        the value differs, and never fails the start.
+        """
+        assert self.config.config_path is not None
+        try:
+            command = register_link_protocol(self.config.config_path)
+        except OSError as exc:
+            ledger(self.config.data_dir, f"could not register the swe-mux:// link type: {exc}")
+            return
+        if command is not None:
+            ledger(self.config.data_dir, f"registered the swe-mux:// link type: {command}")
 
     def load_when_healthy(self) -> None:
         """Load the window once a daemon that outlived the start budget answers.
@@ -889,7 +1029,7 @@ class DesktopRuntime:
                 ledger(self.config.data_dir, "daemon answered health; loading the window")
                 window = self.window
                 if window is not None:
-                    window.load_url(self.url)
+                    window.load_url(self.start_url)
                 return
             child = self.child
             if child is not None and child.poll() is not None:
@@ -949,6 +1089,13 @@ class DesktopRuntime:
         # the user with a healthy daemon and nothing to talk to it.
         healthy = self.ensure_daemon()
         self._start_daemon_recovery()
+        self.register_link_type()
+        if self.initial_link is not None:
+            ledger(
+                self.config.data_dir,
+                f"desktop shell opening on link session={self.initial_link.session_id} "
+                f"handoff={self.initial_link.handoff or '-'}",
+            )
         webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
         self._enable_webview_debugging(webview)
         # Before pywebview creates the WebView2 environment, which reads it once.
@@ -962,7 +1109,7 @@ class DesktopRuntime:
         )
         self.window = webview.create_window(
             "swe-mux",
-            self.url,
+            self.start_url,
             width=window_state.width if window_state else DEFAULT_WINDOW_WIDTH,
             height=window_state.height if window_state else DEFAULT_WINDOW_HEIGHT,
             x=window_state.x if window_state else None,
@@ -1163,6 +1310,9 @@ def desktop_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="swe-mux", description=ui_message("desktop.1329db8aaa"))
     parser.add_argument("--config", type=Path)
     parser.add_argument("--hidden", action="store_true", help=ui_message("desktop.2e71f4c457"))
+    # What Windows passes for a `swe-mux://` link (`desktop_links.protocol_command`). Not a
+    # flag a person types, so it stays out of the help.
+    parser.add_argument(OPEN_LINK_FLAG, dest="open_link", metavar="URL", help=argparse.SUPPRESS)
     return parser
 
 
@@ -1207,9 +1357,24 @@ def _parse_desktop_arguments(arguments: list[str]) -> argparse.Namespace:
         if exit_request.code not in (0, None):
             report_launch_failure(
                 f"swe-mux does not understand: {' '.join(arguments)}\n"
-                "Usage: swe-mux [--hidden] [--config PATH]"
+                "Usage: swe-mux [--hidden] [--config PATH] [--open-link swe-mux://open?session=ID]"
             )
         raise
+
+
+def _requested_link(config: Config, raw: str | None) -> SessionLink | None:
+    """The link a `swe-mux://` launch carried, or None.
+
+    An unreadable link still launches (or brings forward) the app, because that is what
+    the person who clicked it is most likely to want; what it said is only logged, and
+    only by length, since any web page can launch the scheme with any text.
+    """
+    if raw is None:
+        return None
+    link = parse_session_link(raw)
+    if link is None:
+        ledger(config.data_dir, f"desktop link ignored: not a session link ({len(raw)} chars)")
+    return link
 
 
 def _run_desktop_shell(arguments: list[str]) -> None:
@@ -1220,9 +1385,20 @@ def _run_desktop_shell(arguments: list[str]) -> None:
         # Now that the config is known, the crash-traceback sink is armed before
         # anything native runs, rather than partway through `DesktopRuntime`.
         enable_crash_tracebacks(config.data_dir)
-        runtime = DesktopRuntime(config, hidden=args.hidden)
+        link = _requested_link(config, args.open_link)
+        # A link is always a visible launch: it exists to put a session on screen.
+        hidden = args.hidden and link is None
+        runtime = DesktopRuntime(config, hidden=hidden, initial_link=link)
         if runtime.instance.already_running:
-            if not args.hidden:
+            if link is not None:
+                # Before the signal, so the running shell finds it when it wakes.
+                post_link(config.data_dir, link)
+                ledger(
+                    config.data_dir,
+                    f"desktop link handed to the running shell session={link.session_id} "
+                    f"handoff={link.handoff or '-'}",
+                )
+            if not hidden:
                 runtime.instance.signal_existing()
             runtime.instance.close()
             return

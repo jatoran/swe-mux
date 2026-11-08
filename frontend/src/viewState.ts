@@ -55,6 +55,24 @@ export function resolveInitialFocus(
   return { projectId, sessionId }
 }
 
+/** The view to focus on load, once `resolveInitialFocus` has chosen the Project and session.
+ *
+ * A session named by a followed link (`sessionLinks.followedLink`) is what someone tapped to
+ * see, so it outranks the per-device memory of what was last looked at in that Project, which
+ * would otherwise open the link on whatever tab the device remembered. Anything else restores
+ * the remembered view when the layout still holds it, then the chosen session.
+ */
+export function initialFocusedView(
+  selected: { projectId: string; sessionId: string | null },
+  linkedSessionId: string | null,
+  remembered: string | null,
+  layoutViewIds: string[],
+): { viewId: string | null; linked: boolean } {
+  if (linkedSessionId && selected.sessionId === linkedSessionId) return { viewId: linkedSessionId, linked: true }
+  const viewId = remembered && layoutViewIds.includes(remembered) ? remembered : selected.sessionId
+  return { viewId, linked: false }
+}
+
 /** Keep an explicit terminal selection regardless of lifecycle.
  *
  * A session becoming terminal does not make its pane stale. If the selected

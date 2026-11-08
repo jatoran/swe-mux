@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { focusMemoryWith, parseFocusMemory, parseViewPreference, reconcileFocusView, installViewUrlReassert, rememberedView, resolveActiveSession, resolveInitialFocus, viewUrl } from '../src/viewState.ts'
+import { focusMemoryWith, initialFocusedView, parseFocusMemory, parseViewPreference, reconcileFocusView, installViewUrlReassert, rememberedView, resolveActiveSession, resolveInitialFocus, viewUrl } from '../src/viewState.ts'
 
 const sessions = [
   { id: 'first', project_id: 'default', state: 'running' },
@@ -28,6 +28,37 @@ test('an explicit URL may select a retained ended session', () => {
     { lastProject: 'default', byProject: { default: 'first' }, viewByProject: {} },
   )
   assert.deepEqual(selected, { projectId: 'work', sessionId: 'ended' })
+})
+
+test('a followed link is the focused view even where the device remembers another one', () => {
+  // The Android report: the link opened the right Project and then showed the tab the
+  // device remembered for it, because the remembered view outranked the URL's session.
+  const memory = { lastProject: 'work', byProject: { work: 'first-work' }, viewByProject: { work: 'note:plan' } }
+  const selected = resolveInitialFocus(
+    [...sessions, { id: 'first-work', project_id: 'work', state: 'running' }],
+    ['default', 'work'],
+    { default: ['first'], work: ['first-work'] },
+    parseViewPreference('?session=wanted'),
+    memory,
+  )
+  assert.deepEqual(selected, { projectId: 'work', sessionId: 'wanted' })
+  assert.deepEqual(
+    initialFocusedView(selected, 'wanted', rememberedView(memory, 'work'), ['first-work', 'wanted', 'note:plan']),
+    { viewId: 'wanted', linked: true },
+  )
+})
+
+test('without a link, the remembered view is restored while the layout still holds it', () => {
+  const selected = { projectId: 'work', sessionId: 'wanted' }
+  // The app's own URL (a reload) is not a link, so a focused note survives it.
+  assert.deepEqual(initialFocusedView(selected, null, 'note:plan', ['wanted', 'note:plan']), { viewId: 'note:plan', linked: false })
+  assert.deepEqual(initialFocusedView(selected, null, 'note:gone', ['wanted']), { viewId: 'wanted', linked: false })
+  // A link to a session that no longer exists resolved to something else: the old
+  // behaviour applies, remembered view included.
+  assert.deepEqual(
+    initialFocusedView({ projectId: 'work', sessionId: 'first-work' }, 'deleted', 'note:plan', ['first-work', 'note:plan']),
+    { viewId: 'note:plan', linked: false },
+  )
 })
 
 test('per-device focus wins before the first visible session', () => {

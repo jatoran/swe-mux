@@ -248,7 +248,8 @@ import { dismissStack } from './dismissStack.ts'
 import { useDismissLevel } from './modalFocus'
 import { installSystemBack } from './systemBack.ts'
 import { composeBackTarget, viewBackEnabled, viewHistory, type ViewEntry, type ViewNavigator, type ViewPosition } from './viewHistory.ts'
-import { focusMemoryWith, installViewUrlReassert, parseFocusMemory, parseViewPreference, reconcileFocusView, rememberedView, resolveActiveSession, resolveInitialFocus, viewUrl, type ViewSelection } from './viewState'
+import { focusMemoryWith, initialFocusedView, installViewUrlReassert, parseFocusMemory, parseViewPreference, reconcileFocusView, rememberedView, resolveActiveSession, resolveInitialFocus, viewUrl, type ViewSelection } from './viewState'
+import { desktopHandoffEligible, runDesktopHandoff, sessionLinks, standaloneDisplay, type DesktopHandoffStart, type DesktopHandoffState, type SessionLinkRequest } from './sessionLinks'
 import {
   DROP_LIST_MARGIN, edgeAutoScrollDelta, listDropTargetForPoint, MOBILE_HOLD_DRAG, MOBILE_HOLD_MOVE_DRAG, POINTER_MOVE_DRAG, pointerDragMoveDecision,
   reorderForHover, reorderTargetFromContainer, type DropSide, type ListDropTarget, type PointerDragActivation, type ReorderAxis, type ReorderTarget,
@@ -474,6 +475,9 @@ export function App() {
   // The same rule the Agent Environment catalog carries: an empty list must say
   // which kind of empty it is.
   const [workspaceLoaded, setWorkspaceLoaded] = useState(false)
+  // The first sessions slice has arrived. A session link is judged against the list only
+  // after this, so "that session no longer exists" is never a list that has not loaded yet.
+  const [sessionsLoaded, setSessionsLoaded] = useState(false)
   // Bumped whenever a fleet refresh installs a harness registry: the accessors that
   // read it (`allBackendNames`, `harnessDisplayName`) are module functions over a
   // global, so this counter is what tells memoized work that their answers changed.
@@ -1856,6 +1860,7 @@ if(keyboard.key==='Escape'){keyboard.preventDefault();finish(false)}}
         return reconcileSessionSnapshots(current,visible,optimistic)
       })
       claimPaneHints(visible)
+      setSessionsLoaded(true)
     }
     if (nextProjects) {
       setProjects(nextProjects)
@@ -3343,11 +3348,18 @@ if(keyboard.key==='Escape'){keyboard.preventDefault();finish(false)}}
     const selected=resolveInitialFocus(sessions,projects.map(project=>project.id),visibleByProject,requestedView.current,focusMemory.current)
     setProjectId(selected.projectId)
     setActiveId(selected.sessionId)
-    // Restore the last focused view (which may be a note or file) when it still
-    // exists in the project's layout; otherwise fall back to the resolved session.
+    // A followed session link wins outright; otherwise restore the last focused view (which
+    // may be a note or file) when it still exists in the project's layout, falling back to
+    // the resolved session. Making the link the visible tab of its pane is the link effect's
+    // job (`applySessionLinks`), which also covers a link the session list was too late for.
     const layout=layoutMap[selected.projectId]||parseLayout(projects.find(project=>project.id===selected.projectId)?.layout)
-    const remembered=rememberedView(focusMemory.current,selected.projectId)
-    setFocusedViewId(remembered&&leaves(layout).some(leaf=>leaf.id===remembered)?remembered:selected.sessionId)
+    const initial=initialFocusedView(
+      selected,
+      sessionLinks.initial?.sessionId??null,
+      rememberedView(focusMemory.current,selected.projectId),
+      leaves(layout).map(leaf=>leaf.id),
+    )
+    setFocusedViewId(initial.viewId)
     setFocusHydrated(true)
   },[focusHydrated,sessions,projects,layoutMap])
 
@@ -5042,6 +5054,71 @@ if(keyboard.key==='Escape'){keyboard.preventDefault();finish(false)}}
       return
     }
     await updateLayout(session.project_id,isPaned?activateContainingStack(current,session.id):openTab(current,focusedViewId,terminalLeaf(session.id)))
+  }
+
+  // Session links (`sessionLinks.ts`): a followed web link, a desktop cold start, or a link the
+  // desktop shell handed to this running window. Applied only once focus has hydrated and the
+  // session list has loaded, so a link to a session that no longer exists falls back to the
+  // ordinary view rather than to a list that had not arrived yet.
+  const [sessionLinkTick,setSessionLinkTick]=useState(0)
+  const [linkNotice,setLinkNotice]=useState('')
+  useEffect(()=>sessionLinks.subscribe(()=>setSessionLinkTick(tick=>tick+1)),[])
+  useEffect(()=>{
+    if(!focusHydrated||!sessionsLoaded||sessionLinks.size===0)return
+    applySessionLinks(sessionLinks.drain())
+  },[sessionLinkTick,focusHydrated,sessionsLoaded])
+  const applySessionLinks=(requests:SessionLinkRequest[])=>{
+    const resolved=requests.map(request=>({request,session:sessionsRef.current.find(item=>item.id===request.sessionId)??null}))
+    for(const {request,session} of resolved){
+      console.info(`[session-link] ${request.source} link to ${request.sessionId}: ${session?'found':'not found; keeping the current view'}`)
+      // Reported whether or not the session exists: either way the desktop window now has
+      // the link, and the browser tab that asked is no better placed to show it.
+      if(request.handoff){
+        const handoff=request.handoff
+        void api('POST',`/api/desktop/link-handoffs/${encodeURIComponent(handoff)}/opened`,{found:!!session},{timeoutMs:10_000})
+          .catch((error:unknown)=>console.info(`[session-link] could not report handoff ${handoff}: ${error instanceof Error?error.message:String(error)}`))
+      }
+    }
+    // Only the newest link naming a real session moves focus; earlier ones in a burst are
+    // superseded, and applying each in turn would only race their layout writes.
+    const target=[...resolved].reverse().find(item=>item.session)
+    if(!target?.session)return
+    // The same act as picking it in the sidebar: focus it, and make it the visible tab of
+    // its pane (or open it as one), which focus alone does not do for a background tab.
+    void selectSession(target.session)
+    if(desktopHandoffEligible({host:host.host,platform:host.platform,standalone:standaloneDisplay(),source:target.request.source})){
+      void handOffToDesktop(target.session.id)
+    }
+  }
+  /** Give this browser tab's link to the desktop app, and close the tab once the app has it. */
+  const handOffToDesktop=async(sessionId:string)=>{
+    let interacted=false
+    const mark=()=>{interacted=true}
+    window.addEventListener('pointerdown',mark,true)
+    window.addEventListener('keydown',mark,true)
+    try{
+      const outcome=await runDesktopHandoff(sessionId,{
+        start:id=>api<DesktopHandoffStart>('POST','/api/desktop/link-handoffs',{session_id:id},{timeoutMs:10_000}),
+        poll:async id=>{
+          try{
+            return await api<DesktopHandoffState>('GET',`/api/desktop/link-handoffs/${encodeURIComponent(id)}`,undefined,{timeoutMs:5_000})
+          }catch(error){
+            if((error as ApiError).status===404)return {state:'unknown'}
+            throw error
+          }
+        },
+        launch:url=>window.location.assign(url),
+        close:()=>window.close(),
+        wait:ms=>new Promise(resolve=>window.setTimeout(resolve,ms)),
+        interacted:()=>interacted,
+        now:()=>Date.now(),
+        note:message=>console.info(`[session-link] ${message}`),
+      })
+      if(outcome==='opened_tab_kept')setLinkNotice(t('sessionLinks.openedInDesktop'))
+    }finally{
+      window.removeEventListener('pointerdown',mark,true)
+      window.removeEventListener('keydown',mark,true)
+    }
   }
 
   /** Anything that counts as still using the filter, which restarts its idle clock:
@@ -9362,8 +9439,9 @@ if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.pre
 
     {/* One stack, not two independently anchored toasts: both used to be pinned
         to the same corner and would render exactly on top of each other. */}
-    {(redeployNotice || error) && <div class="toast-stack">
+    {(redeployNotice || linkNotice || error) && <div class="toast-stack">
       {redeployNotice && <div class="toast redeploy-notice" role="alert" onClick={() => setRedeployNotice('')}>{redeployNotice}<span>×</span></div>}
+      {linkNotice && <div class="toast link-notice" role="status" onClick={() => setLinkNotice('')}>{linkNotice}<span>×</span></div>}
       {error && <div class="toast" onClick={() => setError('')}>{error}<span>×</span></div>}
     </div>}
   </div>

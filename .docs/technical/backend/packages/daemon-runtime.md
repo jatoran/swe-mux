@@ -430,10 +430,21 @@ Copyleft ships only with an `ALLOWLIST` entry naming the reason and the relink s
 ### `desktop.py`
 
 Windows tray and WebView lifecycle, single instance, login startup, and daemon child supervision.
+It also answers `swe-mux://` links: `--open-link` posts the link to the running instance's mailbox before signalling it, or opens a cold window at the link's page URL, and `deliver_link` hands a drained link to the page with `ExecuteScriptAsync` on the UI thread.
 It is a `[project.gui-scripts]` entry, so its launcher opens no console and the process has `sys.stdout is None` and `sys.stderr is None`; `redirect_gui_streams` runs first in `main` and points both at `<data_dir>/desktop-shell.log`, and `report_launch_failure` puts a startup failure in a message box, in the lifecycle ledger, and in that log with its traceback.
 Without those three the entry-point choice would be a net loss, since invisible is worse than a stray console window - `argparse` alone dies on `None.write` inside its own error reporter.
 
 **Not:** PTYs, HTTP composition, or Project and session state.
+
+### `desktop_links.py`
+
+Session links into the desktop app, as one vocabulary shared by the shell and the daemon (`../../../design/features/desktop-shell.md` § Session links).
+`parse_session_link` reduces an untrusted `swe-mux://open?session=&handoff=` link to two pattern-checked ids or refuses it whole; `delivery_script` carries one into a running page as JSON.
+`register_link_protocol` keeps `HKCU\Software\Classes\swe-mux` naming the running shell and writes only on a difference; `link_handler_installed` is the daemon's "would a link launch anything" check.
+`post_link` and `drain_links` are the second launch's mailbox under `<data_dir>/desktop-links/`, and `LinkHandoffRegistry` is the daemon's bounded in-memory record of browser tabs waiting for the desktop page to report.
+It imports neither the shell's toolkit nor the daemon's runtime, so both sides and the tests use it directly.
+
+**Not:** delivering a link into WebView2 (`desktop.DesktopRuntime.deliver_link`), deciding whether a browser tab is on this machine (`routes/desktop_integration.py`), or applying a link in the page (`frontend/src/sessionLinks.ts`).
 
 ### `desktop_window_state.py`
 

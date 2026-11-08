@@ -571,10 +571,17 @@ begin
   // entry out of a shared value; `uninsdeletevalue` on `Path` would delete the
   // user's entire PATH.
   RemoveCliDirFromPath;
-  if not RegQueryStringValue(HKCU,
-      'Software\Microsoft\Windows\CurrentVersion\Run', 'swe-mux', Existing) then
-    Exit;
   Root := ExpandConstant('{app}');
-  if Pos(Lowercase(Root), Lowercase(Existing)) > 0 then
-    RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'swe-mux');
+  if RegQueryStringValue(HKCU,
+      'Software\Microsoft\Windows\CurrentVersion\Run', 'swe-mux', Existing) then
+    if Pos(Lowercase(Root), Lowercase(Existing)) > 0 then
+      RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'swe-mux');
+  // The swe-mux:// link type, by the same rule. This installer never writes it:
+  // the desktop app registers itself on every start (`desktop_links.py`), so the
+  // registration names whichever copy ran last. Only one naming this directory is
+  // ours to take back; one naming another install or a checkout is left alone.
+  if RegQueryStringValue(HKCU,
+      'Software\Classes\swe-mux\shell\open\command', '', Existing) then
+    if Pos(Lowercase(Root), Lowercase(Existing)) > 0 then
+      RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\swe-mux');
 end;

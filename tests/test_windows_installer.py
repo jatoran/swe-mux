@@ -269,6 +269,23 @@ def test_uninstall_removes_only_a_login_value_that_names_this_install() -> None:
     assert "RegDeleteValue(HKCU," in text
 
 
+def test_uninstall_takes_back_only_a_link_registration_that_names_this_install() -> None:
+    """The desktop app registers `swe-mux://` itself, so the installer only removes it.
+
+    By the same target rule as the login value: a registration naming another install or a
+    source checkout is not this uninstaller's, and one naming this directory would point
+    every session link at a program that no longer exists.
+    """
+    body = script_text().split("procedure CurUninstallStepChanged", 1)[1]
+    assert "'Software\\Classes\\swe-mux\\shell\\open\\command'" in body
+    assert "RegDeleteKeyIncludingSubkeys(HKCU, 'Software\\Classes\\swe-mux');" in body
+    guard = body.index("'Software\\Classes\\swe-mux\\shell\\open\\command'")
+    removal = body.index("RegDeleteKeyIncludingSubkeys")
+    assert "if Pos(Lowercase(Root), Lowercase(Existing)) > 0 then" in body[guard:removal]
+    # Nothing in [Registry] writes it, so nothing at install time can disagree with the app.
+    assert "swe-mux\\shell" not in section("[Registry]")
+
+
 # --- the console client and PATH ----------------------------------------------
 
 

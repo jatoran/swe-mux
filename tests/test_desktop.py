@@ -465,6 +465,8 @@ def tray_runtime(tmp_path: Path) -> DesktopRuntime:
     runtime.window = None
     runtime.icon = None
     runtime.hidden = False
+    runtime.initial_link = None
+    runtime.start_url = runtime.url
     runtime.exiting = False
     runtime.stop = threading.Event()
     return runtime

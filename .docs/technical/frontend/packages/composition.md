@@ -19,6 +19,17 @@ Index: `../packages.md`.
 - `sessionFocusHistory.ts` owns the bounded per-Project most-recently-focused stack that session choice consults.
   It is fed from the settled active session rather than from `setActiveId`'s many call sites, and is held in memory because it answers "where was I just now" (`../workspace-state.md`).
 
+## Session links
+
+`sessionLinks.ts`, `viewState.ts` (`initialFocusedView`)
+
+- One inbox for every way a session link reaches the page: the page's own URL, the desktop shell's `window.__swemuxOpenSessionLink` hook, and a desktop cold start's `?session=&handoff=` (`../../../design/features/desktop-shell.md` § Session links).
+- `installSessionLinkInbox()` runs in `main.tsx` before the first render: it reads the link the page was opened with, strips the single-use `handoff` with `history.replaceState`, and installs the hook so a link arriving during startup is queued.
+- `followedLink` tells a link from the app's own projected URL: no `project=` means a link however the page was reached, and a URL with one is a link only on a fresh navigation.
+- `App.tsx` drains the inbox once focus has hydrated and the first sessions slice has arrived, applies the newest link that names a real session with `selectSession`, and reports every hand-off id to the daemon whether or not its session exists.
+- `runDesktopHandoff` is the browser tab's side of the Windows hand-off, with every effect injected so its endings are unit-tested; `desktopHandoffEligible` limits it to a Windows browser tab a link opened.
+- `initialFocusedView` is why a followed link outranks the per-device remembered view on load, and the reason a reload of an ordinary tab still restores a focused note.
+
 ## Release update banner and install dialog
 
 `UpdateBanner.tsx`, `UpdateDialog.tsx`, `updateCheck.ts`

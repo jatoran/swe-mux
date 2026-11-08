@@ -7313,6 +7313,7 @@
   "schedules.inactiveExpired": "expired",
   "schedules.inactivePaused": "paused",
   "schedules.outcomeDelivered": "delivered",
+  "sessionLinks.openedInDesktop": "Opened in the swe-mux desktop app. You can close this tab.",
   "sessionRowConfig.00275e06ce": "Slash /",
   "sessionRowConfig.057b5de48d": "Minimal",
   "sessionRowConfig.1d7419521b": "Arrow ›",

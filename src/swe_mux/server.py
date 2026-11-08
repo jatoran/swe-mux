@@ -70,6 +70,7 @@ from .db_maintenance import clear_request as clear_maintenance_request
 from .db_maintenance import describe as describe_maintenance
 from .db_maintenance import read_request as read_maintenance_request
 from .db_maintenance import run_maintenance
+from .desktop_links import LinkHandoffRegistry
 from .deterministic_consumers import ConsumerContext, DeterministicConsumerService
 from .device_presence import DevicePresenceStore
 from .errors import NotFound, TelemetryUnavailable
@@ -197,6 +198,7 @@ from .routes import notes as notes_routes
 from .routes import project_actions as project_action_routes
 from .routes import sessions as session_routes
 from .routes import terminal as terminal_routes
+from .routes.desktop_integration import note_expired_handoff
 from .routes.pty import SessionTerminalHost
 from .routes.support import _registered_identity
 from .runtime_config import CONFIG_WATCH_LOOP, watch_config
@@ -722,6 +724,7 @@ def create_app(
     # Mutable holder because aiohttp freezes app keys once started; carries the
     # externally-signaled shutdown intent (quit vs restart/detach) to cleanup.
     app[keys.SHUTDOWN_STATE] = {"intent": None}
+    app[keys.DESKTOP_LINK_HANDOFFS] = LinkHandoffRegistry(on_expired=note_expired_handoff)
     if desktop_control_token is not None and desktop_shutdown_event is not None:
         app[keys.DESKTOP_CONTROL_TOKEN] = desktop_control_token
         app[keys.DESKTOP_SHUTDOWN_EVENT] = desktop_shutdown_event

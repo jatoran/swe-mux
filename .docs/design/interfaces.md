@@ -252,7 +252,21 @@ daemon it is already talking to and reloads itself.
 ```text
 GET  /api/desktop/integration
 POST /api/desktop/integration/shortcuts   {remove?: bool, slots?: ["start-menu"|"desktop"|"startup"]}
+POST /api/desktop/link-handoffs                      {session_id} -> {attempt: true, handoff_id, url}
+                                                                   | {attempt: false, reason}
+GET  /api/desktop/link-handoffs/{handoff_id}         -> {handoff_id, session_id, state: "pending"|"opened", found}
+                                                        | 404 {state: "unknown"}
+POST /api/desktop/link-handoffs/{handoff_id}/opened  {found: bool} -> the same record | 404
 ```
+
+**Session-link hand-offs** (`design/features/desktop-shell.md` § Session links).
+A Windows browser tab that a session link opened asks whether to hand the link to the desktop
+app; `reason` is `unsupported` (not Windows), `other_device` (the client is not this machine,
+judged from the forwarded peer behind Tailscale Serve), or `not_installed` (no `swe-mux://`
+registration naming an executable that exists). `url` is the `swe-mux://open?session=&handoff=`
+link the tab launches. The desktop page that takes the link reports `opened`, and the tab closes
+on seeing it. A malformed `session_id` is a 400; an unknown or expired hand-off is a 404 the tab
+reads as "stay". Records are in memory, 600 s, 64 at most.
 
 ROADMAP Phase 24 (`design/features/desktop-shell.md`, `routes/desktop_integration.py`).
 The status reports both halves from one answer: per-slot shortcut presence, and whether this

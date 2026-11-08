@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     from .clipboard_store import ClipboardStore
     from .code_graph import CodeGraphStore
     from .config import Config
+    from .desktop_links import LinkHandoffRegistry
     from .deterministic_consumers import DeterministicConsumerService
     from .device_presence import DevicePresenceStore
     from .event_bus import EventBus
@@ -137,6 +138,9 @@ DESKTOP_CONTROL_TOKEN: web.AppKey[str] = web.AppKey("desktop_control_token")
 DESKTOP_SHUTDOWN_EVENT: web.AppKey[asyncio.Event] = web.AppKey("desktop_shutdown_event")
 DAEMON_STOP_EVENT: web.AppKey[asyncio.Event] = web.AppKey("daemon_stop_event")
 DAEMON_RELAUNCH_COMMAND: web.AppKey[list[str]] = web.AppKey("daemon_relaunch_command")
+#: Browser tabs a session link opened, waiting for the desktop app to take the link
+#: (`desktop_links.py`). In memory only: a hand-off is seconds of one tab's life.
+DESKTOP_LINK_HANDOFFS: web.AppKey[LinkHandoffRegistry] = web.AppKey("desktop_link_handoffs")
 
 # --- rate-limit and concurrency state ---------------------------------------
 

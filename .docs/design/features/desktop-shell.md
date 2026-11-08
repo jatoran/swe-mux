@@ -29,6 +29,11 @@ continues to own every terminal.
 
 - One instance exists per resolved config path. A second visible launch signals the existing
   instance to restore/focus; a duplicate hidden login launch exits silently.
+  A second launch carrying a `swe-mux://` link also hands the link to the running window, and a
+  launch with a link is always visible (§ Session links).
+  The second launch calls `AllowSetForegroundWindow(ASFW_ANY)` before signalling, because Windows
+  gives foreground rights to the process the user just started rather than to the running
+  instance, which would otherwise only flash in the taskbar.
 - Startup probes `/api/health`. A healthy daemon is reused; otherwise the tray starts a
   consoleless child. **A daemon that answers 503 is starting, not healthy**: the daemon binds
   its listeners before it builds its runtime, so a bound port is no longer evidence of a usable
@@ -170,7 +175,70 @@ Three independent layers now hold, each covering what the others cannot:
 **The tray can always reach the page.**
 "Reload window (previews paused)" calls `RendererGuard.safe_reload()`: it terminates the renderer rather than asking a hung one to navigate, reloads with the `operator_reload` reason, is never refused by the recovery budget, and shows the window.
 
+## Session links
+
+A session link is `https://<host>/?session=<id>`, the form agents send (Telegram buttons accept only http(s), so it stays a web URL).
+Opening one lands on that session, as the visible tab of its pane: in the installed PWA, in a browser, and on Windows in the desktop app when it is installed.
+When the session no longer exists, the page falls back to its ordinary startup view and nothing is handed anywhere.
+
+### Landing on the session (every client)
+
+- **A followed link outranks the per-device focus memory.**
+  `viewState.initialFocusedView` focuses the linked session on load where it used to restore the view the device remembered for that Project, which is why Android opened the right Project on the wrong tab.
+- **A link is told apart from the app's own URL** (`sessionLinks.followedLink`).
+  The app projects its focus into the URL with `replaceState` and always writes `project=` there, so a URL naming a session and no Project is a link however the page was reached.
+  A URL that does name its Project counts as a link only on a fresh navigation (`PerformanceNavigationTiming.type === "navigate"`); a reload or a history step reads back what the tab itself wrote, and the remembered view (perhaps a note) still wins.
+- **Android's open-window case needs nothing extra.**
+  Android points an already-open PWA window at the link, which is a full navigation, so the page starts again and takes the same path as a cold launch.
+- **The link is applied once focus has hydrated and the first sessions slice has arrived** (`sessionsLoaded` in `App.tsx`).
+  "This session no longer exists" is then a real answer, never a fleet refresh that lost its sessions slice.
+  Applying is `selectSession`, the same act as picking the session in the sidebar: focus, activate its pane's tab or open it as a tab.
+
+### Handing a browser tab to the desktop app (Windows)
+
+```text
+browser tab ── POST /api/desktop/link-handoffs ──▶ daemon: same machine? handler installed?
+     │  attempt + swe-mux://open?session=&handoff=
+     ├── location.assign(swe-mux://...) ──▶ Windows ──▶ swe-mux.exe --open-link <url>
+     │                                                    ├─ running: mailbox + activation event
+     │                                                    └─ cold: window opens at /?session=&handoff=
+     │                                       desktop page ── POST .../{handoff}/opened ──▶ daemon
+     └── polls GET .../{handoff} ── opened ──▶ window.close()
+```
+
+- **The desktop app registers a per-user `swe-mux://` link type on every start** (`desktop_links.register_link_protocol`, `HKCU\Software\Classes\swe-mux`).
+  Every start, because the registration must name the executable and config that would answer it, and a redeploy, update or move changes that; the command mirrors `startup_command`'s executable choice and passes `--config` so the launch reaches the same single instance.
+  It writes only when the value differs and never fails the start.
+  The installer never writes it; its uninstaller removes it only when it names the install directory, by the same rule as the login value (§ The Windows installer).
+- **The daemon decides whether a tab should try at all**, because only it can see where the tab is.
+  `POST /api/desktop/link-handoffs` answers `attempt: false` off Windows (`unsupported`), for a browser that is not this machine (`other_device`), and when no registered handler names an executable that exists (`not_installed`).
+  "This machine" is a loopback peer or one of the host's own interface addresses, read from the forwarded client when the direct peer is a local proxy (`network_usage.request_peer`): this PC opening the Tailscale URL arrives as its own tailnet address (measured 2026-11-08), a phone or another PC as its own.
+  That check is what keeps a tab on another device from launching a link nothing there answers - a browser may replace the page with an error for an unhandled scheme (Firefox does for a top-level navigation), the one way this could leave a dead page.
+- **Only a Windows browser tab a link just opened asks** (`sessionLinks.desktopHandoffEligible`): never the desktop app's own page, an installed PWA window, a mobile client, a reload, or a session that does not exist.
+- **The tab is the full web UI on the linked session throughout.**
+  It closes only when the desktop page reports it took the link; it stays when the daemon says not to try, when the browser's "Open swe-mux?" prompt is cancelled, when nothing reports within 90 s, when the hand-off is unknown, or as soon as the person clicks or types in it.
+  A tab a script may not close (one with history behind it) shows "Opened in the swe-mux desktop app" instead.
+- **A second launch hands the link over through a mailbox**, `<data_dir>/desktop-links/`, one atomically renamed JSON file per link, written before the existing activation event is set.
+  The running shell drains it oldest first on activation; entries older than 120 s, malformed, or past 16 are dropped and counted in `lifecycle.log`, so a window that recovers minutes later does not jump to a stale link.
+- **The running window takes the link without reloading.**
+  `deliver_link` posts `delivery_script` with `ExecuteScriptAsync` on the UI thread (not `evaluate_js`, for the reasons § WebView2 permissions gives) and waits at most 5 s for it to run, so a wedged UI thread cannot take the activation loop with it.
+  The script calls `window.__swemuxOpenSessionLink`, installed in `main.tsx` before the first render; a document without it (WebView2's error page, `about:blank`) navigates to the link's page URL instead, and so does the shell itself when there is no WebView2 control to script.
+- **A cold launch opens the window at `/?session=<id>&handoff=<id>`**, and `load_when_healthy` loads the same URL for a daemon that was slow to answer.
+  The page strips the single-use `handoff` from the address bar before rendering, applies the link like any other, and reports the hand-off whether or not the session exists - either way the desktop window has it.
+- **Hand-offs live in memory only** (`LinkHandoffRegistry`, 600 s, 64 entries): a daemon restart forgets them, and the tab treats an unknown hand-off as one that never opened.
+
+### Diagnosing a link
+
+- `lifecycle.log`: "registered the swe-mux:// link type", "desktop link handed to the running shell", "desktop shell opening on link", "desktop link delivered ... via=script|queued|navigate", "desktop link mailbox dropped", "desktop link ignored".
+- `daemon.log`: "desktop link handoff started|not attempted (link_reason)|opened (link_found)|expired unopened", each carrying `link_session` and `link_handoff`, which correlate with the shell's lines.
+- The browser console: `[session-link]` lines for each decision the page made.
+
 ## Security boundary
+
+- **A `swe-mux://` link is untrusted input.** Any web page can launch the scheme.
+  A link is reduced to a session id and an optional hand-off id, each matched against a closed pattern, and refused whole if either is malformed; nothing else in it is read, the page re-validates both, and the delivery script JSON-encodes them.
+  The worst a hostile link can do is bring the window forward onto a session that already exists, and an unreadable one is logged by length only.
+  A hand-off id is 192 random bits and the only authority a report needs, because the most a forged report could do is close the browser tab that asked.
 
 - **The packaged app makes one outbound request of its own, and it is still not an
   updater.** The daemon's daily release check (`update_check.py`, `design/interfaces.md`,
@@ -792,6 +860,10 @@ person with no shortcut, no tray, and no idea where anything went.
 - **The uninstaller removes that value only when it names `{app}`**, rather than using
   `uninsdeletevalue`: the tray can turn the toggle on after install, and one install's
   uninstaller must not strip another's login entry.
+- **The `swe-mux://` link type follows the same rule**, and the installer never writes it: the
+  app registers itself on every start (§ Session links), so the registration names whichever
+  copy ran last. Uninstall deletes `HKCU\Software\Classes\swe-mux` only when its command names
+  `{app}`; left behind, it would point every session link at a program that no longer exists.
 - **The `PATH` edit is one directory in `HKCU\Environment\Path`, and it is opt-out.**
   `addtopath` is a `[Tasks]` entry, ticked by default unlike the two shortcut tasks: those
   create artifacts the user did not ask for, while this only makes an already-installed
@@ -957,6 +1029,11 @@ person with no shortcut, no tray, and no idea where anything went.
   `src/swe_mux/desktop_renderer.py`, `frontend/src/rendererRecovery.ts`,
   `frontend/src/RecoveryBanner.tsx`
 - Renderer tests: `tests/test_desktop_renderer.py`, `frontend/test/rendererRecovery.test.ts`
+- Session links (link vocabulary, registration, mailbox, hand-off registry):
+  `src/swe_mux/desktop_links.py`; hand-off routes: `src/swe_mux/routes/desktop_integration.py`;
+  the page side: `frontend/src/sessionLinks.ts`, `frontend/src/viewState.ts`
+- Session-link tests: `tests/test_desktop_links.py`, `frontend/test/sessionLinks.test.ts`,
+  `frontend/test/viewState.test.ts`
 - Daemon runner: `src/swe_mux/__main__.py`
 - Shutdown boundary: `src/swe_mux/server.py`
 - Package metadata: `pyproject.toml`, `uv.lock`

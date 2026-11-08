@@ -40,6 +40,11 @@ See [UI localization](localization.md) for the rendering and identity boundaries
 - On mobile, selecting either a Project row or a session row closes the navigation overlay. Project
   selection closes it before restoring that Project's remembered active view, including when no
   valid remembered view exists.
+- A followed session link (`/?session=<id>`) is the one thing that outranks a Project's
+  remembered view on load: the linked session becomes the focused view and the visible tab of its
+  pane, on every client, and a link to a session that no longer exists falls back to the ordinary
+  startup view. How a link is told apart from the app's own projected URL, and the Windows
+  hand-off into the desktop app, are in `desktop-shell.md` § Session links.
 - The sidebar shows only Projects marked for active navigation.
   A Project row is followed directly by its layout/session rows; notes do not appear in the tree.
   Its fold cell stays allocated for alignment, but the fold control renders only when the Project has sessions to hide.

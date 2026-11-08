@@ -1126,6 +1126,8 @@ body {
 /* A finished redeploy that did NOT ship what you built is the one outcome that
    otherwise looks exactly like success, so its notice is not styled as an error. */
 .toast.redeploy-notice { background:#2a2410;border-color:#7a6522;color:#e7cf8d;line-height:1.5 }
+/* A session link this browser tab handed to the desktop app: an outcome, not a fault. */
+.toast.link-notice { background:#122218;border-color:#2f6b43;color:#a9e2b8;line-height:1.5 }
 :where(:root[data-workspace-layout="mobile"]) .redeploy-chip { max-width:calc(100vw - 20px) }
 :where(:root[data-workspace-layout="mobile"]) .redeploy-chip-summary { min-height:38px }
 /* The phone's chip is a control inside `.mobile-toolbar`, not a card floating beneath it:
