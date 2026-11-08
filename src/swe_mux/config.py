@@ -1284,6 +1284,23 @@ class Config:
     # The floor between two mid-turn deliveries into the *same* session, so a
     # peer cannot machine-gun a session that is trying to work.
     agent_interject_min_interval_seconds: float = 60.0
+    # What `mux.notify` does when the sender leaves `delivery` unset
+    # (`AGENT_MESSAGE_DELIVERY_MODES`). "now" (the default since 2026-11-08) writes
+    # the message into the target's running turn as soon as the readiness
+    # tracker's interject predicate says that is safe - the CLI takes it at its
+    # next turn boundary, so the target hears a peer before it finishes rather than
+    # after - and delivers it at the prompt like any message when the target is
+    # idle. "when_idle" makes the queue-only behaviour the default again.
+    #
+    # The choice used to sit with every sender, first as a silent "when_idle"
+    # default and then as a required argument, and senders chose to wait almost
+    # every time: a correction reached a worker after it had finished acting on the
+    # plan it corrected. A *defaulted* "now" that a mid-turn gate refuses (the
+    # switch above, the target Project's `interject_grant`, the receiver's opt-out,
+    # or the two mid-turn bounds) falls back to "when_idle" and the result says
+    # which gate; an *explicit* "now" still refuses, because that sender asked for
+    # nothing else.
+    agent_message_default_delivery: str = "now"
     # `mux.requestSpawn` creates an inert Fleet Queue approval draft and nothing
     # else; approval is a human act.
     request_spawn_enabled: bool = True
@@ -1766,6 +1783,12 @@ UNLIMITED_INTERJECT_HOURLY_BUDGET = 120
 # two interjects cannot land inside one turn's paste-settle, and no more.
 UNLIMITED_INTERJECT_MIN_INTERVAL_SECONDS = 5.0
 
+# The spellings `agent_message_default_delivery` may hold: the queue item's own
+# delivery modes (`prompt_queue.DELIVERY_MODES`). Spelled out here rather than
+# imported so loading a config does not import the queue; the two are asserted
+# equal in `tests/test_agent_message_default_delivery.py`.
+AGENT_MESSAGE_DELIVERY_MODES: tuple[str, ...] = ("now", "when_idle")
+
 
 @dataclass(frozen=True, slots=True)
 class AgentMessageBounds:
@@ -2134,6 +2157,11 @@ _CHOICE_RULES: tuple[_Choice, ...] = (
         ui_message("config.dce3efc5b8"),
     ),
     _Choice("stt_engine", ("sapi", "whisper"), ui_message("config.61e7b00c91")),
+    _Choice(
+        "agent_message_default_delivery",
+        AGENT_MESSAGE_DELIVERY_MODES,
+        ui_message("config.3fe7eabe5b", value1=", ".join(AGENT_MESSAGE_DELIVERY_MODES)),
+    ),
     _Choice("drawer_tab_display", ("icon", "title"), ui_message("config.58c122b247")),
     _Choice("utility_rail_display", ("icon", "title"), ui_message("config.58c122b247")),
     # These three build their message from the allowed set, exactly as the branches

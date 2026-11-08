@@ -51,16 +51,21 @@ bypasses an approval or question prompt. A session whose operator turned
 which only a human can arm.
 
 ``delivery="now"`` is the one thing here that reaches a session mid-turn, and it
-is gated three ways before the caller may even ask: an install-wide switch, the
-*target* Project's ``interject_grant``, and the receiving session's own
-``accept_agent_interjections`` for its run. Asking is not authorization: whether
-the write happens is the readiness tracker's separate ``interject_state``
-predicate at delivery time, which requires the lifecycle evidence and the CLI's
-own screen to agree a turn is running with no composer content to land on top
-of, and which refuses an approval prompt, a picker, a rate limit, a retired
-transcript, and a remote boundary outright. What it buys is latency — the CLI
-buffers the paste and takes it at the turn boundary — not preemption; stopping a
-turn is ``interrupt`` (`session_control.py`).
+is the default: a sender that leaves ``delivery`` unset gets the install's
+``agent_message_default_delivery``, which is ``now`` unless the operator changed
+it. It is gated three ways before the message may ask for it: an install-wide
+switch, the *target* Project's ``interject_grant``, and the receiving session's
+own ``accept_agent_interjections`` for its run, plus two rate bounds. A
+*defaulted* ``now`` that one of those refuses is staged ``when_idle`` instead and
+the result names the gate; an *explicit* ``now`` is refused, because that sender
+asked for nothing else. Asking is not authorization: whether the write happens is
+the readiness tracker's separate ``interject_state`` predicate at delivery time,
+which requires the lifecycle evidence and the CLI's own screen to agree a turn is
+running with no composer content to land on top of, and which refuses an
+approval prompt, a picker, a rate limit, a retired transcript, and a remote
+boundary outright. What it buys is latency - the CLI buffers the paste and takes
+it at the turn boundary - not preemption; stopping a turn is ``interrupt``
+(`session_control.py`).
 """
 
 from __future__ import annotations
@@ -92,6 +97,7 @@ from .prompt_queue import (
     DELIVERY_WHEN_IDLE,
     PromptQueueService,
     QueueError,
+    delivery_mode,
 )
 from .spawn_contract import field_refusal, requested_spawn_model
 
@@ -101,6 +107,29 @@ log = logging.getLogger("swe_mux.agent_messaging")
 # sender's context is stale long before this.
 DEFAULT_MESSAGE_TTL_HOURS = 24
 AGENT_SENDER_KIND = "agent"
+
+# Where the delivery mode a message was staged with came from, reported in the
+# result so a sender can tell "I asked for this" from "the install chose it".
+DELIVERY_SOURCE_REQUESTED = "requested"
+DELIVERY_SOURCE_DEFAULT = "default"
+
+# The way through every mid-turn refusal. Spelled out rather than "omit
+# `delivery`", because omitting it now asks for the install default - which is
+# mid-turn - and a hint that sent the sender back into the same refusal would be
+# worse than none.
+_WHEN_IDLE_HINT = (
+    'send it with delivery: "when_idle" and it waits for the target\'s prompt instead'
+)
+
+
+def _interject_refusal(code: str, cause: str, *, status: int) -> QueueError:
+    """A mid-turn gate's refusal: the cause, then the way through.
+
+    The cause rides the payload on its own so a defaulted message that falls back
+    to `when_idle` can report *why* without telling the sender to do what the
+    fallback already did.
+    """
+    return QueueError(code, f"{cause}; {_WHEN_IDLE_HINT}", status=status, cause=cause)
 
 
 def _envelope_value(value: Any, *, max_chars: int = 500) -> str:
@@ -125,6 +154,28 @@ def _reply_affordance(sender_id: str, replies_left: int) -> str:
     )
 
 
+def _mid_turn_clause(mid_turn: str | None) -> str:
+    """What the compact envelope says about a message that may land mid-turn.
+
+    Written at staging time, before anyone knows whether the target will be
+    working when the message is delivered, so it says *may*. The two sources say
+    different things: a sender that asked for mid-turn made a claim about urgency,
+    while the install's default makes none - and saying "urgent" of every default
+    message would teach receivers to drop what they are doing for routine notes.
+    """
+    if mid_turn == DELIVERY_SOURCE_REQUESTED:
+        return (
+            "the sender asked for it to land mid-turn - a claim about urgency,"
+            " not about authority"
+        )
+    if mid_turn == DELIVERY_SOURCE_DEFAULT:
+        return (
+            "may land mid-turn, as messages do by default here - no claim of"
+            " urgency or authority"
+        )
+    return ""
+
+
 def _compact_notification(
     *,
     sender_id: str,
@@ -132,7 +183,7 @@ def _compact_notification(
     sender_project: str,
     replies_left: int,
     armed: bool,
-    interject: bool,
+    mid_turn: str | None,
 ) -> list[str]:
     """The default envelope: the four facts a receiver acts on, and nothing else.
 
@@ -159,15 +210,14 @@ def _compact_notification(
         if armed
         else "peer agent, held until a human armed it"
     )
-    if interject:
+    clause = _mid_turn_clause(mid_turn)
+    if clause:
         # The urgency/authority clause survives into compact rather than staying a
         # `full`-only nicety. Mid-turn is the one arrival a receiver is most likely
-        # to over-weight - it interrupted me, so it must matter - and the sender
-        # asking for it is a claim about timing that says nothing about standing.
-        authority += (
-            "; written into a turn that was already running - a claim about"
-            " urgency, not about authority"
-        )
+        # to over-weight - it interrupted me, so it must matter - and neither the
+        # sender asking for it nor the install defaulting to it says anything about
+        # standing.
+        authority += f"; {clause}"
     if armed:
         # Last, so the two provenance clauses read as one phrase and the
         # instruction reads as the sentence it is.
@@ -190,7 +240,7 @@ def _notification_body(
     reason: str,
     replies_left: int,
     armed: bool,
-    interject: bool,
+    mid_turn: str | None,
     body: str,
     envelope: str = ENVELOPE_COMPACT,
 ) -> str:
@@ -216,7 +266,7 @@ def _notification_body(
                     sender_project=sender_project,
                     replies_left=replies_left,
                     armed=armed,
-                    interject=interject,
+                    mid_turn=mid_turn,
                 ),
                 "",
                 body,
@@ -258,12 +308,18 @@ def _notification_body(
     # buffers the paste and hands it over at the turn boundary, so it reads
     # exactly like something typed between turns. Naming it is what lets a
     # receiver treat an interruption as one.
-    if interject:
-        headers.append(
-            "delivery: written into a turn that was already running, under this"
-            " Project's mid-turn grant. Your CLI held it until the turn ended."
+    if mid_turn:
+        why = (
             " The sender asked for it to reach you sooner than the queue would;"
             " that is a claim about urgency, not about authority."
+            if mid_turn == DELIVERY_SOURCE_REQUESTED
+            else " That is how messages are delivered here by default; it says"
+            " nothing about urgency or authority."
+        )
+        headers.append(
+            "delivery: may be written into a turn that is already running, under"
+            " this Project's mid-turn grant; your CLI takes it at the next turn"
+            f" boundary.{why}"
         )
     # The receiver is the one who needs to know a reply is allowed, and the
     # envelope is the only surface they see.
@@ -441,12 +497,16 @@ class AgentMessagingService:
         per-Project standing permission somebody wrote down, and the receiving
         session's own opt-out for its run. Being written to mid-turn costs the
         receiver attention immediately, so the receiver keeps a veto.
+
+        Every refusal carries its bare `cause` in the payload as well as the
+        message: an explicit "now" is refused with the cause plus the way
+        through, and a defaulted one reports just the cause beside the
+        `when_idle` it fell back to.
         """
         if not self.config.agent_interject_enabled:
-            raise QueueError(
+            raise _interject_refusal(
                 "interject_disabled",
-                "mid-turn delivery is disabled on this mux install; send the"
-                " message without `delivery` and it waits for the target's queue",
+                "mid-turn delivery is disabled on this mux install",
                 status=403,
             )
         target_id = str(destination.record.id)
@@ -455,19 +515,16 @@ class AgentMessagingService:
         if root and self._interject_grant_field is not None:
             grant = str(self._interject_grant_field(root) or "off")
         if grant != "granted":
-            raise QueueError(
+            raise _interject_refusal(
                 "interject_not_granted",
                 "that Project switched mid-turn delivery off"
-                ' (`interject_grant = "off"` in its .swe-mux/config.toml);'
-                " send the message without `delivery` and it waits for the"
-                " target's queue",
+                ' (`interject_grant = "off"` in its .swe-mux/config.toml)',
                 status=403,
             )
         if not await self.auto.accepts_agent_interjections(target_id):
-            raise QueueError(
+            raise _interject_refusal(
                 "interject_refused_by_target",
-                "that session is not accepting mid-turn deliveries for this run;"
-                " send the message without `delivery` and it waits in its queue",
+                "that session is not accepting mid-turn deliveries for this run",
                 status=403,
             )
         if retry:
@@ -482,20 +539,19 @@ class AgentMessagingService:
         recent = [at for at in self._interjects_by_origin.get(caller_id, ()) if at >= now - 3600]
         self._interjects_by_origin[caller_id] = recent
         if budget <= 0 or len(recent) >= budget:
-            raise QueueError(
+            raise _interject_refusal(
                 "interject_budget_exhausted",
                 f"this session has asked for {len(recent)} mid-turn deliveries in"
-                f" the last hour (limit {budget}); send it as an ordinary message"
-                " instead",
+                f" the last hour (limit {budget})",
                 status=429,
             )
         floor = bounds.interject_min_interval_seconds
         last = self._last_interject_at.get(target_id)
         if last is not None and now - last < floor:
-            raise QueueError(
+            raise _interject_refusal(
                 "interject_too_soon",
                 f"that session took a mid-turn delivery {int(now - last)}s ago"
-                f" (floor {int(floor)}s); let it work, or send an ordinary message",
+                f" (floor {int(floor)}s)",
                 status=429,
             )
 
@@ -523,11 +579,18 @@ class AgentMessagingService:
         reason: str = "",
         correlation_id: str | None = None,
         project: Any = None,
-        delivery: str = DELIVERY_WHEN_IDLE,
+        delivery: str | None = None,
         envelope: str | None = None,
         dry_run: bool = False,
     ) -> dict[str, Any]:
         """Stage a message from the calling session into ``target``'s queue.
+
+        ``delivery`` left as None takes the install's
+        ``agent_message_default_delivery`` (``now`` unless the operator changed
+        it). A defaulted ``now`` that a mid-turn gate refuses is staged
+        ``when_idle`` and the result carries ``delivery_fallback``; a sender that
+        passed ``now`` itself gets the refusal, because it asked for nothing
+        else. The result's ``delivery`` is the mode the item actually holds.
 
         ``dry_run`` runs every bound and returns the same verdict without
         staging anything, spending any budget, or charging a mid-turn slot. It
@@ -668,7 +731,9 @@ class AgentMessagingService:
         else:
             thread_id = str(uuid.uuid4())
 
-        mode = str(delivery or DELIVERY_WHEN_IDLE)
+        requested = str(delivery or "").strip() or None
+        mode = requested or self._default_delivery()
+        source = DELIVERY_SOURCE_REQUESTED if requested else DELIVERY_SOURCE_DEFAULT
         if mode not in DELIVERY_MODES:
             raise QueueError(
                 "invalid_delivery",
@@ -693,10 +758,35 @@ class AgentMessagingService:
             if correlation_id
             else None
         )
+        fallback: dict[str, str] | None = None
         if mode == DELIVERY_NOW:
-            await self._authorize_interject(
-                caller_id, destination, retry=existing is not None
-            )
+            try:
+                await self._authorize_interject(
+                    caller_id, destination, retry=existing is not None
+                )
+            except QueueError as exc:
+                if source == DELIVERY_SOURCE_REQUESTED:
+                    raise
+                # The install chose mid-turn, not the sender, so a gate that
+                # refuses it costs the message nothing: it waits for the prompt
+                # exactly as it would have before mid-turn was the default.
+                # Refusing instead would make the default the one spelling of
+                # notify that a receiver's opt-out could break.
+                mode = DELIVERY_WHEN_IDLE
+                fallback = {
+                    "from": DELIVERY_NOW,
+                    "code": exc.code,
+                    "cause": str(exc.payload.get("cause") or exc),
+                }
+                log.info(
+                    "agent notification mid-turn default unavailable sender=%s"
+                    " target=%s code=%s dry_run=%s; staging when_idle",
+                    caller_id,
+                    target_id,
+                    exc.code,
+                    dry_run,
+                )
+        mid_turn = source if mode == DELIVERY_NOW else None
 
         outlook = await self.auto.outlook(target_id)
         armed = bool(await self.auto.accepts_agent_messages(target_id))
@@ -723,7 +813,8 @@ class AgentMessagingService:
                 "would_deduplicate": existing is not None,
                 "target_delivery": outlook,
                 "envelope": self._resolve_envelope(destination, envelope),
-                "note": self._dry_run_note(state, outlook),
+                **self._delivery_fields(mode, source, fallback),
+                "note": self._dry_run_note(state, outlook, mode, fallback),
             }
         ttl_seconds = DEFAULT_MESSAGE_TTL_HOURS * 3600
         expires_at = time.time() + ttl_seconds
@@ -748,7 +839,7 @@ class AgentMessagingService:
             reason=reason,
             replies_left=max(0, max_turns - (turns + 1)),
             armed=armed,
-            interject=mode == DELIVERY_NOW,
+            mid_turn=mid_turn,
             body=text,
             envelope=effective_envelope,
         )
@@ -780,8 +871,12 @@ class AgentMessagingService:
             payload={"kind": "agent_notify", "version": 2},
             constraints={"expires_at": expires_at, "delivery": mode},
         )
-        if mode == DELIVERY_NOW and not message.get("deduplicated"):
+        deduplicated = bool(message.get("deduplicated"))
+        if mode == DELIVERY_NOW and not deduplicated:
             self._spend_interject(caller_id, target_id)
+        # A retry returns the message it already staged, so what it reports is
+        # what that item holds - not what this call would have chosen.
+        staged_mode = delivery_mode(message) if deduplicated else mode
         # Continuing a thread somebody else started is direct evidence that the
         # sending session consumed what was delivered to it and is still working
         # the exchange - the opposite of the unattended run the
@@ -801,7 +896,7 @@ class AgentMessagingService:
         log.info(
             "agent notification staged sender=%s sender_run=%s target=%s message=%s"
             " correlation=%s thread=%s chain_depth=%d reply=%s deduplicated=%s"
-            " cross_project=%s",
+            " cross_project=%s delivery=%s delivery_source=%s fallback=%s",
             caller_id,
             sender_run_id,
             target_id,
@@ -810,8 +905,11 @@ class AgentMessagingService:
             thread_id,
             depth,
             is_reply,
-            bool(message.get("deduplicated")),
+            deduplicated,
             cross_project,
+            staged_mode,
+            source,
+            fallback["code"] if fallback else None,
         )
         self.queue.events.emit_background(
             "queue_message_received",
@@ -833,7 +931,7 @@ class AgentMessagingService:
             "is_reply": is_reply,
             "chain_depth": depth,
             "thread_messages_remaining": max(0, max_turns - (turns + 1)),
-            "deduplicated": bool(message.get("deduplicated")),
+            "deduplicated": deduplicated,
             # Reported rather than applied silently: a sender that asked for
             # `bare` into a Project holding `full` needs to know its message
             # announced itself anyway.
@@ -842,28 +940,94 @@ class AgentMessagingService:
                 "expires_at", expires_at
             ),
             "target_delivery": outlook,
-            "note": self._staging_note(str(message["state"]), outlook),
+            **self._delivery_fields(staged_mode, source, None if deduplicated else fallback),
+            "note": self._staging_note(
+                str(message["state"]),
+                outlook,
+                staged_mode,
+                None if deduplicated else fallback,
+            ),
         }
 
+    def _default_delivery(self) -> str:
+        """The install's mode for a message whose sender did not name one.
+
+        `Config` validation already confines the value to the delivery modes;
+        anything else here can only be a hand-built config in a test, which gets
+        the documented default rather than a refusal of every message.
+        """
+        configured = str(getattr(self.config, "agent_message_default_delivery", "") or "")
+        return configured if configured in DELIVERY_MODES else DELIVERY_NOW
+
     @staticmethod
-    def _dry_run_note(state: str, outlook: dict[str, Any]) -> str:
+    def _delivery_fields(
+        mode: str, source: str, fallback: dict[str, str] | None
+    ) -> dict[str, Any]:
+        """The delivery facts every notify answer carries, real or dry run.
+
+        ``delivery`` is the mode the item holds, ``delivery_source`` says whether
+        the sender chose it or the install did, and ``delivery_fallback`` appears
+        only when a defaulted mid-turn mode was unavailable and the item waits for
+        the prompt instead - naming the gate, so a sender expecting its message to
+        land mid-turn can see why it will not.
+        """
+        fields: dict[str, Any] = {"delivery": mode, "delivery_source": source}
+        if fallback:
+            fields["delivery_fallback"] = dict(fallback)
+        return fields
+
+    @staticmethod
+    def _delivery_sentence(mode: str) -> str:
+        """How the delivery itself will happen, once something presses send."""
+        if mode == DELIVERY_NOW:
+            return (
+                " If the target is mid-turn it is written into that turn as soon as"
+                " that is safe - the CLI takes it at its next turn boundary, so the"
+                " turn is not stopped - and otherwise it is delivered at the prompt."
+            )
+        return " It waits for the target's prompt and never interrupts an active turn."
+
+    @staticmethod
+    def _fallback_sentence(fallback: dict[str, str] | None) -> str:
+        """Why a defaulted mid-turn message will wait for the prompt instead.
+
+        Said in every note, not only the one where something will deliver it: a
+        sender that left `delivery` out expects mid-turn, and whether a human or
+        the controller presses send does not change which gate took it away.
+        """
+        if not fallback:
+            return ""
+        return (
+            f" Mid-turn delivery was not available ({fallback.get('code')}:"
+            f" {fallback.get('cause')}), so it waits for the target's prompt instead."
+        )
+
+    @staticmethod
+    def _dry_run_note(
+        state: str,
+        outlook: dict[str, Any],
+        mode: str = DELIVERY_WHEN_IDLE,
+        fallback: dict[str, str] | None = None,
+    ) -> str:
         """What sending it would do — said before anything exists to clean up."""
+        fallen_back = AgentMessagingService._fallback_sentence(fallback)
         if state != "armed":
             return (
                 "Nothing was staged. Sending this would arrive as an inert draft"
-                " that only a human can arm and send."
+                f" that only a human can arm and send.{fallen_back}"
             )
         if outlook.get("auto_delivery"):
             return (
                 "Nothing was staged. Sending this would arrive armed and be"
                 " delivered automatically once the target is at a safe point."
+                f"{AgentMessagingService._delivery_sentence(mode)}{fallen_back}"
             )
         return (
             "Nothing was staged. Sending this would arrive armed and then wait"
             f" for a human, because {outlook.get('blocked_by')}."
             f"{AgentMessagingService._lapse_detail(outlook)}"
             " Send it anyway only if a person is expected to read that queue;"
-            " otherwise reach the target another way."
+            f" otherwise reach the target another way.{fallen_back}"
         )
 
     @staticmethod
@@ -889,7 +1053,12 @@ class AgentMessagingService:
         return "".join(parts) + "."
 
     @staticmethod
-    def _staging_note(state: str, outlook: dict[str, Any]) -> str:
+    def _staging_note(
+        state: str,
+        outlook: dict[str, Any],
+        mode: str = DELIVERY_WHEN_IDLE,
+        fallback: dict[str, str] | None = None,
+    ) -> str:
         """What actually happens next, including when the answer is "nothing".
 
         The armed note used to say only that the message waits for head-of-line
@@ -904,12 +1073,13 @@ class AgentMessagingService:
                 "The matching message was deleted by the receiving operator and"
                 " was not recreated."
             )
+        fallen_back = AgentMessagingService._fallback_sentence(fallback)
         if state != "armed":
-            return "Staged as an inert draft; a human must arm and send it."
+            return f"Staged as an inert draft; a human must arm and send it.{fallen_back}"
         if outlook.get("auto_delivery"):
             return (
-                "Armed. It waits for head-of-line order and delivery readiness,"
-                " and never interrupts an active turn."
+                "Armed. It waits for head-of-line order and delivery readiness."
+                f"{AgentMessagingService._delivery_sentence(mode)}{fallen_back}"
             )
         return (
             "Armed, but nothing will send it automatically: "
@@ -917,7 +1087,7 @@ class AgentMessagingService:
             f"{AgentMessagingService._lapse_detail(outlook)}"
             " It waits for a human to press send."
             " Say so rather than waiting silently for a reply, and revoke it with"
-            " revoke_message if you reach the target another way."
+            f" revoke_message if you reach the target another way.{fallen_back}"
         )
 
     # -- drafted spawn --------------------------------------------------------

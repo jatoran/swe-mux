@@ -207,7 +207,7 @@ def test_an_invalid_envelope_level_is_refused_by_the_parser() -> None:
         parse_project_config(b'version = 1\nmessage_envelope = "loud"\n')
 
 
-def _rendered(level: str, *, armed: bool = True, interject: bool = False) -> str:
+def _rendered(level: str, *, armed: bool = True, mid_turn: str | None = None) -> str:
     return _notification_body(
         sender_id="s1",
         sender_name="worker",
@@ -216,7 +216,7 @@ def _rendered(level: str, *, armed: bool = True, interject: bool = False) -> str
         reason="handing back a branch",
         replies_left=39,
         armed=armed,
-        interject=interject,
+        mid_turn=mid_turn,
         body="the branch is landed",
         envelope=level,
     )
@@ -253,10 +253,13 @@ def test_compact_is_materially_smaller_than_full() -> None:
     back to full's size would be a default nobody asked for.
     """
     body = "the branch is landed"
-    full = len(_rendered(ENVELOPE_FULL, interject=True)) - len(body)
-    compact = len(_rendered(ENVELOPE_COMPACT, interject=True)) - len(body)
-    assert compact < full / 1.5
-    assert len(_rendered(ENVELOPE_BARE)) == len(body)
+    # Both mid-turn sources, since mid-turn became the default (2026-11-08) and so
+    # its clause is now on the message nearly every message is.
+    for mid_turn in (None, "requested", "default"):
+        full = len(_rendered(ENVELOPE_FULL, mid_turn=mid_turn)) - len(body)
+        compact = len(_rendered(ENVELOPE_COMPACT, mid_turn=mid_turn)) - len(body)
+        assert compact < full / 1.5, mid_turn
+    assert len(_rendered(ENVELOPE_BARE, mid_turn="default")) == len(body)
 
 
 def test_a_drafted_message_says_a_human_released_it_at_both_levels() -> None:

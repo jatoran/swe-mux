@@ -168,6 +168,7 @@ type Config = {
   agent_message_pending_per_target:number;agent_message_max_chars:number
   agent_interject_enabled:boolean;agent_interject_hourly_budget:number
   agent_interject_min_interval_seconds:number
+  agent_message_default_delivery:'now'|'when_idle'
   request_spawn_enabled:boolean;agent_spawn_hourly_budget:number
   agent_schedule_hourly_budget:number;agent_schedule_daily_fire_limit:number
   agent_schedules_per_project:number;agent_schedule_max_days:number
@@ -2238,6 +2239,10 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <h4 data-heading-message="Settings.eca2f107c3">{t("Settings.eca2f107c3")}</h4>
           <p>{t("Settings.8cb1be7eb3")}</p>
           <label class="check" data-setting="agent_interject_enabled"><span>{t("Settings.a8eceb520f")}</span><input type="checkbox" checked={draft.agent_interject_enabled} onChange={e=>change('agent_interject_enabled',e.currentTarget.checked)} /></label>
+          {/* The install's answer for a message whose sender named no mode. Not
+              disabled with the switch above: off, a defaulted "now" simply waits for
+              the prompt, and the choice should survive turning mid-turn back on. */}
+          <label data-setting="agent_message_default_delivery">{rich("Settings.agentMessageDefaultDelivery", { value1: <Dropdown value={draft.agent_message_default_delivery} onChange={value=>change('agent_message_default_delivery',value as Config['agent_message_default_delivery'])} options={[{value:'now',get label() { return t("Settings.agentMessageDefaultDeliveryNow") }},{value:'when_idle',get label() { return t("Settings.agentMessageDefaultDeliveryWhenIdle") }}]}/>, value2: <small>{t("Settings.agentMessageDefaultDeliveryHint")}</small> })}</label>
           <label data-setting="agent_interject_hourly_budget">{rich("Settings.ca34dedfda", { value1: <input type="number" min="0" max="1000" disabled={!draft.agent_message_limits_enabled} value={draft.agent_interject_hourly_budget} onInput={e=>change('agent_interject_hourly_budget',Number(e.currentTarget.value))} />, value2: <small>{t("Settings.aa7c0ea1d1")}</small> })}</label>
           <label data-setting="agent_interject_min_interval_seconds">{rich("Settings.b85f7ffed7", { value1: <input type="number" min="0" max="3600" step="1" disabled={!draft.agent_message_limits_enabled} value={draft.agent_interject_min_interval_seconds} onInput={e=>change('agent_interject_min_interval_seconds',Number(e.currentTarget.value))} />, value2: <small>{t("Settings.38dc1131d8")}</small> })}</label>
           </section>

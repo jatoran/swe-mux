@@ -6,11 +6,12 @@ Bounded messaging *between sessions that already exist*, plus a way for an agent
 human to create one. Roadmap Phase 5; `CONTROL_PLANE_ROADMAP.md` §7.2. Fleet Queue is the
 one human review surface for both kinds of request:
 
-- `mux.notify(target, body, delivery=, dry_run=)` — an agent stages a message in a sibling
+- `mux.notify(target, body, delivery?, dry_run=)` - an agent stages a message in a sibling
   session's prompt queue. A caller over `PromptQueueService.enqueue`, never a second delivery
   path.
-  `delivery="now"` asks for it to land in a turn that is already running, which three gates
-  and two bounds decide whether the caller may even ask for.
+  `delivery="now"` lets it land in a turn that is already running, which three gates and two
+  bounds decide whether the message may ask for; it is the install default
+  (`agent_message_default_delivery`), so a sender that names no mode gets it.
   `dry_run=true` runs every bound and returns the same verdict without staging anything.
 - `mux.revoke_message(message_id)` — the sender withdraws one message it staged that nothing
   has delivered. The narrowest write here, and the counterpart to the dry run.
@@ -153,15 +154,30 @@ its own is the default and nothing widens implicitly.
   a property of a working repository; `granted` by default since 2026-08-25, withdrawn by
   writing `off`), and the receiving session's own opt-out for its run. The receiver keeps a veto
   because the receiver pays the cost: an ordinary message costs nothing until it is read, and
-  a mid-turn one costs attention immediately. Every refusal names the ordinary path, because a
-  sender that reads "no" without reading "send it without `delivery` instead" abandons the
-  message.
-- **The envelope says a message arrived mid-turn, because the receiver cannot tell.** The CLI
-  buffers the paste and hands it over at the turn boundary, so it reads exactly like something
-  typed between turns. The envelope names it and says what the claim is: the sender asked for
-  it to arrive sooner, which is a claim about urgency and not about authority. That clause is
-  carried at `compact` as well as `full`, because a message that interrupted a turn is the one
-  a receiver is most likely to over-weight.
+  a mid-turn one costs attention immediately. Every refusal of an *explicit* `"now"` names the
+  ordinary path (`delivery: "when_idle"`), because a sender that reads "no" without reading the
+  way through abandons the message; the refusal also carries the bare `cause` in its payload.
+- **Mid-turn is the default, and a defaulted mid-turn never refuses (2026-11-08).** A sender
+  that leaves `delivery` out gets the install's `agent_message_default_delivery`, which is
+  `"now"`. The choice used to sit with every sender - first a silent `when_idle` default, then
+  a required argument - and senders chose to wait almost every time, so a correction reached a
+  worker after it had acted on the plan it corrected. A defaulted `"now"` that one of the three
+  gates or two bounds refuses is staged `when_idle` instead, and the result carries
+  `delivery_fallback: {from, code, cause}`: the default must never be the one spelling of
+  `notify` that a receiver's opt-out breaks. An explicit `"now"` keeps refusing, because that
+  sender asked for nothing else. Every result, real or dry run, reports the mode the item holds
+  (`delivery`) and whether the sender or the install chose it (`delivery_source`), and its note
+  says how the delivery will happen; a correlated retry reports the original item's mode, not
+  what the retry would have chosen.
+- **The envelope says a message may arrive mid-turn, because the receiver cannot tell.** The
+  CLI buffers the paste and hands it over at the turn boundary, so it reads exactly like
+  something typed between turns. The body is rendered at staging time, before anyone knows
+  whether the target will be working when it is delivered, so the envelope says *may*, and
+  it says what the claim is. A sender that asked for `"now"` made a claim about urgency and not
+  about authority; the install's default makes no claim at all, and the envelope says that
+  instead - calling every routine note urgent would teach receivers to drop their work for it.
+  The clause is carried at `compact` as well as `full`, because a message that interrupted a
+  turn is the one a receiver is most likely to over-weight.
 - **A reply refreshes the replying session's own auto-delivery budget.** Writing a reply is
   direct evidence that the session consumed what was delivered to it and is still working the
   exchange - the opposite of the unattended run the consecutive-send cap exists to stop - so
@@ -363,7 +379,7 @@ GET  /api/queue/mailbox?author=all|non_human|human[&project_id=...][&target_sess
      (the route keeps its original name; the surface it backs is the fleet queue)
 POST /api/queue/messages/{id}/cancel            {kind: revoked}
 POST /api/projects/{pid}/observations/{oid}/decide  {decision: approve|dismiss, …overrides}
-MCP  notify(target, body, delivery, reason?, correlation_id?, project?, dry_run?)
+MCP  notify(target, body, delivery?, reason?, correlation_id?, project?, envelope?, dry_run?)
 MCP  revoke_message(message_id, reason?)
 MCP  request_spawn(prompt, backend?, model?, name?, reason?, project?,
                    watch?, watch_timeout_minutes?, pane?, correlation_id?)
@@ -371,12 +387,14 @@ MCP  message_status(message_id)
 MCP  spawn_requests(project?)
 ```
 
-`delivery` became **required** on 2026-08-30 (`"when_idle"` or `"now"`, and `"now"` also
-requires a `reason`): with a silent `when_idle` default, senders never weighed *when* the
-message should land, and a correction that should have interrupted a worker's plan arrived
-after the worker had finished executing it. Requiring the argument forces that choice at
-every call, and the reason on `"now"` is provenance for a delivery that costs the receiver
-attention immediately.
+`delivery` is optional (`"now"` or `"when_idle"`), and leaving it out takes the install's
+`agent_message_default_delivery`, `"now"` by default since 2026-11-08.
+It was required from 2026-08-30 to 2026-11-08, with `"now"` also requiring a `reason`, on the
+theory that a forced choice would be weighed; in practice senders chose `when_idle` almost every
+time, so the forced choice reproduced the failure it was added to fix.
+Neither mode needs a reason now, and `reason` stays optional provenance for both.
+A defaulted `"now"` falls back rather than refusing; the rule and its result fields are under
+"Mid-turn is the default" in Key concepts.
 
 `dry_run` stages nothing and returns `{dry_run, would_arm, state, thread_messages_remaining,
 would_deduplicate, target_delivery, note}`. `revoke_message` refuses with `unknown_message`
@@ -393,7 +411,9 @@ rate bounds bind only while it is on, with the fixed backstops of
 `config.agent_message_bounds()` binding otherwise), `agent_message_max_chars`,
 `agent_message_hourly_budget`, `agent_message_pending_per_target`,
 `agent_message_max_chain_depth`, `agent_message_max_thread_turns`,
-`request_spawn_enabled` (`config.py`).
+`agent_message_default_delivery` (`"now"` or `"when_idle"`, default `"now"`; edited beside the
+mid-turn switch under Auto-delivery, `auto-delivery.md`), `request_spawn_enabled`
+(`config.py`).
 All of them are edited in Settings → Prompt queue: the message bounds under **Agent messaging**,
 and `request_spawn_enabled` with its hourly budget under **Agent actuation**, because a spawn
 acts on the fleet where a message is text a human still reads.

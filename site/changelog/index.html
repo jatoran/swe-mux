@@ -1116,11 +1116,11 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       </div>
       <div class="relgroups">
         <div><span class="k">Added</span> <span class="sep">2 entries</span></div>
-        <div><span class="k">Changed</span> <span class="sep">4 entries</span></div>
+        <div><span class="k">Changed</span> <span class="sep">5 entries</span></div>
         <div><span class="k">Fixed</span> <span class="sep">2 entries</span></div>
       </div>
       <details class="relmore">
-        <summary>all 8 entries</summary>
+        <summary>all 9 entries</summary>
         <div class="changetype">Added</div>
         <ul class="bullets">
           <li><span><b>Agents can now schedule runs themselves, through three new mux MCP tools.</b> <code>request_schedule</code> sets up a one-off or recurring run in any Project, starting a new session or resuming a conversation (including the agent's own, so "continue this tomorrow morning" works), <code>list_schedules</code> shows them, and <code>cancel_schedule</code> withdraws one. A one-off is the default; a recurring schedule up to twice a day is armed directly, and anything more frequent waits for your approval in the Fleet Queue. Every agent schedule names the session that wrote it, expires on its own (30 days at most by default), and counts against a per-Project limit and an hourly budget, and it is checked again every time it fires. A new per-Project authority, <b>Agent schedules</b> (<code>schedule_grant</code>), decides whether agents' schedules arm directly, need your approval, or may run at any frequency. It only takes effect where the Project has scheduled runs switched on; otherwise every agent schedule waits for your approval.</span></li>
@@ -1128,6 +1128,7 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         </ul>
         <div class="changetype">Changed</div>
         <ul class="bullets">
+          <li><span><b>Messages between agents now reach a working session mid-turn by default.</b> A <code>notify</code> that does not say when to deliver is written into the target's running turn as soon as that is safe, so the target hears it before it finishes rather than after; the agent CLI takes it at its next turn boundary, so the turn is not stopped. An idle target gets it at its prompt as before. Where a Project or session has mid-turn delivery switched off, the message waits for the prompt instead and the sender is told why, and a sender can still ask to wait with <code>delivery: &quot;when_idle&quot;</code>. <code>delivery</code> is no longer required, and asking for mid-turn delivery no longer needs a reason. The new <b>Agent messages whose sender names no delivery mode</b> setting (Settings → Prompt queue, under Mid-turn delivery) changes the default back to waiting.</span></li>
           <li><span><b>Recently used now follows activity in a Project's sessions, whatever caused it.</b> A Project moves up when one of its sessions starts, wakes for a new turn, resumes after an approval, or receives a message from another session, as well as when you use it yourself. That covers scheduled runs, loops and background tasks waking an agent, and any other session started through mux. A message still waiting for your approval does not count until it is delivered, and plain shells count when they start rather than per command.</span></li>
           <li><span><b>A new Project now appears at the top of Recently used</b>, instead of below every Project that had any recorded use. So does a removed Project you add back.</span></li>
           <li><span><b>Picking a result in the sidebar search now closes the search.</b> Clicking a Project or session in the filtered list brings the whole sidebar back, as pressing Enter already did.</span></li>

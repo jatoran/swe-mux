@@ -1947,32 +1947,46 @@ async def test_a_failed_attention_credit_never_fails_the_call() -> None:
 
 
 @pytest.mark.asyncio
-async def test_notify_requires_a_deliberate_delivery_choice() -> None:
-    caller = live_session("s1", token="tok")
-    service = service_for(caller, live_session("s2"), messaging=MessagingStub())
-    with pytest.raises(ValueError, match="requires delivery"):
-        await service.notify(caller, {"target": "s2", "body": "hi"})
-    with pytest.raises(ValueError, match="requires delivery"):
-        await service.notify(
-            caller, {"target": "s2", "body": "hi", "delivery": "soon"}
-        )
-
-
-@pytest.mark.asyncio
-async def test_delivery_now_requires_a_reason() -> None:
+async def test_notify_leaves_an_omitted_delivery_to_the_daemon_default() -> None:
+    """Omitting `delivery` is the ordinary call (2026-11-08), and the transport
+    passes the absence through rather than choosing: the daemon operation owns
+    the install default, so the CLI passthrough and a raw JSON-RPC caller get
+    the same one as a schema-reading client."""
     caller = live_session("s1", token="tok")
     messaging = MessagingStub()
     service = service_for(caller, live_session("s2"), messaging=messaging)
-    with pytest.raises(ValueError, match="requires a reason"):
-        await service.notify(
-            caller, {"target": "s2", "body": "hi", "delivery": "now"}
-        )
-    result = await service.notify(
-        caller,
-        {"target": "s2", "body": "hi", "delivery": "now", "reason": "changed constraint"},
-    )
+    result = await service.notify(caller, {"target": "s2", "body": "hi"})
     assert result["target_session_id"] == "s2"
-    assert messaging.calls[0]["delivery"] == "now"
+    assert messaging.calls[0]["delivery"] is None
+    # Neither mode needs a reason any more: mid-turn is the default, so asking for
+    # it says nothing that needs justifying.
+    await service.notify(caller, {"target": "s2", "body": "hi", "delivery": "now"})
+    await service.notify(caller, {"target": "s2", "body": "hi", "delivery": "when_idle"})
+    assert [call["delivery"] for call in messaging.calls[1:]] == ["now", "when_idle"]
+
+
+@pytest.mark.asyncio
+async def test_notify_refuses_a_delivery_spelling_neither_mode_has() -> None:
+    caller = live_session("s1", token="tok")
+    messaging = MessagingStub()
+    service = service_for(caller, live_session("s2"), messaging=messaging)
+    with pytest.raises(ValueError, match="leave it out for the install default"):
+        await service.notify(
+            caller, {"target": "s2", "body": "hi", "delivery": "soon"}
+        )
+    assert messaging.calls == []
+
+
+def test_notify_schema_makes_delivery_optional_and_says_what_omitting_it_does() -> None:
+    from swe_mux.mcp import TOOLS
+
+    notify = next(tool for tool in TOOLS if tool["name"] == "notify")
+    schema = notify["inputSchema"]
+    assert schema["required"] == ["target", "body"]
+    delivery = schema["properties"]["delivery"]
+    assert set(delivery["enum"]) == {"now", "when_idle"}
+    assert "Leave it out" in delivery["description"]
+    assert "delivery_fallback" in delivery["description"]
 
 
 class AwaitStub:

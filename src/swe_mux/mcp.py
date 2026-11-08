@@ -659,9 +659,13 @@ TOOLS: list[dict[str, Any]] = [
         "name": "notify",
         "description": (
             "Send a short message to another agent session. It "
-            "enters that session's prompt queue and waits for that session to be "
-            "ready: it never answers an approval prompt, and by default "
-            "lands as an inert draft a human must approve. Use it to hand off "
+            "enters that session's prompt queue and, by default, reaches it "
+            "even while it is working: the message is written into its running "
+            "turn as soon as that is safe (the CLI takes it at its next turn "
+            "boundary, so the turn is not stopped), or delivered at its prompt "
+            "when it is idle. It never answers an approval prompt. Whether it "
+            "arrives armed or as a draft a human must approve is the target's "
+            "own setting, and the result says which. Use it to hand off "
             "or to flag something the other session needs; do not use it to "
             "issue instructions you would not want a human to read first. "
             "You may reply to a session that messaged you: pass its session id "
@@ -727,24 +731,24 @@ TOOLS: list[dict[str, Any]] = [
                 },
                 "delivery": {
                     "type": "string",
-                    "enum": ["when_idle", "now"],
+                    "enum": ["now", "when_idle"],
                     "description": (
-                        "When to deliver - required, because it decides whether "
-                        "the target hears you before or after it finishes what "
-                        'it is doing. "when_idle" waits for the target to be at '
-                        'its prompt, and is right for hand-offs and FYIs. "now" '
-                        "also allows delivery into a turn that is already "
-                        "running, which is what you want for something the other "
-                        "session should know before it finishes - a correction, a "
-                        "changed constraint, work you have just taken over - and "
-                        "requires a reason saying why it cannot wait. It "
-                        "does not stop the turn: the CLI buffers your text and "
-                        "takes it at the turn boundary, so what you buy is arriving "
-                        "sooner, not preemption. To actually stop a turn, use "
-                        "interrupt. \"now\" is refused where the target's Project "
-                        "switched mid-turn delivery off (it is granted by "
-                        "default) or the target session opted out; the refusal "
-                        'says which, and "when_idle" always works.'
+                        "When to deliver. Leave it out: the install default, "
+                        '"now" unless the operator changed it, lets the message '
+                        "land in a turn that is already running, so the target "
+                        "hears you before it finishes rather than after. It does "
+                        "not stop the turn - the CLI buffers your text and takes "
+                        "it at the turn boundary - so what you buy is arriving "
+                        "sooner, not preemption; to stop a turn, use interrupt. "
+                        "Where mid-turn delivery is not available (the target's "
+                        "Project or session switched it off, or a mid-turn budget "
+                        "is spent), a message that left this out waits for the "
+                        "target's prompt instead and the result's "
+                        "delivery_fallback says why. Pass \"when_idle\" only when "
+                        "the message must not reach the target until it has "
+                        "finished what it is doing. Passing \"now\" explicitly "
+                        "refuses rather than falling back. The result's delivery "
+                        "field reports the mode actually used."
                     ),
                 },
                 "dry_run": {
@@ -758,7 +762,7 @@ TOOLS: list[dict[str, Any]] = [
                     ),
                 },
             },
-            "required": ["target", "body", "delivery"],
+            "required": ["target", "body"],
             "additionalProperties": False,
         },
     },
@@ -5322,25 +5326,21 @@ class McpService:
         token's session; there is no sender argument to forge.
         """
         dry_run = bool(args.get("dry_run"))
-        delivery = str(args.get("delivery") or "")
-        # Required rather than defaulted (2026-08-30): with a silent
-        # `when_idle` default, senders never weighed *when* the message should
-        # land, and a correction that should have interrupted a worker's plan
-        # arrived after the worker had finished executing it. The schema says
-        # required; this repeats it because the CLI passthrough and any raw
-        # JSON-RPC caller never saw the schema.
-        if delivery not in {"when_idle", "now"}:
+        # Optional, and absent means the install's `agent_message_default_delivery`
+        # - mid-turn unless the operator changed it (2026-11-08). It was required
+        # from 2026-08-30 so senders would weigh *when* to land, and they weighed
+        # it by waiting almost every time: a correction still reached a worker
+        # after it had acted on the plan it corrected. The default is resolved in
+        # the daemon operation rather than here, so the CLI passthrough and a raw
+        # JSON-RPC caller get the same one; this only refuses a spelling neither
+        # mode has, which the schema's enum says and a raw caller never saw.
+        raw_delivery = args.get("delivery")
+        delivery = str(raw_delivery).strip() if raw_delivery is not None else ""
+        if delivery and delivery not in {"when_idle", "now"}:
             raise ValueError(
-                'notify requires delivery: "when_idle" (land at the target\'s '
-                'prompt) or "now" (also allow landing in a running turn). '
-                "Choose deliberately - it decides whether the target hears "
-                "you before or after it finishes what it is doing."
-            )
-        if delivery == "now" and not str(args.get("reason") or "").strip():
-            raise ValueError(
-                'delivery: "now" requires a reason. It lands in a running '
-                "turn and costs the target attention immediately, so say why "
-                "it cannot wait - the reason is kept as provenance."
+                'delivery must be "now" (also land in a running turn) or '
+                '"when_idle" (wait for the target\'s prompt); leave it out for '
+                "the install default."
             )
         # A dry run stages nothing, so it is not a write. Counting it as one
         # would make "check before you send" look like extra authority spent.
@@ -5358,7 +5358,7 @@ class McpService:
             reason=str(args.get("reason") or ""),
             correlation_id=str(args.get("correlation_id") or "") or None,
             project=project,
-            delivery=delivery,
+            delivery=delivery or None,
             envelope=str(args.get("envelope") or "") or None,
             dry_run=dry_run,
         )
@@ -6029,10 +6029,12 @@ class McpService:
                             "An empty result means nothing relevant exists in the scope you "
                             "asked for. The write tools are bounded and each answers "
                             "with what it actually did: `notify` puts a message into "
-                            "another session's prompt queue (it waits for that "
-                            "session's readiness; pass `dry_run` to see whether "
-                            "anything would deliver it, and `revoke_message` to "
-                            "withdraw one that has not been delivered); "
+                            "another session's prompt queue (by default it reaches "
+                            "that session even mid-turn, at its next turn boundary, "
+                            "and otherwise at its prompt; pass `dry_run` to see "
+                            "whether anything would deliver it, and "
+                            "`revoke_message` to withdraw one that has not been "
+                            "delivered); "
                             "`request_spawn` starts a session now, or drafts one for a "
                             "person where the Project asks for that; and "
                             "`request_schedule` makes work happen later - a new "

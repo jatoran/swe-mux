@@ -296,7 +296,8 @@ Settings → Prompt queue.
 the only one that *holds off* another bound rather than granting anything: switching it off
 is a narrowing, where a zero-length stability window or an unbounded grant would not be.
 Mid-turn delivery adds `agent_interject_enabled` (install master, on),
-`agent_interject_hourly_budget` (10 per origin session) and
+`agent_message_default_delivery` (`now`: the mode an agent message gets when its sender names
+none, `agent-messaging.md`), `agent_interject_hourly_budget` (10 per origin session) and
 `agent_interject_min_interval_seconds` (60, per target), which are edited under the same
 Auto-delivery heading rather than beside the messaging bounds: an interject is a *delivery*
 mode with its own strictly narrower readiness predicate, not a kind of message.

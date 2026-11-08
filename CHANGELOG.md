@@ -27,6 +27,12 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ### Changed
 
+- **Messages between agents now reach a working session mid-turn by default.**
+  A `notify` that does not say when to deliver is written into the target's running turn as soon as that is safe, so the target hears it before it finishes rather than after; the agent CLI takes it at its next turn boundary, so the turn is not stopped.
+  An idle target gets it at its prompt as before.
+  Where a Project or session has mid-turn delivery switched off, the message waits for the prompt instead and the sender is told why, and a sender can still ask to wait with `delivery: "when_idle"`.
+  `delivery` is no longer required, and asking for mid-turn delivery no longer needs a reason.
+  The new **Agent messages whose sender names no delivery mode** setting (Settings → Prompt queue, under Mid-turn delivery) changes the default back to waiting.
 - **Recently used now follows activity in a Project's sessions, whatever caused it.**
   A Project moves up when one of its sessions starts, wakes for a new turn, resumes after an approval, or receives a message from another session, as well as when you use it yourself.
   That covers scheduled runs, loops and background tasks waking an agent, and any other session started through mux.

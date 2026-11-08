@@ -6,7 +6,10 @@ went quiet, and nothing anywhere could say why.
 
 - `delivery="now"` lets a sender ask for a message to land in a turn that is
   already running. Asking is gated three ways; whether the write is *safe* is
-  the readiness tracker's separate predicate, tested next door.
+  the readiness tracker's separate predicate, tested next door. The tests here
+  pass `delivery` explicitly, which refuses on a closed gate; what an *omitted*
+  `delivery` does - the install default, falling back rather than refusing - is
+  `test_agent_message_default_delivery.py`.
 - A reply refreshes the replying session's own auto-delivery budget, and a
   notify result says out loud when nothing will deliver what it just staged.
 """
@@ -66,25 +69,35 @@ async def test_a_granted_interject_is_carried_on_the_item_and_named_in_the_envel
     # The receiver cannot tell a mid-turn arrival from an ordinary one out of the
     # text: the CLI buffers the paste and hands it over at the turn boundary. Named
     # at the `compact` default as well as at `full`, since the default is what
-    # nearly every message actually gets.
-    assert "written into a turn that was already running" in message["body"]
+    # nearly every message actually gets. A sender that *asked* for it made a
+    # claim about urgency, and the envelope says so - and says what it is not.
+    assert "the sender asked for it to land mid-turn" in message["body"]
     assert "urgency, not about authority" in message["body"]
+    assert result["delivery"] == "now"
+    assert result["delivery_source"] == "requested"
+    assert "delivery_fallback" not in result
 
 
 @pytest.mark.asyncio
-async def test_an_ordinary_message_carries_no_delivery_constraint(
+async def test_a_when_idle_message_carries_no_delivery_constraint(
     harness: Harness,
 ) -> None:
-    """The default is not persisted: an item without the key means what every
+    """`when_idle` is not persisted: an item without the key means what every
     item meant before the mode existed."""
-    await harness.auto.tick()
+    harness.config.auto_delivery_enabled = True
+    await _granted(harness)
     result = await harness.messaging.notify(
-        harness.manager.sessions["s1"], target="s2", body="when you get a moment"
+        harness.manager.sessions["s1"],
+        target="s2",
+        body="when you get a moment",
+        delivery="when_idle",
     )
     message = await harness.store.message(result["message_id"])
     assert message is not None
     assert "delivery" not in message["constraints"]
-    assert "written into a turn" not in message["body"]
+    assert "mid-turn" not in message["body"]
+    assert result["delivery"] == "when_idle"
+    assert "never interrupts an active turn" in result["note"]
 
 
 @pytest.mark.asyncio
@@ -96,8 +109,10 @@ async def test_a_project_that_did_not_grant_it_refuses(harness: Harness) -> None
         )
     assert caught.value.code == "interject_not_granted"
     # The refusal has to name the way through, or the sender abandons the message
-    # rather than sending it the ordinary way.
-    assert "without `delivery`" in str(caught.value)
+    # rather than sending it the ordinary way. "Leave `delivery` out" would no
+    # longer be one: omitting it asks for the default, which is mid-turn.
+    assert 'delivery: "when_idle"' in str(caught.value)
+    assert caught.value.payload["cause"].startswith("that Project switched")
 
 
 @pytest.mark.asyncio
@@ -122,11 +137,14 @@ async def test_the_receiver_keeps_a_veto(harness: Harness) -> None:
             harness.manager.sessions["s1"], target="s2", body="urgent", delivery="now"
         )
     assert caught.value.code == "interject_refused_by_target"
-    # And the ordinary path is untouched by that opt-out.
+    # And the ordinary path is untouched by that opt-out - including a message
+    # that left `delivery` to the install default, which waits for the prompt.
     ordinary = await harness.messaging.notify(
         harness.manager.sessions["s1"], target="s2", body="urgent"
     )
     assert ordinary["state"] == "armed"
+    assert ordinary["delivery"] == "when_idle"
+    assert ordinary["delivery_fallback"]["code"] == "interject_refused_by_target"
 
 
 @pytest.mark.asyncio
@@ -331,7 +349,7 @@ async def test_a_healthy_target_reports_that_delivery_will_happen(
     await harness.auto.tick()
     harness.config.auto_delivery_enabled = True
     result = await harness.messaging.notify(
-        harness.manager.sessions["s1"], target="s2", body="anything?"
+        harness.manager.sessions["s1"], target="s2", body="anything?", delivery="when_idle"
     )
     assert result["target_delivery"] == {
         "auto_delivery": True,

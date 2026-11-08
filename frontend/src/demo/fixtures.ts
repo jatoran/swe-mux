@@ -452,6 +452,7 @@ export function demoConfig(): Record<string, unknown> {
     agent_interject_enabled: false,
     agent_interject_hourly_budget: 10,
     agent_interject_min_interval_seconds: 60.0,
+    agent_message_default_delivery: 'now',
     request_spawn_enabled: false,
     session_control_enabled: false,
     session_control_hourly_budget: 30,
