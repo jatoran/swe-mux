@@ -2,12 +2,11 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-**Run every coding agent in one workspace. Know which ones need you, from your desk or your phone.**
+**A terminal multiplexer for all your agent sessions, highly optimized for mobile use.**
 
-swe-mux is a terminal multiplexer for coding agents.
-It runs Claude Code, Codex, pi, oh-my-pi, opencode or any shell in real terminals on your own machine, shows which session needs you and why, and puts the whole workspace on your phone over your own Tailscale network.
-Open source (Apache-2.0), with no account, relay or telemetry.
-A native desktop app on Windows, the browser on Linux and macOS, and an installable web app on your phone.
+swe-mux runs Claude Code, Codex, pi, oh-my-pi, opencode or any shell in real terminals on your own machine, with the same keys and controls in every agent, and your phone gets the whole workspace over your own Tailscale network, voice and project notes included.
+I usually have several Claude Code and Codex sessions going across different projects, and I built swe-mux because I found the phone experience and the project notes lacking in the tools I had tried.
+It is open source (Apache-2.0), with no account, relay or telemetry, and it runs as a native desktop app on Windows, in the browser on Linux and macOS, and as an installable web app on your phone.
 
 [![Agents and a preview arranged in the swe-mux workspace](site/img/showcase-panes.webp?v=e8ebca109a98)](https://swemux.dev/demo/)
 
@@ -24,16 +23,22 @@ https://github.com/user-attachments/assets/1f964770-bee4-4823-a341-4c123b40605b
 
 ## What you can do
 
-- **See which agent needs you, and why.** One status for every CLI (working, idle, awaiting you), read from the agent's hooks, its transcript, the terminal and the process tree rather than the screen alone. Awaiting names its reason: an approval, a question, a rate limit, a login. An agent that is idle with subagents or background tasks still running looks different from one that is done. Alerts and push notifications name the session and the reason, reach a locked phone, and respect quiet hours.
-- **Work from your phone.** The phone runs the same workspace, not a companion app: the live terminal with a touch keyboard rail, approvals, git diff review, files, notes, the prompt queue and push. It installs from the browser as a web app and reaches your machine over your own Tailscale network, with no app store and no relay.
-- **Open your dev server on your phone.** A server on the host's `127.0.0.1` opens in a Preview pane on the desktop or the phone, proxied through swe-mux with hot reload and WebSockets, so no extra port is exposed. Click a URL an agent printed to open it.
-- **Run every agent CLI in one place.** Claude Code, Codex, pi, oh-my-pi and opencode are recognized, and any other CLI or shell runs in a real terminal. Type `claude` or `codex` in any pane and it becomes a tracked session in place. Resume any of them, branch a Claude conversation from any message, restart an agent onto the same conversation, and switch between saved Claude and Codex logins in one click.
-- **See what each agent loaded and did.** The Agent tab lists the tools, skills, MCP servers, plugins and hooks a Claude Code or Codex session can see, and flags configuration that changed after it started. Read CLAUDE.md, AGENTS.md and Claude's memory in one place, follow the transcript, and search every agent's past conversations at once.
-- **Know where your quota went.** Each saved Claude and Codex account shows its 5-hour and weekly windows, split into what swe-mux sessions used, what the account used outside them, and what was used on another device, with history and reset alerts.
-- **Find the processes agents leave behind.** Every process and listening port is attributed to the session that started it. Processes still running after their session ended, ones that escaped its tree, and anything over 90% CPU or 2 GiB of memory are flagged, with terminate-tree one press away. Nothing is killed automatically. The sidebar shows live sessions, CPU and RAM.
-- **Let sessions coordinate.** Queue a prompt behind a running turn, let a Codex session ask a Claude session something, and land a finished branch only after the checks you approved pass.
-- **Keep sessions through restarts and updates.** A separate supervisor holds every terminal, and typing keeps working while swe-mux restarts.
-- **Keep your habits.** The same editing keys in every agent's prompt, workspace keymaps for tmux, VS Code, Vim and Emacs, image paste, on-device dictation and read-aloud.
+- **Work from your phone.** The phone runs the same workspace as the desktop, with the same features, not a companion app: the live terminal with a row of extra keys for the ones a phone keyboard lacks, approvals, git diff review, files, project notes, a queue for your next prompt, and push notifications. It installs from the browser as a web app and reaches your machine over your own Tailscale network, with no app store and no relay.
+- **Use the same controls in every agent.** Shift+Enter inserts a new line and Ctrl+Backspace deletes a word in every recognized agent's prompt, clicking places the cursor, and paste and text selection work the same way, so moving from Codex to Claude Code to pi changes nothing about how you drive it. Workspace keymaps come in swe-mux, tmux, VS Code, Vim and Emacs presets, and images paste straight into agents that take them.
+- **Run any agent CLI or shell.** Claude Code, Codex, pi, oh-my-pi and opencode are recognized, and any other CLI or shell runs in a real terminal. Type `claude` or `codex` in any pane and it becomes a tracked session in place. Resume any of them, branch a Claude conversation from any message, and restart an agent onto the same conversation.
+- **Run your projects by voice.** Conversation mode listens hands-free: a wake word followed by a command phrase sends or appends what you dictated, interrupts an agent, reads its last reply aloud, goes to a session or starts a new agent in a project, and those commands never wait on a model call. Anything the commands do not cover goes to an assistant that can tell you what needs you or queue a message to a session, and it asks before anything consequential. Speech-to-text runs on your own machine; the assistant uses a model endpoint you configure.
+- **Keep notes per project.** Each project has its own notes in a Markdown editor that renders as you type (headings, nested lists, checkboxes, tables, code blocks and an outline to jump through), on the desktop and the phone, and a selection can go to an agent as a prompt. The Scratchpad is one more note, outside every project.
+- **See every project and session in one sidebar.** Each session shows whether it is working, idle or waiting on you, read from the agent's hooks, its transcript, the terminal and the process tree rather than the screen alone, and waiting names its reason: an approval, a question, a rate limit, a login. An agent that is idle with subagents or background tasks still running looks different from one that is done. The sidebar also shows live sessions, CPU and RAM.
+- **Know where your quota went, and switch accounts.** Each saved Claude and Codex account shows its 5-hour and weekly windows, split into what swe-mux sessions used, what the account used outside them, and what was used on another device, with history and reset alerts. Switching the system-wide login between accounts you own is one click.
+
+The rest is optional, and you can leave any of it alone:
+
+- **Notifications.** Alerts and push notifications name the session and the reason, reach a locked phone, and respect quiet hours.
+- **Your dev server on your phone.** A server on the host's `127.0.0.1` opens in a Preview pane on the desktop or the phone, proxied through swe-mux with hot reload and WebSockets, so no extra port is exposed. Click a URL an agent printed to open it.
+- **What each agent loaded and did.** The Agent tab lists the tools, skills, MCP servers, plugins and hooks a Claude Code or Codex session can see, and flags configuration that changed after it started. Read CLAUDE.md, AGENTS.md and Claude's memory in one place, follow the transcript, and search every agent's past conversations at once.
+- **The processes agents leave behind.** Every process and listening port is attributed to the session that started it. Processes still running after their session ended, ones that escaped its tree, and anything over 90% CPU or 2 GiB of memory are flagged, with terminate-tree one press away. Nothing is killed automatically.
+- **Sessions that coordinate.** Queue a prompt behind a running turn, let a Codex session ask a Claude session something, and land a finished branch only after the checks you approved pass.
+- **Sessions that survive restarts and updates.** A separate supervisor holds every terminal, and typing keeps working while swe-mux restarts.
 
 ## Interface language
 

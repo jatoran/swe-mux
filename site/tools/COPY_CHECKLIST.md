@@ -48,12 +48,14 @@ From `site/README.md` section 5 and the operator's voice profile, combined:
 
 seamless, powerful, robust as a marketing adjective, effortless, unleash, supercharge,
 revolutionize, game-changer, blazing fast, reimagined, unlock, leverage as a verb, delve,
-holistic, nuanced, streamlined, optimized, "the key move", "what this enables",
+holistic, nuanced, streamlined, "optimized" as a marketing adjective, "the key move", "what this enables",
 "the future of", "in today's world", "at scale", "best practices", "foster", "drive innovation",
 tapestry, landscape, ecosystem as a metaphor, realm, "testament to", "underscores the
 importance", "it's worth noting that", "here's the thing", "at the heart of", "navigate
 challenges", Moreover, Furthermore, Additionally, Ultimately, "plays a key role",
 "serves as", "In other words".
+
+The one exception to that list is the operator's own phrase "highly optimized for mobile use" (his rewrite of the drafted copy, 2026-11-08), which is the site's headline and the README's; nothing else borrows the word.
 
 **No em dash, ever.** Plain dash, comma, or full stop.
 `build.py` fails the build if one reaches a page, so this one is enforced rather than
@@ -214,7 +216,7 @@ A stale generated page beside a changed template has broken this gate more than 
 
 ## Current feature-media rules
 
-The homepage leads with live status, desktop/mobile work and voice.
+The homepage follows the brief's message order: the phone, the same controls in every agent, voice and project notes first, then the sidebar, where each session's status lives.
 Feature recordings show clean application UI without tutorial cards, controls, callouts or cursor effects.
 Keep captions in the surrounding page copy and identify simulated activity there.
 Videos use visitor-controlled playback and seeking; there are no audio samples.

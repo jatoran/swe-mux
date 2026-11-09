@@ -1,7 +1,7 @@
 [project]
 name = "swe-mux"
 version = "0.4.2"
-description = "A terminal multiplexer for coding agents: live status for every session, and the whole workspace on your phone"
+description = "A terminal multiplexer for all your agent sessions, highly optimized for mobile use: the same controls in every agent, and the whole workspace on your phone"
 readme = "README.md"
 requires-python = ">=3.12"
 # Every entry is a claim an installer can check, so each one is what the project

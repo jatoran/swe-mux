@@ -874,8 +874,8 @@ def shell(path: str, title: str, description: str, body: str, scripts: str = "")
     <div class="fbrand">
       <img class="brandmark dark" src="{up}img/logo.png" width="640" height="73" alt="swe-mux" />
       <img class="brandmark lite" src="{up}img/logo-light.png" width="640" height="73" alt="swe-mux" />
-      <p>Agentic development environment and agent control plane.<br />
-      Windows-first. Local-only. No account.</p>
+      <p>A terminal multiplexer for all your agent sessions, highly optimized for mobile use.<br />
+      Runs on your own machine, with no account and no relay.</p>
     </div>
     <div class="fcols">
       <div class="fcol">

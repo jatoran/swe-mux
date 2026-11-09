@@ -6,16 +6,11 @@ This repository does not use a hosted application backend for the public demo.
 
 ## Message
 
-**Run your coding agents together.**
-**Know which ones need you.**
+**A terminal multiplexer for all your agent sessions, highly optimized for mobile use.**
 
-Keep Claude Code, Codex and other coding agents side by side, with live status, flexible panes and messages between sessions.
-Work from your desktop or phone.
-Dictate prompts, hear replies, and ask the assistant what needs attention.
-
-Lead with the daily workflow, then explain the mechanism that supports a claim.
-The first feature sections are status and alerts, mobile access, and voice.
-Familiar input, pane arrangement, agent communication, approved landing and history establish the rest of the product.
+That headline is the operator's own line, chosen on 2026-11-08 to replace the agent-written tagline "Run every coding agent in one workspace. Know which ones need you, from your desk or your phone."
+The landing page and the README follow the marketing kit brief's message order: the phone, the same controls in every agent CLI, voice, project notes, the sidebar with each session's status, quota and account switching, then the optional parts (history and the Agent tab, processes, coordination, landing) and session survival.
+Lead with what the visitor can do, then explain the mechanism that supports a claim.
 Detailed configuration belongs in `/docs/`.
 
 ## Source map
@@ -58,8 +53,9 @@ Full architecture and capture contracts: [DEMO.md](DEMO.md).
 
 ## Language
 
+- Copy that pitches the product follows the operator's voice profile, `~/.agent-shared/VOICE.md` "Public posts and outreach": the product's name as the subject with a plain category, literal descriptions rather than slogans, words a stranger knows rather than the app's own names for things, no stat dumps, and the developer's own perspective some of the time, with reasons taken only from his own words.
 - State what the visitor can do before describing internals.
-- Use short sentences and concrete verbs.
+- Use full sentences and concrete verbs; one flowing sentence reads better than a run of short declaratives.
 - Keep limits beside the claims they qualify.
 - Distinguish workspace keymaps from normalized agent text editing.
 - Distinguish image attachments from shared in-app text clipboard history.
